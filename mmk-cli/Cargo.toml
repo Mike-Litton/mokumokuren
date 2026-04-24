@@ -1,0 +1,32 @@
+[package]
+name = "mokumokuren"
+description = "Evidence-based Git health metrics for humans and LLM agents."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "mokumokuren"
+path = "src/bin/mokumokuren.rs"
+
+[[bin]]
+name = "mmk"
+path = "src/bin/mmk.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+mmk-core = { path = "../mmk-core" }
+mmk-git = { path = "../mmk-git" }
+mmk-config = { path = "../mmk-config" }
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.{ archive-format }"
+pkg-fmt = "tgz"

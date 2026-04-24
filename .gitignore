@@ -1,0 +1,20 @@
+# Rust
+/target
+**/*.rs.bk
+*.pdb
+
+# cargo-dist
+/dist
+
+# Mokumokuren local cache
+.mokumokuren/
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
