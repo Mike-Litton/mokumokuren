@@ -21,8 +21,14 @@ pub struct AnalysisCounts {
     pub commits_analyzed: u64,
     /// Commits dropped by the bulk filter (>max_files OR >max_lines).
     pub commits_filtered_bulk: u64,
-    /// Paths deleted from HEAD (excluded from hotspot ranking).
-    pub files_deleted_from_head: u64,
+    /// Change-events on paths that don't exist at HEAD, summed across
+    /// analyzed commits. Counts events, not distinct paths — computing
+    /// distinct paths would require collecting them downstream of the
+    /// inflate-skip fast path that excludes them in the first place.
+    /// Includes Additions of later-renamed/deleted files, Deletions of
+    /// unreachable files, and Modifications where the path was later
+    /// removed. Also includes paths filtered by `--ignore` globs.
+    pub non_head_events: u64,
 }
 
 #[derive(Debug)]
@@ -39,6 +45,19 @@ pub struct AnalyzeOutput {
 }
 
 pub fn analyze(path: &Path, cfg: &Config) -> Result<AnalyzeOutput> {
+    // Phase timing: set MMK_TRACE=1 to print per-phase wall times to
+    // stderr. Useful for perf investigation; off by default.
+    let trace = std::env::var_os("MMK_TRACE").is_some();
+    let phase = |name: &str, t: std::time::Instant| {
+        if trace {
+            eprintln!(
+                "[mmk] {name}: {:>6.1} ms",
+                t.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+    };
+
+    let t = std::time::Instant::now();
     let walker = walker::RepoWalker::open(path)?;
     let is_shallow = walker.is_shallow();
 
@@ -52,7 +71,11 @@ pub fn analyze(path: &Path, cfg: &Config) -> Result<AnalyzeOutput> {
 
     let now_ts = head_ts.unwrap_or(0);
     let since_ts = now_ts.saturating_sub(cfg.window_seconds());
+    phase("open+head", t);
+
+    let t = std::time::Instant::now();
     let commit_infos = walker.walk_commits_since(since_ts)?;
+    phase("revwalk", t);
 
     let mut counts = AnalysisCounts {
         commits_seen: commit_infos.len() as u64,
@@ -62,69 +85,97 @@ pub fn analyze(path: &Path, cfg: &Config) -> Result<AnalyzeOutput> {
     let ts_repo = walker.repo.clone().into_sync();
     let rename_similarity = cfg.rename_similarity;
 
-    let raw: Vec<(Commit, u32, u32)> = commit_infos
+    // Stage 1: enumerate HEAD paths (cheap tree walk — no blob loads).
+    // This set gates inflate work inside diff_commit: paths deleted
+    // before HEAD or --ignore'd don't have their historical blobs loaded.
+    //
+    // NOTE: `head_entries` lossy-converts non-UTF-8 path bytes via
+    // `to_str_lossy`, then we reconstitute those bytes here via
+    // `as_encoded_bytes`. For the rare repo with invalid UTF-8 in
+    // paths, the reconstituted bytes won't byte-match gix's raw
+    // `location.as_bytes()` inside `diff_commit`, and such paths will be
+    // treated as non-HEAD even when they exist at HEAD. v0.1 accepts
+    // this — real Git repositories with non-UTF-8 paths are vanishingly
+    // rare and the failure mode is a silent undercount, not incorrect
+    // ranking on the typical input.
+    let t = std::time::Instant::now();
+    let head_entries = loc::head_entries(&walker.repo, &ignores)?;
+    let head_paths: diff::HeadPathBytes = head_entries
+        .iter()
+        .map(|e| e.path.as_os_str().as_encoded_bytes().to_vec())
+        .collect();
+    phase("head path enum", t);
+
+    let bulk_limits = (cfg.bulk.max_files, cfg.bulk.max_lines);
+
+    let t = std::time::Instant::now();
+    let raw: Vec<(Commit, diff::DiffStats)> = commit_infos
         .par_iter()
         .map_init(
             || {
                 let mut repo = ts_repo.to_thread_local();
-                // Keep recently-decoded blobs/trees around so rename
-                // detection and parent-tree lookups don't re-read from the
-                // odb on every commit.
-                repo.object_cache_size_if_unset(16 * 1024 * 1024);
+                repo.object_cache_size_if_unset(64 * 1024 * 1024);
+                repo.objects.set_pack_cache(|| {
+                    Box::new(gix::odb::pack::cache::lru::MemoryCappedHashmap::new(
+                        256 * 1024 * 1024,
+                    ))
+                });
                 let cache =
                     diff::make_resource_cache(&repo).expect("failed to build diff resource cache");
                 (repo, cache)
             },
-            |(repo, cache), info| -> Result<(Commit, u32, u32)> {
-                let deltas = diff::diff_commit(repo, cache, info, rename_similarity)?;
-                let files = u32::try_from(deltas.len()).unwrap_or(u32::MAX);
-                let lines: u32 = deltas
-                    .iter()
-                    .map(|d| d.added.saturating_add(d.deleted))
-                    .fold(0u32, u32::saturating_add);
+            |(repo, cache), info| -> Result<(Commit, diff::DiffStats)> {
+                let (deltas, stats) = diff::diff_commit(
+                    repo,
+                    cache,
+                    info,
+                    rename_similarity,
+                    Some(&head_paths),
+                    bulk_limits,
+                )?;
                 Ok((
                     Commit {
                         info: info.clone(),
                         deltas,
                     },
-                    files,
-                    lines,
+                    stats,
                 ))
             },
         )
         .collect::<Result<Vec<_>>>()?;
+    phase("per-commit diff", t);
 
-    let max_files = cfg.bulk.max_files;
-    let max_lines = cfg.bulk.max_lines;
+    // Only compute LOC for paths that actually churned in the window.
+    // Saves inflating tens of thousands of HEAD blobs for untouched files
+    // that wouldn't contribute to ranking anyway.
+    let t = std::time::Instant::now();
+    let touched: ahash::AHashSet<PathBuf> = raw
+        .iter()
+        .filter(|(_, s)| !s.bulk_filtered)
+        .flat_map(|(c, _)| c.deltas.iter().map(|d| d.path.clone()))
+        .collect();
+    let touched_entries: Vec<_> = head_entries
+        .iter()
+        .filter(|e| touched.contains(&e.path))
+        .cloned()
+        .collect();
+    let loc = loc::count_loc(&ts_repo, &touched_entries)?;
+    phase("loc (touched only)", t);
+
+    let t = std::time::Instant::now();
     let mut commits = Vec::with_capacity(raw.len());
-    for (commit, files, lines) in raw {
-        if files > max_files || lines > max_lines {
+    for (commit, stats) in raw {
+        if stats.bulk_filtered {
+            // Discard the commit and its skip tally — it didn't
+            // contribute to metrics.
             counts.commits_filtered_bulk += 1;
             continue;
         }
+        counts.non_head_events += stats.skipped;
         commits.push(commit);
     }
     counts.commits_analyzed = commits.len() as u64;
-
-    let loc = loc::head_loc_map(&walker.repo, &ts_repo, &ignores)?;
-
-    if !ignores.is_empty() {
-        commits.iter_mut().for_each(|c| {
-            c.deltas.retain(|d| {
-                let s = d.path.to_string_lossy();
-                !ignores.is_match(s.as_ref())
-            });
-        });
-    }
-
-    let touched_paths: ahash::AHashSet<PathBuf> = commits
-        .iter()
-        .flat_map(|c| c.deltas.iter().map(|d| d.path.clone()))
-        .collect();
-    counts.files_deleted_from_head = touched_paths
-        .iter()
-        .filter(|p| !loc.contains_key(p.as_path()))
-        .count() as u64;
+    phase("bulk filter", t);
 
     let mut warnings = Vec::new();
     if is_shallow {

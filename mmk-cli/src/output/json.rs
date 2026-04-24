@@ -105,7 +105,7 @@ pub fn write<W: Write>(
                 bulk: analysis.counts.commits_filtered_bulk,
             },
             files_ignored: FilesIgnoredBlock {
-                deleted_from_head: analysis.counts.files_deleted_from_head,
+                deleted_from_head: analysis.counts.non_head_events,
             },
             duration_ms,
         },

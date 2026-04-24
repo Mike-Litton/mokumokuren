@@ -51,8 +51,9 @@ pub fn commit_all(repo: &Path, msg: &str, when: i64) {
 
 /// Build the v0.1 plan's canonical fixture: commit A adds `a.rs` + `b.rs`,
 /// commit B heavily modifies `a.rs`, commit C renames `b.rs` → `c.rs`,
-/// commit D deletes `c.rs`. Timestamps are spaced 1 day apart ending at
-/// `now - DAY`.
+/// commit D modifies `c.rs`. `b.rs` exists in-window but is not at HEAD
+/// (it was renamed away), exercising the "deleted from HEAD" counter.
+/// `c.rs` survives to HEAD so its rename-detection event is observable.
 pub fn build_canonical_fixture(repo: &Path, now: i64) {
     init_repo(repo);
 
@@ -71,6 +72,6 @@ pub fn build_canonical_fixture(repo: &Path, now: i64) {
     write(repo, "c.rs", "hello\nworld\n");
     commit_all(repo, "C: rename b->c", now - 2 * DAY);
 
-    std::fs::remove_file(repo.join("c.rs")).expect("rm c.rs");
-    commit_all(repo, "D: delete c.rs", now - DAY);
+    write(repo, "c.rs", "hello\nworld\nplus more\n");
+    commit_all(repo, "D: modify c.rs", now - DAY);
 }
