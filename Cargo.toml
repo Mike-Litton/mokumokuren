@@ -11,11 +11,46 @@ repository = "https://github.com/mlitton/mmk"
 homepage = "https://github.com/mlitton/mmk"
 rust-version = "1.80"
 
+[workspace.dependencies]
+ahash = "0.8"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+globset = "0.4"
+gix = { version = "0.73", default-features = false, features = [
+    "revision",
+    "blob-diff",
+    "max-performance-safe",
+] }
+humantime = "2"
+rayon = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+# Numeric casts in this codebase operate on bounded domains (timestamps,
+# file-count/LOC counters) that fit comfortably within f64's safe integer
+# range; the pedantic warnings produce more noise than signal.
+cast_precision_loss = "allow"
+cast_possible_wrap = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+# v0.1 docs are a work in progress; no published rustdoc yet.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+doc_markdown = "allow"
+module_name_repetitions = "allow"
+# Stylistic preferences that fight the codebase's readability goals.
+needless_for_each = "allow"
+needless_pass_by_value = "allow"
+too_many_lines = "allow"
 
 [profile.release]
 lto = "thin"

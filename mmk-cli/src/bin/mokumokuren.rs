@@ -1,3 +1,3 @@
-fn main() {
-    mokumokuren::run();
+fn main() -> std::process::ExitCode {
+    mokumokuren::run()
 }

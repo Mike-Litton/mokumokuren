@@ -26,6 +26,16 @@ workspace = true
 mmk-core = { path = "../mmk-core" }
 mmk-git = { path = "../mmk-git" }
 mmk-config = { path = "../mmk-config" }
+anyhow = { workspace = true }
+clap = { workspace = true }
+globset = { workspace = true }
+humantime = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = { workspace = true }
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.{ archive-format }"
