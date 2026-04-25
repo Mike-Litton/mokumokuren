@@ -1,8 +1,53 @@
 //! Repo discovery + revwalk.
 
 use anyhow::{Context, Result};
+use gix::bstr::ByteSlice;
 use mmk_core::types::CommitInfo;
 use std::path::Path;
+
+/// How `RepoWalker::resolve_base` arrived at the returned commit.
+/// The CLI surfaces this in the JSON `session.base_resolved_via`
+/// field so harnesses can refuse to trust a synthetic base.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaseResolvedVia {
+    Explicit,
+    SinceCommit,
+    MergeBaseOriginMain,
+    MergeBaseMain,
+    MergeBaseOriginMaster,
+    MergeBaseMaster,
+    HeadMinusOne,
+}
+
+impl BaseResolvedVia {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Explicit => "explicit",
+            Self::SinceCommit => "since_commit",
+            Self::MergeBaseOriginMain => "merge_base_origin_main",
+            Self::MergeBaseMain => "merge_base_main",
+            Self::MergeBaseOriginMaster => "merge_base_origin_master",
+            Self::MergeBaseMaster => "merge_base_master",
+            Self::HeadMinusOne => "head_minus_one",
+        }
+    }
+
+    /// Whether the resolution method is "synthetic" (the user didn't
+    /// pick it; we fell back). Synthetic resolutions warn through
+    /// `analysis.warnings`.
+    #[must_use]
+    pub const fn is_synthetic(self) -> bool {
+        matches!(self, Self::HeadMinusOne)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BaseResolution {
+    pub oid: gix::ObjectId,
+    pub via: BaseResolvedVia,
+    pub label: Option<String>,
+}
 
 #[allow(missing_debug_implementations)]
 pub struct RepoWalker {
@@ -29,6 +74,92 @@ impl RepoWalker {
         };
         let time = commit.time().context("failed to decode HEAD commit time")?;
         Ok(Some((commit.id.to_string(), time.seconds)))
+    }
+
+    /// Resolve the base commit for `mmk session` using the cascade
+    /// from the v0.2.0 plan:
+    ///
+    /// 1. `since_commit_sha` — exact match wins.
+    /// 2. `base_hint` (a ref name like `main`, `origin/main`).
+    /// 3. `merge_base(HEAD, origin/main)`.
+    /// 4. `merge_base(HEAD, main)`.
+    /// 5. `merge_base(HEAD, origin/master)`.
+    /// 6. `merge_base(HEAD, master)`.
+    /// 7. `HEAD~1` (synthetic — caller should warn).
+    ///
+    /// Returns `Ok(None)` if HEAD itself is unborn.
+    pub fn resolve_base(
+        &self,
+        base_hint: Option<&str>,
+        since_commit_sha: Option<&str>,
+    ) -> Result<Option<BaseResolution>> {
+        let Ok(head_ref) = self.repo.head_id() else {
+            return Ok(None);
+        };
+        let head_oid = head_ref.detach();
+
+        if let Some(sha) = since_commit_sha {
+            let id = self
+                .repo
+                .rev_parse_single(sha.as_bytes().as_bstr())
+                .with_context(|| format!("failed to parse --since-commit '{sha}'"))?;
+            return Ok(Some(BaseResolution {
+                oid: id.detach(),
+                via: BaseResolvedVia::SinceCommit,
+                label: Some(sha.to_string()),
+            }));
+        }
+
+        if let Some(hint) = base_hint {
+            // Try as a ref/spec; if it resolves directly, use the
+            // merge-base of HEAD and that ref. This matches the
+            // semantic of "since I branched off `main`", not "since
+            // `main`'s tip".
+            if let Ok(spec_id) = self.repo.rev_parse_single(hint.as_bytes().as_bstr()) {
+                if let Ok(mb) = self.repo.merge_base(head_oid, spec_id.detach()) {
+                    return Ok(Some(BaseResolution {
+                        oid: mb.detach(),
+                        via: BaseResolvedVia::Explicit,
+                        label: Some(hint.to_string()),
+                    }));
+                }
+            }
+        }
+
+        for (refname, via) in [
+            ("origin/main", BaseResolvedVia::MergeBaseOriginMain),
+            ("main", BaseResolvedVia::MergeBaseMain),
+            ("origin/master", BaseResolvedVia::MergeBaseOriginMaster),
+            ("master", BaseResolvedVia::MergeBaseMaster),
+        ] {
+            if let Ok(rid) = self.repo.rev_parse_single(refname.as_bytes().as_bstr()) {
+                if let Ok(mb) = self.repo.merge_base(head_oid, rid.detach()) {
+                    if mb.detach() != head_oid {
+                        return Ok(Some(BaseResolution {
+                            oid: mb.detach(),
+                            via,
+                            label: Some(refname.to_string()),
+                        }));
+                    }
+                }
+            }
+        }
+
+        // HEAD~1 fallback. If HEAD has no parent (root commit only),
+        // there is no base — return None and let the caller treat the
+        // session as the entire window.
+        let head_commit = self
+            .repo
+            .find_commit(head_oid)
+            .context("failed to load HEAD commit")?;
+        if let Some(parent) = head_commit.parent_ids().next() {
+            return Ok(Some(BaseResolution {
+                oid: parent.detach(),
+                via: BaseResolvedVia::HeadMinusOne,
+                label: None,
+            }));
+        }
+        Ok(None)
     }
 
     /// Walk commits reachable from HEAD with committer time `>= since_ts`.

@@ -89,3 +89,27 @@ fn default_is_an_empty_ignore_list() {
     let cfg = ConfigFile::default();
     assert!(cfg.ignore.is_empty());
 }
+
+#[test]
+fn loads_blast_radius_threshold() {
+    let dir = TempDir::new().unwrap();
+    let p = write_toml(
+        dir.path(),
+        r#"
+[blast_radius]
+threshold = 0.25
+"#,
+    );
+    let cfg = ConfigFile::load_from_path(&p).expect("load");
+    let br = cfg.blast_radius.expect("blast_radius block should be parsed");
+    assert!((br.threshold - 0.25).abs() < 1e-12);
+}
+
+#[test]
+fn missing_blast_radius_block_yields_none() {
+    let cfg = ConfigFile::default();
+    assert!(
+        cfg.blast_radius.is_none(),
+        "default ConfigFile must not synthesize a blast_radius block"
+    );
+}

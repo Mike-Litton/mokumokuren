@@ -1,10 +1,17 @@
+use ahash::AHashSet;
 use anyhow::{Context, Result};
 use mmk_config::{Config, ConfigFile};
+use mmk_core::coupling;
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::args::{AnalyzeArgs, Format};
+
+/// Couples emitted per hotspot entry. Hardcoded — adding a config knob
+/// for it adds surface without buying signal at the resolution
+/// `mmk` currently produces.
+pub(crate) const COUPLES_PER_FILE: usize = 5;
 
 pub fn run<O: Write, E: Write>(args: &AnalyzeArgs, stdout: &mut O, stderr: &mut E) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine current directory")?;
@@ -27,6 +34,15 @@ pub fn run<O: Write, E: Write>(args: &AnalyzeArgs, stdout: &mut O, stderr: &mut 
     // for diagnostics, not glob semantics).
     cfg.ignores = file_cfg.ignore;
     cfg.ignores.extend(args.ignores.iter().cloned());
+    // Effective blast-radius threshold: CLI override → TOML config →
+    // built-in default. The CLI value is single-source-of-truth here;
+    // analyze.rs and session.rs compose the same precedence.
+    if let Some(file_br) = file_cfg.blast_radius.as_ref() {
+        cfg.blast_radius.threshold = file_br.threshold;
+    }
+    if let Some(t) = args.blast_radius_threshold {
+        cfg.blast_radius.threshold = t;
+    }
 
     let started = Instant::now();
     let analysis = mmk_git::analyze(&cwd, &cfg)?;
@@ -59,7 +75,7 @@ pub fn run<O: Write, E: Write>(args: &AnalyzeArgs, stdout: &mut O, stderr: &mut 
     let relative = mmk_core::churn::relative_churn(&weighted, &analysis.loc);
     let commits_touching = mmk_core::churn::commits_touching(&analysis.commits);
     let last_modified = mmk_core::last_modified(&analysis.commits);
-    let ranked = mmk_core::hotspot::rank(
+    let mut ranked = mmk_core::hotspot::rank(
         &weighted,
         &relative,
         &analysis.loc,
@@ -68,11 +84,79 @@ pub fn run<O: Write, E: Write>(args: &AnalyzeArgs, stdout: &mut O, stderr: &mut 
         cfg.hotspot.top_n,
     );
 
+    // Coupling: walk commits once for the top-N targets and attach the
+    // top-K partners to each ranked entry. `rank()` stays cheap and
+    // pure; coupling is a separate, optional pass.
+    let targets: AHashSet<PathBuf> = ranked.iter().map(|e| e.path.clone()).collect();
+    if !targets.is_empty() {
+        let mut couples = coupling::top_couples_for(&analysis.commits, &targets, COUPLES_PER_FILE);
+        for entry in &mut ranked {
+            if let Some(list) = couples.remove(&entry.path) {
+                entry.top_couples = list;
+            }
+        }
+    }
+
+    // Optional 1-hop blast-radius lookup. Threshold is the effective
+    // value resolved from CLI/TOML/default into `cfg.blast_radius`.
+    let blast_threshold = cfg.blast_radius.threshold;
+    let blast_nodes = args.blast_radius.as_ref().map(|p| {
+        let nodes = coupling::neighborhood(&analysis.commits, p, 1, blast_threshold);
+        (p.clone(), nodes)
+    });
+    let blast_ref: Option<(&std::path::Path, f64, &[mmk_core::NeighborhoodNode])> = blast_nodes
+        .as_ref()
+        .map(|(p, n)| (p.as_path(), blast_threshold, n.as_slice()));
+
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
+    // `--couples-of <PATH>` short-circuits the ranked output: the
+    // caller already knows what they want to inspect.
+    if let Some(target) = &args.couples_of {
+        let mut t_set: AHashSet<PathBuf> = AHashSet::new();
+        t_set.insert(target.clone());
+        let mut map = coupling::top_couples_for(&analysis.commits, &t_set, 0);
+        let entries = map.remove(target).unwrap_or_default();
+        match args.format {
+            Format::Text => crate::output::text::write_couples_of(
+                stdout,
+                target,
+                &entries,
+                &analysis,
+                duration_ms,
+                blast_ref,
+            )?,
+            Format::Json => crate::output::json::write_couples_of(
+                stdout,
+                target,
+                &entries,
+                &analysis,
+                duration_ms,
+                &cfg,
+                blast_ref,
+            )?,
+        }
+        return Ok(());
+    }
+
     match args.format {
-        Format::Text => crate::output::text::write(stdout, &ranked, &analysis, duration_ms, &cfg)?,
-        Format::Json => crate::output::json::write(stdout, &ranked, &analysis, duration_ms, &cfg)?,
+        Format::Text => crate::output::text::write(
+            stdout,
+            &ranked,
+            &analysis,
+            duration_ms,
+            &cfg,
+            args.couples,
+            blast_ref,
+        )?,
+        Format::Json => crate::output::json::write(
+            stdout,
+            &ranked,
+            &analysis,
+            duration_ms,
+            &cfg,
+            blast_ref,
+        )?,
     }
     Ok(())
 }

@@ -26,6 +26,7 @@ workspace = true
 mmk-core = { path = "../mmk-core" }
 mmk-git = { path = "../mmk-git" }
 mmk-config = { path = "../mmk-config" }
+ahash = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 globset = { workspace = true }

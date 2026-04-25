@@ -1,8 +1,8 @@
 //! Repo-local `mokumokuren.toml` loader.
 //!
-//! The schema is deliberately minimal: only `ignore = [...]` is
-//! supported today. Everything else (window, top-N, output format)
-//! stays on the CLI.
+//! The schema is deliberately minimal: `ignore = [...]` plus an
+//! optional `[blast_radius]` block. Everything else (window, top-N,
+//! output format) stays on the CLI.
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -18,6 +18,17 @@ pub struct ConfigFile {
     /// `--ignore` flags on the command line.
     #[serde(default)]
     pub ignore: Vec<String>,
+    /// Optional `[blast_radius]` block. Absent → use the in-code
+    /// default ([`crate::DEFAULT_BLAST_RADIUS_THRESHOLD`]).
+    #[serde(default)]
+    pub blast_radius: Option<BlastRadiusFile>,
+}
+
+/// `[blast_radius]` block in `mokumokuren.toml`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BlastRadiusFile {
+    pub threshold: f64,
 }
 
 impl ConfigFile {

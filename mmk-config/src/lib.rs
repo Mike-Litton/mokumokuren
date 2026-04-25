@@ -5,9 +5,17 @@ use serde::Serialize;
 
 pub mod file;
 
-pub use file::ConfigFile;
+pub use file::{BlastRadiusFile, ConfigFile};
 
 pub const SECONDS_PER_DAY: i64 = 86_400;
+
+/// Default Jaccard threshold for the `--blast-radius` 1-hop neighborhood.
+///
+/// Loose enough to surface real coupling on young repos; tight enough
+/// to filter merge-commit storms. Override via `[blast_radius]
+/// threshold = N` in `mokumokuren.toml` or via
+/// `--blast-radius-threshold <FLOAT>` on the CLI.
+pub const DEFAULT_BLAST_RADIUS_THRESHOLD: f64 = 0.10;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct WindowCfg {
@@ -29,10 +37,18 @@ pub struct BulkCfg {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct BlastRadiusCfg {
+    /// Minimum Jaccard a partner must reach to land in the 1-hop
+    /// neighborhood. Defaults to [`DEFAULT_BLAST_RADIUS_THRESHOLD`].
+    pub threshold: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct Config {
     pub window: WindowCfg,
     pub hotspot: HotspotCfg,
     pub bulk: BulkCfg,
+    pub blast_radius: BlastRadiusCfg,
     /// Rename-similarity threshold (0.0–1.0) passed to the diff engine.
     pub rename_similarity: f32,
     /// Final ignore globs after merging file + CLI sources. The git layer
@@ -64,12 +80,21 @@ impl Default for BulkCfg {
     }
 }
 
+impl Default for BlastRadiusCfg {
+    fn default() -> Self {
+        Self {
+            threshold: DEFAULT_BLAST_RADIUS_THRESHOLD,
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
             window: WindowCfg::default(),
             hotspot: HotspotCfg::default(),
             bulk: BulkCfg::default(),
+            blast_radius: BlastRadiusCfg::default(),
             rename_similarity: 0.5,
             ignores: Vec::new(),
         }

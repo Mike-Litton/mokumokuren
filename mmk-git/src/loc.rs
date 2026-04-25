@@ -58,6 +58,55 @@ pub fn head_entries(repo: &gix::Repository, ignores: &GlobSet) -> Result<(Vec<He
     Ok((out, head_paths_ignored))
 }
 
+/// Tree walk at an arbitrary commit OID, scoped to a fixed path
+/// allowlist. Used by `mmk session` to compute LOC at the session
+/// base (not at HEAD), so `session.relative_churn` divides by the
+/// file's size at the start of the session rather than its size now.
+///
+/// Returns `path -> u32` LOC. Files in `paths` that don't exist at
+/// `commit_oid` are silently absent from the output (consistent with
+/// `count_loc`'s "missing blob → no entry" semantics — `rank()`
+/// filters by `loc.contains_key()`).
+pub fn count_loc_at(
+    ts_repo: &gix::ThreadSafeRepository,
+    commit_oid: gix::ObjectId,
+    paths: &ahash::AHashSet<PathBuf>,
+) -> Result<AHashMap<PathBuf, u32>> {
+    if paths.is_empty() {
+        return Ok(AHashMap::new());
+    }
+    let repo = ts_repo.to_thread_local();
+    let commit = repo
+        .find_commit(commit_oid)
+        .with_context(|| format!("load base commit {commit_oid}"))?;
+    let tree = commit.tree().context("load base tree")?;
+    let entries = tree
+        .traverse()
+        .breadthfirst
+        .files()
+        .context("traverse base tree")?;
+
+    let scoped: Vec<HeadEntry> = entries
+        .iter()
+        .filter_map(|entry| {
+            if !entry.mode.is_blob() {
+                return None;
+            }
+            let path_str = entry.filepath.to_str_lossy().into_owned();
+            let path = PathBuf::from(&path_str);
+            if !paths.contains(&path) {
+                return None;
+            }
+            Some(HeadEntry {
+                path,
+                oid: entry.oid,
+            })
+        })
+        .collect();
+
+    count_loc(ts_repo, &scoped)
+}
+
 /// Slow: inflate each blob in `entries` and count its non-binary lines.
 pub fn count_loc(
     ts_repo: &gix::ThreadSafeRepository,

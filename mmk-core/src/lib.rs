@@ -2,10 +2,14 @@
 //! `Vec<Commit>` produced by `mmk-git` and returns ranked hotspots.
 
 pub mod churn;
+pub mod coupling;
 pub mod hotspot;
+pub mod session;
 pub mod types;
 
+pub use coupling::{CouplingEntry, NeighborhoodNode};
 pub use hotspot::HotspotEntry;
+pub use session::{ChurnOfChurn, RankClimb, SessionDelta};
 pub use types::{Commit, CommitInfo, FileDelta};
 
 /// Compute the most recent commit timestamp per path within a window.

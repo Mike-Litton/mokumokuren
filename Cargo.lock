@@ -1618,7 +1618,7 @@ dependencies = [
 
 [[package]]
 name = "mmk-config"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -1628,7 +1628,7 @@ dependencies = [
 
 [[package]]
 name = "mmk-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ahash",
  "criterion",
@@ -1637,7 +1637,7 @@ dependencies = [
 
 [[package]]
 name = "mmk-git"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ahash",
  "anyhow",
@@ -1651,8 +1651,9 @@ dependencies = [
 
 [[package]]
 name = "mokumokuren"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
+ "ahash",
  "anyhow",
  "clap",
  "globset",

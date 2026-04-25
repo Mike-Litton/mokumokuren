@@ -48,3 +48,18 @@ ignore = [
     # "**/*.uasset",
     # "**/*.umap",
 ]
+
+# `[blast_radius]` controls the 1-hop co-change neighborhood emitted
+# by `--blast-radius <PATH>`. The threshold is the minimum Jaccard a
+# partner file must reach to be included. Default: 0.10.
+#
+# A higher threshold (e.g. 0.30) shows only the strongest couplings
+# — useful for filtering merge-commit storms on busy repos. A lower
+# threshold (e.g. 0.05) surfaces faint signal — useful for early-
+# stage repos where co-change history is sparse.
+#
+# CI users typically pin this here; agents can still override per
+# call with `--blast-radius-threshold <FLOAT>`.
+
+# [blast_radius]
+# threshold = 0.10

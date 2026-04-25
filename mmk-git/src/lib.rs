@@ -13,6 +13,8 @@ pub mod diff;
 pub mod loc;
 pub mod walker;
 
+pub use walker::{BaseResolution, BaseResolvedVia};
+
 /// Discover the work-tree root of the Git repo containing `start`, or
 /// `None` if `start` is not inside a Git repo. Re-exports gix's
 /// discovery without requiring the caller to depend on gix directly.
@@ -209,6 +211,133 @@ pub fn analyze(path: &Path, cfg: &Config) -> Result<AnalyzeOutput> {
         head_timestamp: head_ts,
         warnings,
     })
+}
+
+/// Result of `analyze_session`.
+///
+/// Contains the full window output plus the subset of commits that
+/// are reachable from HEAD but *not* from the resolved base. The
+/// subset is what `mmk_core::session::compute_delta` runs the second
+/// `rank()` over.
+///
+/// **LOC epoch contract**: two LOC maps are exposed because they
+/// belong to two different epochs.
+///
+/// - `window.loc` is **HEAD-LOC**: line counts in the working tree
+///   right now. Used by the top-level `files[]` ranking.
+/// - `session_loc` is **base-LOC with a HEAD-LOC fallback for files
+///   the session introduced**. For each file touched in the session:
+///   if it existed at the resolved base commit, the value is its LOC
+///   *there*; otherwise (the file was introduced mid-session) the
+///   value is its current HEAD-LOC. The semantic becomes "size at
+///   the start of the session if applicable, else current size" —
+///   the only sensible choice, since a file that didn't exist at
+///   base has no meaningful base-epoch denominator. The fallback
+///   keeps session-introduced files visible in `entered_top_n`.
+#[derive(Debug)]
+pub struct SessionAnalyzeOutput {
+    pub window: AnalyzeOutput,
+    pub session_commits: Vec<mmk_core::types::Commit>,
+    pub base: Option<BaseResolution>,
+    /// LOC at the resolved session base, scoped to files touched in
+    /// `session_commits`. See struct-level docs for the epoch
+    /// contract. Empty when `base` is `None`.
+    pub session_loc: ahash::AHashMap<PathBuf, u32>,
+}
+
+/// Run the analyze pipeline plus split commits into a session subset.
+///
+/// Walks the full window once, then partitions the commit list into
+/// "session" commits (reachable from HEAD but not from the resolved
+/// base). Returning the split rather than a second rank lets the CLI
+/// compose its own `rank()` call without the git layer needing to
+/// know about scoring.
+pub fn analyze_session(
+    path: &Path,
+    cfg: &Config,
+    base_hint: Option<&str>,
+    since_commit_sha: Option<&str>,
+) -> Result<SessionAnalyzeOutput> {
+    let mut window = analyze(path, cfg)?;
+
+    let walker = walker::RepoWalker::open(path)?;
+    let resolution = walker.resolve_base(base_hint, since_commit_sha)?;
+
+    let Some(resolution) = resolution else {
+        // No HEAD or no parents — session = entire window. No base
+        // to compute LOC against; consumers should treat session_loc
+        // as empty (which means session ranking will be empty too,
+        // since rank() filters by loc.contains_key()).
+        return Ok(SessionAnalyzeOutput {
+            session_commits: window.commits.clone(),
+            window,
+            base: None,
+            session_loc: ahash::AHashMap::new(),
+        });
+    };
+
+    if resolution.via.is_synthetic() {
+        window.warnings.push(format!(
+            "session base resolved via fallback ({}); harnesses may want to refuse this",
+            resolution.via.as_str()
+        ));
+    }
+
+    // Collect ancestor SHAs of the base (including base itself) so
+    // commits reachable from base get filtered out of the session
+    // window. This is bounded by the existing `--since` window we
+    // already walked; we only need ancestors *within* that window.
+    let ancestors: ahash::AHashSet<String> = walk_ancestors(&walker, resolution.oid)?;
+
+    let session_commits: Vec<_> = window
+        .commits
+        .iter()
+        .filter(|c| !ancestors.contains(&c.info.sha))
+        .cloned()
+        .collect();
+
+    // Compute LOC at the session base, scoped to paths touched in
+    // session. Files that didn't exist at base (introduced
+    // mid-session) fall back to HEAD-LOC — see the SessionAnalyzeOutput
+    // doc comment for the epoch contract.
+    let session_paths: ahash::AHashSet<PathBuf> = session_commits
+        .iter()
+        .flat_map(|c| c.deltas.iter().map(|d| d.path.clone()))
+        .collect();
+    let ts_repo = walker.repo.into_sync();
+    let mut session_loc = loc::count_loc_at(&ts_repo, resolution.oid, &session_paths)
+        .context("failed to compute session-base LOC")?;
+    for path in &session_paths {
+        if !session_loc.contains_key(path) {
+            if let Some(&head_loc) = window.loc.get(path) {
+                session_loc.insert(path.clone(), head_loc);
+            }
+        }
+    }
+
+    Ok(SessionAnalyzeOutput {
+        window,
+        session_commits,
+        base: Some(resolution),
+        session_loc,
+    })
+}
+
+fn walk_ancestors(
+    walker: &walker::RepoWalker,
+    start: gix::ObjectId,
+) -> Result<ahash::AHashSet<String>> {
+    let mut out: ahash::AHashSet<String> = ahash::AHashSet::new();
+    let walk = walker
+        .repo
+        .rev_walk(std::iter::once(start))
+        .all()
+        .context("failed to start ancestor walk")?;
+    for info in walk {
+        let info = info.context("ancestor walk error")?;
+        out.insert(info.id.to_string());
+    }
+    Ok(out)
 }
 
 fn build_globset(patterns: &[String]) -> Result<GlobSet> {

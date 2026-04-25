@@ -4,6 +4,8 @@ use ahash::AHashMap;
 use serde::Serialize;
 use std::path::PathBuf;
 
+use crate::coupling::CouplingEntry;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct HotspotEntry {
     pub path: PathBuf,
@@ -16,6 +18,10 @@ pub struct HotspotEntry {
     /// Most recent commit timestamp (seconds since Unix epoch) that touched
     /// this file within the analysis window.
     pub last_modified: i64,
+    /// Top co-changing partners, populated by a separate step after
+    /// `rank()` returns. `rank()` itself leaves this empty.
+    #[serde(default)]
+    pub top_couples: Vec<CouplingEntry>,
 }
 
 /// Compute hotspot scores and return the top `top_n` entries, ranked
@@ -45,6 +51,7 @@ pub fn rank(
                 hotspot_rank: 0,
                 commits_touching: commits_touching.get(path).copied().unwrap_or(0),
                 last_modified: last_modified.get(path).copied().unwrap_or(0),
+                top_couples: Vec::new(),
             })
         })
         .collect();

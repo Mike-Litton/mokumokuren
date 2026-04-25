@@ -27,6 +27,10 @@ fn default_args() -> AnalyzeArgs {
         ignores: Vec::new(),
         config: None,
         verbose: false,
+        couples_of: None,
+        couples: false,
+        blast_radius: None,
+        blast_radius_threshold: None,
     }
 }
 
