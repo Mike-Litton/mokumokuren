@@ -118,9 +118,12 @@ fn readme_shell_blocks_extract_at_least_one_mmk_command() {
     // fails so we notice. Extraction-side regression guard.
     let readme = fs::read_to_string("../README.md").expect("read README.md");
     let blocks = extract_shell_blocks(&readme);
-    let any: Vec<_> = blocks.iter().flat_map(|b| extract_mmk_commands(b)).collect();
     assert!(
-        !any.is_empty(),
+        blocks
+            .iter()
+            .flat_map(|b| extract_mmk_commands(b))
+            .next()
+            .is_some(),
         "expected at least one `mmk` command in a fenced ```shell block"
     );
 }

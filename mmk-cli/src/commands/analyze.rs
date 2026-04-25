@@ -76,11 +76,13 @@ pub fn run<O: Write, E: Write>(args: &AnalyzeArgs, stdout: &mut O, stderr: &mut 
     let commits_touching = mmk_core::churn::commits_touching(&analysis.commits);
     let last_modified = mmk_core::last_modified(&analysis.commits);
     let mut ranked = mmk_core::hotspot::rank(
-        &weighted,
-        &relative,
-        &analysis.loc,
-        &commits_touching,
-        &last_modified,
+        mmk_core::hotspot::RankInputs {
+            weighted: &weighted,
+            relative: &relative,
+            loc: &analysis.loc,
+            commits_touching: &commits_touching,
+            last_modified: &last_modified,
+        },
         cfg.hotspot.top_n,
     );
 
@@ -100,10 +102,14 @@ pub fn run<O: Write, E: Write>(args: &AnalyzeArgs, stdout: &mut O, stderr: &mut 
     // Optional 1-hop blast-radius lookup. Threshold is the effective
     // value resolved from CLI/TOML/default into `cfg.blast_radius`.
     let blast_threshold = cfg.blast_radius.threshold;
-    let blast_nodes = args.blast_radius.as_ref().map(|p| {
-        let nodes = coupling::neighborhood(&analysis.commits, p, 1, blast_threshold);
-        (p.clone(), nodes)
-    });
+    let blast_nodes = args
+        .blast_radius
+        .as_ref()
+        .map(|p| {
+            let nodes = coupling::neighborhood(&analysis.commits, p, 1, blast_threshold)?;
+            Ok::<_, anyhow::Error>((p.clone(), nodes))
+        })
+        .transpose()?;
     let blast_ref: Option<(&std::path::Path, f64, &[mmk_core::NeighborhoodNode])> = blast_nodes
         .as_ref()
         .map(|(p, n)| (p.as_path(), blast_threshold, n.as_slice()));
@@ -149,14 +155,9 @@ pub fn run<O: Write, E: Write>(args: &AnalyzeArgs, stdout: &mut O, stderr: &mut 
             args.couples,
             blast_ref,
         )?,
-        Format::Json => crate::output::json::write(
-            stdout,
-            &ranked,
-            &analysis,
-            duration_ms,
-            &cfg,
-            blast_ref,
-        )?,
+        Format::Json => {
+            crate::output::json::write(stdout, &ranked, &analysis, duration_ms, &cfg, blast_ref)?;
+        }
     }
     Ok(())
 }

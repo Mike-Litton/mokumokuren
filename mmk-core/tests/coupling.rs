@@ -75,7 +75,10 @@ fn targets_pruning_returns_only_targeted_keys() {
     targets.insert(p("A"));
 
     let out = top_couples_for(&commits, &targets, 5);
-    assert!(out.contains_key(&p("A")), "A should appear (it was targeted)");
+    assert!(
+        out.contains_key(&p("A")),
+        "A should appear (it was targeted)"
+    );
     assert!(
         !out.contains_key(&p("B")),
         "B should NOT appear (it was not in targets) — got keys {:?}",
@@ -172,27 +175,21 @@ fn blast_radius_one_hop_includes_above_threshold_only() {
         commits.push(commit(next(), &["D"]));
     }
 
-    let nodes = neighborhood(&commits, Path::new("A"), 1, 0.1);
-    let names: Vec<&str> = nodes
-        .iter()
-        .map(|n| n.path.to_str().unwrap())
-        .collect();
+    let nodes = neighborhood(&commits, Path::new("A"), 1, 0.1).expect("1-hop is supported");
+    let names: Vec<&str> = nodes.iter().map(|n| n.path.to_str().unwrap()).collect();
 
     assert!(
         names.contains(&"B"),
-        "B (jaccard 0.6) must be in A's 1-hop neighborhood; got {:?}",
-        names
+        "B (jaccard 0.6) must be in A's 1-hop neighborhood; got {names:?}"
     );
     assert!(
         !names.contains(&"D"),
-        "D (jaccard ~0.05) is below threshold 0.1 and must be excluded; got {:?}",
-        names
+        "D (jaccard ~0.05) is below threshold 0.1 and must be excluded; got {names:?}"
     );
     assert!(
         !names.contains(&"C"),
         "C is two hops from A (only co-changes through B for the high-jaccard edge); v0.2.0 1-hop \
-         must exclude it. got {:?}",
-        names
+         must exclude it. got {names:?}"
     );
     assert!(
         nodes.iter().all(|n| n.hops == 1),
@@ -202,10 +199,50 @@ fn blast_radius_one_hop_includes_above_threshold_only() {
 }
 
 #[test]
-#[should_panic(expected = "v0.2.0 supports only 1-hop")]
-fn blast_radius_rejects_multi_hop_in_v0_2() {
+fn blast_radius_rejects_multi_hop_in_v0_2_with_err() {
     let commits = vec![commit(100, &["A", "B"])];
-    let _ = neighborhood(&commits, Path::new("A"), 2, 0.1);
+    let result = neighborhood(&commits, Path::new("A"), 2, 0.1);
+    let err = result.expect_err("hops != 1 must surface as Err, not panic");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("1-hop"),
+        "error should name the v0.2.x 1-hop limit; got: {msg}"
+    );
+}
+
+/// Locks the `jaccard ∈ [0.0, 1.0]` invariant across a varied input.
+/// `top_couples_for` constructs `touches` and `pair_counts` from the
+/// same `commit.deltas`, so the invariant `co ≤ min(touches_t,
+/// touches_p)` holds today. Future co-change accounting changes (rename
+/// post-processing, binary filtering, dedup edge cases) could land a
+/// pair in `pair_counts` whose path is missing from `touches`, where
+/// plain `u32` subtraction would wrap.
+#[test]
+fn jaccard_stays_in_unit_interval_across_varied_inputs() {
+    let commits = vec![
+        commit(100, &["A", "B"]),
+        commit(200, &["A"]),
+        commit(300, &["A", "B", "C"]),
+        commit(400, &["B", "C"]),
+        commit(500, &["A", "C"]),
+        commit(600, &["A"]),
+        commit(700, &["A", "B"]),
+    ];
+    let mut targets = AHashSet::new();
+    targets.insert(p("A"));
+    targets.insert(p("B"));
+
+    let out = top_couples_for(&commits, &targets, 0);
+    for (target, entries) in &out {
+        for e in entries {
+            assert!(
+                (0.0..=1.0).contains(&e.jaccard),
+                "jaccard out of range for {target:?} -> {:?}: {}",
+                e.partner,
+                e.jaccard
+            );
+        }
+    }
 }
 
 #[test]

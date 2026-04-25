@@ -95,13 +95,15 @@ fn loads_blast_radius_threshold() {
     let dir = TempDir::new().unwrap();
     let p = write_toml(
         dir.path(),
-        r#"
+        r"
 [blast_radius]
 threshold = 0.25
-"#,
+",
     );
     let cfg = ConfigFile::load_from_path(&p).expect("load");
-    let br = cfg.blast_radius.expect("blast_radius block should be parsed");
+    let br = cfg
+        .blast_radius
+        .expect("blast_radius block should be parsed");
     assert!((br.threshold - 0.25).abs() < 1e-12);
 }
 

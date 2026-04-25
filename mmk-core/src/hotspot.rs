@@ -24,19 +24,31 @@ pub struct HotspotEntry {
     pub top_couples: Vec<CouplingEntry>,
 }
 
+/// Inputs to [`rank`]. Bundled in a struct so call sites construct
+/// named fields and don't accidentally swap the two `AHashMap<PathBuf,
+/// f64>` parameters (`weighted` vs. `relative`).
+#[derive(Debug, Clone, Copy)]
+pub struct RankInputs<'a> {
+    pub weighted: &'a AHashMap<PathBuf, f64>,
+    pub relative: &'a AHashMap<PathBuf, f64>,
+    pub loc: &'a AHashMap<PathBuf, u32>,
+    pub commits_touching: &'a AHashMap<PathBuf, u32>,
+    pub last_modified: &'a AHashMap<PathBuf, i64>,
+}
+
 /// Compute hotspot scores and return the top `top_n` entries, ranked
 /// descending. Files missing from `loc` (deleted from HEAD) are excluded.
 ///
 /// `top_n == 0` returns every ranked entry.
 #[must_use]
-pub fn rank(
-    weighted: &AHashMap<PathBuf, f64>,
-    relative: &AHashMap<PathBuf, f64>,
-    loc: &AHashMap<PathBuf, u32>,
-    commits_touching: &AHashMap<PathBuf, u32>,
-    last_modified: &AHashMap<PathBuf, i64>,
-    top_n: usize,
-) -> Vec<HotspotEntry> {
+pub fn rank(inputs: RankInputs<'_>, top_n: usize) -> Vec<HotspotEntry> {
+    let RankInputs {
+        weighted,
+        relative,
+        loc,
+        commits_touching,
+        last_modified,
+    } = inputs;
     let mut entries: Vec<HotspotEntry> = weighted
         .iter()
         .filter_map(|(path, &w)| {
@@ -67,7 +79,8 @@ pub fn rank(
         entries.truncate(top_n);
     }
     for (idx, entry) in entries.iter_mut().enumerate() {
-        entry.hotspot_rank = u32::try_from(idx + 1).unwrap_or(u32::MAX);
+        // idx is bounded by the file count of the repo; saturation not needed.
+        entry.hotspot_rank = (idx + 1) as u32;
     }
     entries
 }

@@ -58,20 +58,19 @@ pub fn run<O: Write, E: Write>(args: &SessionArgs, stdout: &mut O, stderr: &mut 
     });
 
     // Window ranking — the baseline "what's hot in the full window".
-    let weighted = mmk_core::churn::weighted_churn(
-        &session_out.window.commits,
-        now_ts,
-        cfg.tau_seconds(),
-    );
+    let weighted =
+        mmk_core::churn::weighted_churn(&session_out.window.commits, now_ts, cfg.tau_seconds());
     let relative = mmk_core::churn::relative_churn(&weighted, &session_out.window.loc);
     let commits_touching = mmk_core::churn::commits_touching(&session_out.window.commits);
     let last_modified = mmk_core::last_modified(&session_out.window.commits);
     let mut window_ranked = mmk_core::hotspot::rank(
-        &weighted,
-        &relative,
-        &session_out.window.loc,
-        &commits_touching,
-        &last_modified,
+        mmk_core::hotspot::RankInputs {
+            weighted: &weighted,
+            relative: &relative,
+            loc: &session_out.window.loc,
+            commits_touching: &commits_touching,
+            last_modified: &last_modified,
+        },
         cfg.hotspot.top_n,
     );
 
@@ -86,11 +85,13 @@ pub fn run<O: Write, E: Write>(args: &SessionArgs, stdout: &mut O, stderr: &mut 
     let s_commits_touching = mmk_core::churn::commits_touching(&session_out.session_commits);
     let s_last_modified = mmk_core::last_modified(&session_out.session_commits);
     let mut session_ranked = mmk_core::hotspot::rank(
-        &s_weighted,
-        &s_relative,
-        &session_out.session_loc,
-        &s_commits_touching,
-        &s_last_modified,
+        mmk_core::hotspot::RankInputs {
+            weighted: &s_weighted,
+            relative: &s_relative,
+            loc: &session_out.session_loc,
+            commits_touching: &s_commits_touching,
+            last_modified: &s_last_modified,
+        },
         cfg.hotspot.top_n,
     );
 
@@ -118,15 +119,14 @@ pub fn run<O: Write, E: Write>(args: &SessionArgs, stdout: &mut O, stderr: &mut 
     );
 
     let blast_threshold = cfg.blast_radius.threshold;
-    let blast_nodes = args.blast_radius.as_ref().map(|p| {
-        let nodes = coupling::neighborhood(
-            &session_out.window.commits,
-            p,
-            1,
-            blast_threshold,
-        );
-        (p.clone(), nodes)
-    });
+    let blast_nodes = args
+        .blast_radius
+        .as_ref()
+        .map(|p| {
+            let nodes = coupling::neighborhood(&session_out.window.commits, p, 1, blast_threshold)?;
+            Ok::<_, anyhow::Error>((p.clone(), nodes))
+        })
+        .transpose()?;
     let blast_ref: Option<(&std::path::Path, f64, &[mmk_core::NeighborhoodNode])> = blast_nodes
         .as_ref()
         .map(|(p, n)| (p.as_path(), blast_threshold, n.as_slice()));

@@ -58,10 +58,11 @@ pub fn head_entries(repo: &gix::Repository, ignores: &GlobSet) -> Result<(Vec<He
     Ok((out, head_paths_ignored))
 }
 
-/// Tree walk at an arbitrary commit OID, scoped to a fixed path
-/// allowlist. Used by `mmk session` to compute LOC at the session
-/// base (not at HEAD), so `session.relative_churn` divides by the
-/// file's size at the start of the session rather than its size now.
+/// Tree walk at an arbitrary commit OID, scoped to a fixed path allowlist.
+///
+/// Used by `mmk session` to compute LOC at the session base (not at HEAD),
+/// so `session.relative_churn` divides by the file's size at the start of
+/// the session rather than its size now.
 ///
 /// Returns `path -> u32` LOC. Files in `paths` that don't exist at
 /// `commit_oid` are silently absent from the output (consistent with

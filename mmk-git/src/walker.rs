@@ -51,7 +51,7 @@ pub struct BaseResolution {
 
 #[allow(missing_debug_implementations)]
 pub struct RepoWalker {
-    pub repo: gix::Repository,
+    pub(crate) repo: gix::Repository,
 }
 
 impl RepoWalker {

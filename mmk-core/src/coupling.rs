@@ -74,8 +74,11 @@ pub fn top_couples_for(
         // Pair updates: only where at least one side is a target.
         // Iterate target-first so we can short-circuit on commits that
         // touch no targeted files.
-        let touched_targets: Vec<&PathBuf> =
-            paths.iter().copied().filter(|p| targets.contains(*p)).collect();
+        let touched_targets: Vec<&PathBuf> = paths
+            .iter()
+            .copied()
+            .filter(|p| targets.contains(*p))
+            .collect();
         if touched_targets.is_empty() {
             continue;
         }
@@ -99,7 +102,7 @@ pub fn top_couples_for(
     for ((t, partner), co) in pair_counts {
         let touches_t = touches.get(&t).copied().unwrap_or(0);
         let touches_p = touches.get(&partner).copied().unwrap_or(0);
-        let union = touches_t + touches_p - co;
+        let union = touches_t.saturating_add(touches_p).saturating_sub(co);
         let jaccard = if union == 0 {
             0.0
         } else {
@@ -150,24 +153,28 @@ pub struct NeighborhoodNode {
 
 /// 1-hop blast radius: every partner of `root` whose jaccard ≥ `threshold`.
 ///
-/// `hops` is reserved for forward compatibility; v0.2.0 panics on
-/// anything other than `1`.
-#[must_use]
+/// `hops` is reserved for forward compatibility; v0.2.x rejects
+/// anything other than `1` with an error so callers can surface a
+/// clean diagnostic. Multi-hop arrives in v0.3.
 pub fn neighborhood(
     commits: &[Commit],
     root: &std::path::Path,
     hops: u32,
     threshold: f64,
-) -> Vec<NeighborhoodNode> {
-    assert_eq!(hops, 1, "v0.2.0 supports only 1-hop blast radius");
+) -> anyhow::Result<Vec<NeighborhoodNode>> {
+    if hops != 1 {
+        return Err(anyhow::anyhow!(
+            "v0.2.x supports only 1-hop blast radius (got {hops})"
+        ));
+    }
 
     let mut targets: AHashSet<PathBuf> = AHashSet::new();
     targets.insert(root.to_path_buf());
     let map = top_couples_for(commits, &targets, 0);
     let Some(couples) = map.get(root) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    couples
+    Ok(couples
         .iter()
         .filter(|c| c.jaccard >= threshold)
         .map(|c| NeighborhoodNode {
@@ -176,5 +183,5 @@ pub fn neighborhood(
             co_change_count: c.co_change_count,
             hops: 1,
         })
-        .collect()
+        .collect())
 }

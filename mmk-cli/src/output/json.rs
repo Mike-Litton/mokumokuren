@@ -242,10 +242,12 @@ pub fn write_session<W: Write>(
         })
         .collect();
 
-    let (base_ref, base_sha, base_via) = session_out.base.as_ref().map_or(
-        (None, None, "head_minus_one"),
-        |r| (r.label.as_deref(), Some(r.oid.to_string()), r.via.as_str()),
-    );
+    let (base_ref, base_sha, base_via) = session_out
+        .base
+        .as_ref()
+        .map_or((None, None, "head_minus_one"), |r| {
+            (r.label.as_deref(), Some(r.oid.to_string()), r.via.as_str())
+        });
 
     let blast_block = blast.map(|(root, threshold, nodes)| BlastRadiusBlock {
         root: root.to_string_lossy().into_owned(),

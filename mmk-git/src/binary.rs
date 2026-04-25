@@ -24,5 +24,6 @@ pub fn count_lines(bytes: &[u8]) -> u32 {
 #[allow(clippy::naive_bytecount)]
 fn bytecount_nl(bytes: &[u8]) -> u32 {
     let count: usize = bytes.iter().filter(|&&b| b == b'\n').count();
+    // Saturate deliberately: 4 GiB+ blobs are real (giant generated files); LOC for them is noise anyway.
     u32::try_from(count).unwrap_or(u32::MAX)
 }

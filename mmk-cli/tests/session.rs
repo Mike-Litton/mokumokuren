@@ -44,7 +44,6 @@ fn json_args() -> SessionArgs {
     }
 }
 
-
 #[test]
 fn explicit_base_resolves_via_explicit() {
     let dir = TempDir::new().unwrap();
@@ -69,8 +68,7 @@ fn explicit_base_resolves_via_explicit() {
         .collect();
     assert!(
         entered.contains(&"feat/x.rs"),
-        "feat/x.rs should be a session-only top-N entry; got {:?}",
-        entered
+        "feat/x.rs should be a session-only top-N entry; got {entered:?}"
     );
     let entropy = session["commit_entropy"].as_f64().unwrap();
     assert!(
@@ -100,7 +98,7 @@ fn since_commit_equals_merge_base_yields_same_output() {
     let (out_a, _) = run_session(dir.path(), args_a);
 
     let mut args_b = json_args();
-    args_b.since_commit = Some(mb_sha.clone());
+    args_b.since_commit = Some(mb_sha);
     let (out_b, _) = run_session(dir.path(), args_b);
 
     let va: Value = serde_json::from_slice(&out_a).unwrap();
@@ -143,9 +141,10 @@ fn detached_head_falls_back_to_head_minus_one_with_warning() {
         .map(|s| s.as_str().unwrap())
         .collect();
     assert!(
-        warnings.iter().any(|w| w.contains("base") || w.contains("fallback")),
-        "synthetic-base fallback should fire a warning; got {:?}",
         warnings
+            .iter()
+            .any(|w| w.contains("base") || w.contains("fallback")),
+        "synthetic-base fallback should fire a warning; got {warnings:?}"
     );
 }
 
@@ -261,12 +260,20 @@ fn explicit_base_does_not_emit_synthetic_warning() {
 /// `core/stable.rs` is sized similarly on main and remains unchanged
 /// through session — control file.
 fn build_loc_drift_fixture(repo: &Path, now: i64) {
+    use std::fmt::Write as _;
+
     init_repo(repo);
 
     // main: introduce big.rs at 100 lines, stable.rs at 50 lines.
-    let big_initial: String = (0..100).map(|i| format!("orig{i}\n")).collect();
+    let mut big_initial = String::new();
+    for i in 0..100 {
+        writeln!(big_initial, "orig{i}").unwrap();
+    }
     write(repo, "core/big.rs", &big_initial);
-    let stable: String = (0..50).map(|i| format!("stable{i}\n")).collect();
+    let mut stable = String::new();
+    for i in 0..50 {
+        writeln!(stable, "stable{i}").unwrap();
+    }
     write(repo, "core/stable.rs", &stable);
     commit_all(repo, "main: seed", now - 30 * DAY);
 
@@ -274,10 +281,13 @@ fn build_loc_drift_fixture(repo: &Path, now: i64) {
     git(repo, &["checkout", "-q", "-b", "feature"]);
 
     // Churn big.rs in the session: append a chunk of new lines.
-    let big_churned: String = (0..100)
-        .map(|i| format!("orig{i}\n"))
-        .chain((0..40).map(|i| format!("session_added{i}\n")))
-        .collect();
+    let mut big_churned = String::new();
+    for i in 0..100 {
+        writeln!(big_churned, "orig{i}").unwrap();
+    }
+    for i in 0..40 {
+        writeln!(big_churned, "session_added{i}").unwrap();
+    }
     write(repo, "core/big.rs", &big_churned);
     commit_all(repo, "feat: append to big", now - 5 * DAY);
 
@@ -299,9 +309,7 @@ fn session_relative_churn_uses_base_epoch_loc() {
     let (stdout, _stderr) = run_session(dir.path(), args);
     let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
 
-    let session_files = v["session_files"]
-        .as_array()
-        .expect("session_files array");
+    let session_files = v["session_files"].as_array().expect("session_files array");
     let big = session_files
         .iter()
         .find(|f| f["path"] == "core/big.rs")
@@ -311,7 +319,7 @@ fn session_relative_churn_uses_base_epoch_loc() {
     // session_files[].loc to reflect the BASE epoch.
     let loc = big["loc"].as_u64().unwrap();
     assert!(
-        loc >= 90 && loc <= 110,
+        (90..=110).contains(&loc),
         "session_files[].loc must be base-epoch LOC (≈100), not HEAD-LOC (5); got {loc}. \
          If this fails reading 5: the v0.2.0 bug is back — session ranking is using HEAD-LOC."
     );

@@ -18,6 +18,39 @@ Ignore patterns are configured per-repo via `mokumokuren.toml` — the
 tool ships with no ecosystem-specific defaults because there is no
 ecosystem-neutral right answer.
 
+## Where mmk fits
+
+LLM coding agents are typically guarded by three checks:
+
+1. **Plan / requirements** — usually from a human, defines what should be true.
+2. **Static typing and linters** — fast, deterministic, but stateless: they only see the file in front of them.
+3. **Automatic tests** — protect against regression, but pass on each iteration of an agent's thrash.
+
+These three structurally cannot see *historical* patterns. A linter
+doesn't know which file has been rewritten 200 times this quarter. A
+test doesn't know that touching `packfile.c` historically also touches
+`object-file.c` — it only fails when the missing edit breaks something.
+
+`mmk` is the fourth check: a **deterministic, fast, computational
+metric generator that guards against a specific class of LLM slop**
+the other three miss — hotspot blindness, hallucinated coupling,
+unexpected cascade, and thrashing. It reads Git history (the one
+durable record of what came before) and emits structured signal a
+harness or CI gate can act on. It is not a substitute for typing,
+linting, or tests; it complements them by supplying the historical
+context the other three pillars assume the coder already has.
+
+mmk is not the only possible source of historical signal — PR
+reviews, incident logs, and benchmark drift are also history the
+agent lacks. mmk's slice is the git-derived one.
+
+For mmk to function as a *self-acting* fourth pillar — running
+when the agent edits, without the user typing the commands each
+turn — wire it into the agent's harness once. For Claude Code,
+see [`docs/claude-code.md`](docs/claude-code.md): a `CLAUDE.md`
+snippet (advisory, simplest), a skill (auto-invokes by description),
+and a hooks config (deterministic). Pick the strictness that fits.
+
 ## Two ways to use it
 
 `mmk` is a **deterministic, sub-second sensor** in two contexts:

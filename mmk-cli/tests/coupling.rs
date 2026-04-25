@@ -62,8 +62,7 @@ fn json_files_carry_top_couples_array() {
 
     assert!(
         partners.contains(&"core/b.rs"),
-        "core/a.rs should be coupled to core/b.rs (they co-change in 3 of 4 commits); got {:?}",
-        partners
+        "core/a.rs should be coupled to core/b.rs (they co-change in 3 of 4 commits); got {partners:?}"
     );
 
     let b_couple = couples
@@ -108,8 +107,7 @@ fn couples_of_flag_returns_partners_for_a_single_path() {
         .collect();
     assert!(
         partners.contains(&"core/b.rs"),
-        "couples_of(core/a.rs) should include core/b.rs; got {:?}",
-        partners
+        "couples_of(core/a.rs) should include core/b.rs; got {partners:?}"
     );
 }
 

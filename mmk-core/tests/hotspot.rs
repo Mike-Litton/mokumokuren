@@ -1,5 +1,5 @@
 use ahash::AHashMap;
-use mmk_core::hotspot::rank;
+use mmk_core::hotspot::{rank, RankInputs};
 use std::path::PathBuf;
 
 fn path(s: &str) -> PathBuf {
@@ -8,12 +8,19 @@ fn path(s: &str) -> PathBuf {
 
 #[test]
 fn empty_inputs_yield_empty_output() {
+    let empty_w = AHashMap::new();
+    let empty_r = AHashMap::new();
+    let empty_l = AHashMap::new();
+    let empty_c = AHashMap::new();
+    let empty_lm = AHashMap::new();
     let out = rank(
-        &AHashMap::new(),
-        &AHashMap::new(),
-        &AHashMap::new(),
-        &AHashMap::new(),
-        &AHashMap::new(),
+        RankInputs {
+            weighted: &empty_w,
+            relative: &empty_r,
+            loc: &empty_l,
+            commits_touching: &empty_c,
+            last_modified: &empty_lm,
+        },
         10,
     );
     assert!(out.is_empty());
@@ -35,7 +42,16 @@ fn ranking_orders_by_score_desc() {
     let cts = AHashMap::new();
     let lm = AHashMap::new();
 
-    let out = rank(&weighted, &relative, &loc, &cts, &lm, 0);
+    let out = rank(
+        RankInputs {
+            weighted: &weighted,
+            relative: &relative,
+            loc: &loc,
+            commits_touching: &cts,
+            last_modified: &lm,
+        },
+        0,
+    );
     assert_eq!(out.len(), 3);
     assert_eq!(out[0].path, path("high.rs"));
     assert_eq!(out[0].hotspot_rank, 1);
@@ -54,12 +70,17 @@ fn files_missing_from_head_loc_are_excluded() {
     let mut loc: AHashMap<PathBuf, u32> = AHashMap::new();
     loc.insert(path("alive.rs"), 50);
 
+    let relative = AHashMap::new();
+    let cts = AHashMap::new();
+    let lm = AHashMap::new();
     let out = rank(
-        &weighted,
-        &AHashMap::new(),
-        &loc,
-        &AHashMap::new(),
-        &AHashMap::new(),
+        RankInputs {
+            weighted: &weighted,
+            relative: &relative,
+            loc: &loc,
+            commits_touching: &cts,
+            last_modified: &lm,
+        },
         10,
     );
     assert_eq!(out.len(), 1);
@@ -75,12 +96,17 @@ fn top_n_truncates_after_sort() {
         weighted.insert(p.clone(), f64::from(i + 1) * 10.0);
         loc.insert(p, 100);
     }
+    let relative = AHashMap::new();
+    let cts = AHashMap::new();
+    let lm = AHashMap::new();
     let out = rank(
-        &weighted,
-        &AHashMap::new(),
-        &loc,
-        &AHashMap::new(),
-        &AHashMap::new(),
+        RankInputs {
+            weighted: &weighted,
+            relative: &relative,
+            loc: &loc,
+            commits_touching: &cts,
+            last_modified: &lm,
+        },
         3,
     );
     assert_eq!(out.len(), 3);
@@ -95,12 +121,17 @@ fn score_formula_matches_spec() {
     let mut loc: AHashMap<PathBuf, u32> = AHashMap::new();
     loc.insert(path("a.rs"), 9);
 
+    let relative = AHashMap::new();
+    let cts = AHashMap::new();
+    let lm = AHashMap::new();
     let out = rank(
-        &weighted,
-        &AHashMap::new(),
-        &loc,
-        &AHashMap::new(),
-        &AHashMap::new(),
+        RankInputs {
+            weighted: &weighted,
+            relative: &relative,
+            loc: &loc,
+            commits_touching: &cts,
+            last_modified: &lm,
+        },
         1,
     );
     let expected = 100.0_f64.ln() * 10.0_f64.ln();

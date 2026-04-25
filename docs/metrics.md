@@ -15,6 +15,32 @@ correlate; across layers, they decouple.
 | **Topology**           | `top_couples`, `blast_radius.nodes`                                   |
 | **Distribution / drift** | `commit_entropy`, `churn_of_churn`, `entered_top_n`, `rank_climbs`  |
 
+## What mmk deliberately doesn't measure
+
+mmk is one signal in a multi-tool harness, not a complete safety
+check. It explicitly **does not** emit:
+
+- **Perplexity or token-based complexity scores.** Empirically these
+  do not predict LLM-induced test breakage; they look meaningful but
+  aren't. We omit them rather than ship a number agents will overweigh.
+- **Structural code health (CodeHealth-style 0–10 scores).** That
+  requires AST parsing, which is language-specific and would break
+  the deterministic-sub-second-language-agnostic invariant. It's a
+  different layer of the harness — a richer linter / structural
+  analyzer — not mmk's job.
+- **Semantic correctness or "does this edit do what it claims."**
+  That's what tests are for.
+- **Test outcomes, coverage, runtime metrics.** A different harness
+  component runs tests; mmk reads only Git.
+- **Hallucinated-API detection.** Catching "the agent called a
+  function that doesn't exist" is the linter / type checker's job;
+  mmk has no view into the working tree's symbols.
+
+The right way to use mmk is alongside type checks, linters, and
+tests — not in place of any of them. Each catches a different
+class of failure; mmk's class is "patterns visible only in
+historical data."
+
 ## Magnitude layer
 
 Three views of "how much has this file moved." Pairwise correlated;
@@ -184,6 +210,15 @@ on a single target. If you want "how concentrated is the work by
 file," look at the distribution of `weighted_churn` across
 `session_files[]`, not at `commit_entropy`.
 
+**Epistemic status: descriptive, not predictive.** A high
+`commit_entropy` does not mean the session's work was coherent,
+safe, or correct. It means the per-commit file-count distribution
+was uniform. Don't gate on this number; use it for triage. It
+becomes part of a *monotonicity* signal only when sampled across
+multiple sessions over time — drifting downward across sessions is
+the signature of an agent whose commits are getting lumpier. A
+single session can't show drift.
+
 ### `churn_of_churn`
 
 **Definition.** Per file, in the session: `min(added, deleted) × 2 /
@@ -276,6 +311,27 @@ The decision is "where do I start cleaning up?"
 
 `commit_entropy` and the session block don't apply here; they
 require a `--base` reference.
+
+## What the harness still has to do
+
+mmk supplies *baselines*: what's hot, what historically co-changes,
+what shifted since the base. It does not perform the **comparison**
+between an agent's actual edit and those baselines — that's the
+harness's or CI's job. Concretely, given an agent's diff, the
+harness has to:
+
+- Look up `hotspot_rank` for each touched file. ("Agent claimed
+  minor edit; touched a top-3 hotspot — escalate.")
+- Look up `top_couples` for each touched file and cross-reference
+  against the actual diff. ("Agent edited X; history says Y always
+  co-changes; Y was not touched — flag for review.")
+- Track `entered_top_n` / `rank_climbs` / `commit_entropy` across
+  sessions to detect monotonic drift. ("These three files have
+  climbed for the last four sessions — agent is thrashing.")
+
+A future `mmk diff <range>` mode could do these comparisons inline
+and emit a single "what to flag" view. Today, mmk gives you the
+inputs; the harness assembles the verdict.
 
 ## When the metrics start lying
 

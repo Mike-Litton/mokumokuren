@@ -1631,6 +1631,7 @@ name = "mmk-core"
 version = "0.2.0"
 dependencies = [
  "ahash",
+ "anyhow",
  "criterion",
  "serde",
 ]

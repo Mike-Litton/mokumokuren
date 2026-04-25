@@ -32,6 +32,7 @@ fn commit(ts: i64, files: &[&str]) -> Commit {
 }
 
 #[test]
+#[allow(clippy::float_cmp)] // exact-zero is the early-exit's literal return value, not a tolerance check
 fn entropy_zero_commits_is_zero() {
     let delta = compute_delta(&[], &[], &[]);
     assert_eq!(
@@ -42,6 +43,7 @@ fn entropy_zero_commits_is_zero() {
 }
 
 #[test]
+#[allow(clippy::float_cmp)] // exact-zero is the early-exit's literal return value, not a tolerance check
 fn entropy_one_commit_is_zero() {
     // The early-exit at `commits.len() < 2` is intentional: with one
     // commit, there's no distribution. Lock this so a future
@@ -100,9 +102,7 @@ fn entropy_concentrated_distribution_is_low() {
     // relative to the uniform case so a CI report can flag "this
     // session has one bulk-edit commit" by comparing entropy
     // against a baseline.
-    let mut commits: Vec<Commit> = (0..9_i64)
-        .map(|i| commit(100 + i, &["a"]))
-        .collect();
+    let mut commits: Vec<Commit> = (0..9_i64).map(|i| commit(100 + i, &["a"])).collect();
     let many: Vec<String> = (0..100).map(|i| format!("f{i}")).collect();
     let many_refs: Vec<&str> = many.iter().map(String::as_str).collect();
     commits.push(commit(200, &many_refs));

@@ -37,7 +37,7 @@ fn make_commits(n_commits: usize, files_per_commit: usize, n_files: usize) -> Ve
 fn bench_top_couples_for(c: &mut Criterion) {
     let commits = make_commits(2000, 8, 500);
     let targets: AHashSet<PathBuf> = (0..50)
-        .map(|i| PathBuf::from(format!("file_{:05}.rs", i)))
+        .map(|i| PathBuf::from(format!("file_{i:05}.rs")))
         .collect();
     c.bench_function("top_couples_for_2k_50targets", |b| {
         b.iter(|| top_couples_for(&commits, &targets, 5));

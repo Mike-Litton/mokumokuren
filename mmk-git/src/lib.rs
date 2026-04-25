@@ -129,7 +129,7 @@ pub fn analyze(path: &Path, cfg: &Config) -> Result<AnalyzeOutput> {
     let raw: Vec<(Commit, diff::DiffStats)> = commit_infos
         .par_iter()
         .map_init(
-            || {
+            || -> Result<(gix::Repository, gix::diff::blob::Platform)> {
                 let mut repo = ts_repo.to_thread_local();
                 repo.object_cache_size_if_unset(64 * 1024 * 1024);
                 repo.objects.set_pack_cache(|| {
@@ -137,11 +137,13 @@ pub fn analyze(path: &Path, cfg: &Config) -> Result<AnalyzeOutput> {
                         256 * 1024 * 1024,
                     ))
                 });
-                let cache =
-                    diff::make_resource_cache(&repo).expect("failed to build diff resource cache");
-                (repo, cache)
+                let cache = diff::make_resource_cache(&repo)?;
+                Ok((repo, cache))
             },
-            |(repo, cache), info| -> Result<(Commit, diff::DiffStats)> {
+            |init, info| -> Result<(Commit, diff::DiffStats)> {
+                let (repo, cache) = init
+                    .as_mut()
+                    .map_err(|e| anyhow::anyhow!("worker init failed: {e:#}"))?;
                 let (deltas, stats) = diff::diff_commit(
                     repo,
                     cache,

@@ -126,20 +126,29 @@ pub fn build_coupling_fixture(repo: &Path, now: i64) {
 /// (session top-N) without it appearing in the window top-N.
 #[allow(dead_code)] // not all integration test files use this fixture
 pub fn build_session_fixture(repo: &Path, now: i64) {
+    use std::fmt::Write as _;
+
     init_repo(repo);
 
     // Five main-branch files, each with multiple churn commits to
     // drive their hotspot scores well above feat/x.rs's two commits.
-    let main_files = ["core/a.rs", "core/b.rs", "core/c.rs", "core/d.rs", "core/e.rs"];
+    let main_files = [
+        "core/a.rs",
+        "core/b.rs",
+        "core/c.rs",
+        "core/d.rs",
+        "core/e.rs",
+    ];
     for (i, f) in main_files.iter().enumerate() {
         write(repo, f, "init\n");
         commit_all(repo, &format!("main init {f}"), now - (40 - i as i64) * DAY);
     }
     for round in 0..3_i64 {
         for (i, f) in main_files.iter().enumerate() {
-            let body: String = (0..(20 + round * 5))
-                .map(|n| format!("line{n}\n"))
-                .collect();
+            let mut body = String::new();
+            for n in 0..(20 + round * 5) {
+                writeln!(body, "line{n}").unwrap();
+            }
             write(repo, f, &body);
             commit_all(
                 repo,

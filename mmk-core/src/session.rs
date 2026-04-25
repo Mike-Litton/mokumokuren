@@ -5,11 +5,17 @@
 //! base ref. The agent uses `SessionDelta` to ask "what shifted
 //! since I started?"
 //!
-//! Per the v0.2.0 plan, this is the monotonicity proxy from the
-//! SCAFFOLD-CEGIS finding that LLM-driven iteration silently
-//! *degrades* code quality across rounds (correlation with raw churn
-//! is only 0.09 — the signal lives in the rate of change of churn,
-//! not its volume).
+//! These metrics are **descriptive**, not safety predictors. Read
+//! `entered_top_n`/`rank_climbs` to see what changed in importance,
+//! `churn_of_churn` to spot thrash signatures, `commit_entropy` to
+//! see whether the session's commits were spread or lumpy. None of
+//! them on their own predict whether an edit is safe to merge —
+//! that's the harness's call (tests + review + plan), informed in
+//! part by these signals. They become a monotonicity signal only
+//! when sampled across multiple sessions: drifting `commit_entropy`
+//! or repeatedly-climbing `rank_climbs` for the same files across
+//! sessions is the SCAFFOLD-CEGIS-style monotonic-degradation
+//! shape. A single invocation can't see that — it sees one snapshot.
 
 use ahash::AHashMap;
 use serde::Serialize;
@@ -44,7 +50,16 @@ pub struct SessionDelta {
     pub churn_of_churn: Vec<ChurnOfChurn>,
     /// Shannon entropy of files-touched-per-commit-in-session,
     /// normalized by `log(commits)`. 0 if the session has < 2
-    /// commits. 1 = perfectly uniform across commits.
+    /// commits. 1 = perfectly uniform per-commit file-count
+    /// distribution.
+    ///
+    /// **Descriptive, not predictive.** A high value means commits
+    /// were uniform in the *number of files each touched*; it does
+    /// not mean the work was coherent, safe, or correct. A low
+    /// value flags a session dominated by one bulk-edit commit —
+    /// useful for triage, not a safety verdict on its own. Pair
+    /// with `entered_top_n` and the actual edits before drawing
+    /// conclusions.
     pub commit_entropy: f64,
 }
 
@@ -63,8 +78,9 @@ pub fn compute_delta(
         match window_ranks.get(&s.path).copied() {
             None => entered_top_n.push(s.path.clone()),
             Some(window_rank) => {
-                let delta = i32::try_from(window_rank).unwrap_or(i32::MAX)
-                    - i32::try_from(s.hotspot_rank).unwrap_or(i32::MAX);
+                // Both ranks are bounded by top_n (caller-supplied, small);
+                // a bare cast is safe.
+                let delta = window_rank as i32 - s.hotspot_rank as i32;
                 if delta > 0 {
                     rank_climbs.push(RankClimb {
                         path: s.path.clone(),

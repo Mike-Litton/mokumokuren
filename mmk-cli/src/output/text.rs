@@ -139,11 +139,7 @@ pub fn write_session<W: Write>(
         None => writeln!(w, "  base: (none — root commit?)")?,
     }
     writeln!(w, "  commit_entropy: {:.3}", delta.commit_entropy)?;
-    writeln!(
-        w,
-        "  entered_top_n ({}):",
-        delta.entered_top_n.len()
-    )?;
+    writeln!(w, "  entered_top_n ({}):", delta.entered_top_n.len())?;
     for p in &delta.entered_top_n {
         writeln!(w, "    {}", p.display())?;
     }

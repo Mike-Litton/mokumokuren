@@ -205,13 +205,12 @@ fn schema_shape_matches_docs_contract() {
 
     // files[] entries.
     let files = v["files"].as_array().expect("files is an array");
-    assert!(!files.is_empty(), "fixture should produce at least one entry");
+    assert!(
+        !files.is_empty(),
+        "fixture should produce at least one entry"
+    );
     for (i, entry) in files.iter().enumerate() {
-        expect_required_keys(
-            entry,
-            &ranking_entry_keys(),
-            &format!("files[{i}]"),
-        );
+        expect_required_keys(entry, &ranking_entry_keys(), &format!("files[{i}]"));
         // top_couples is an array, possibly empty.
         let couples = entry["top_couples"]
             .as_array()
@@ -356,13 +355,12 @@ fn schema_session_shape_matches_docs_contract() {
     }
 
     // files[] and session_files[] both follow the ranking-entry contract.
-    for (label, arr) in [("files", &v["files"]), ("session_files", &v["session_files"])] {
+    for (label, arr) in [
+        ("files", &v["files"]),
+        ("session_files", &v["session_files"]),
+    ] {
         for (i, entry) in arr.as_array().unwrap().iter().enumerate() {
-            expect_required_keys(
-                entry,
-                &ranking_entry_keys(),
-                &format!("{label}[{i}]"),
-            );
+            expect_required_keys(entry, &ranking_entry_keys(), &format!("{label}[{i}]"));
         }
     }
 }
