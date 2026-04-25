@@ -4,6 +4,14 @@
 
 use std::path::Path;
 use std::process::Command;
+use std::sync::Mutex;
+
+/// Serializes process-wide CWD manipulation across parallel tests in
+/// the same binary. `analyze` and `init` both read `current_dir()`
+/// internally, so any test pointing them at a fixture has to flip CWD
+/// — and parallel flips race. Hold this lock for the duration of the
+/// command invocation.
+pub static CWD_LOCK: Mutex<()> = Mutex::new(());
 
 pub const DAY: i64 = 86_400;
 
@@ -49,11 +57,12 @@ pub fn commit_all(repo: &Path, msg: &str, when: i64) {
     assert!(status.success(), "git commit failed");
 }
 
-/// Build the v0.1 plan's canonical fixture: commit A adds `a.rs` + `b.rs`,
-/// commit B heavily modifies `a.rs`, commit C renames `b.rs` → `c.rs`,
-/// commit D modifies `c.rs`. `b.rs` exists in-window but is not at HEAD
-/// (it was renamed away), exercising the "deleted from HEAD" counter.
-/// `c.rs` survives to HEAD so its rename-detection event is observable.
+/// Canonical fixture: commit A adds `a.rs` + `b.rs`, commit B heavily
+/// modifies `a.rs`, commit C renames `b.rs` → `c.rs`, commit D modifies
+/// `c.rs`. `b.rs` exists in-window but is not at HEAD (it was renamed
+/// away), exercising the "deleted from HEAD" counter. `c.rs` survives
+/// to HEAD so its rename-detection event is observable.
+#[allow(dead_code)] // not all integration test files use this fixture
 pub fn build_canonical_fixture(repo: &Path, now: i64) {
     init_repo(repo);
 

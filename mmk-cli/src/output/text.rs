@@ -6,6 +6,8 @@ use mmk_core::HotspotEntry;
 use mmk_git::AnalyzeOutput;
 use std::io::Write;
 
+/// Write a human-readable ranked top-N table to `w`. Column widths
+/// auto-size to the longest path so output stays aligned.
 pub fn write<W: Write>(
     w: &mut W,
     ranked: &[HotspotEntry],

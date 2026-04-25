@@ -1,4 +1,4 @@
-//! JSON output, per plan §8.1 (trimmed to v0.1 fields).
+//! JSON output for `mmk analyze`.
 
 use anyhow::Result;
 use mmk_config::Config;
@@ -40,7 +40,12 @@ struct CommitsFilteredBlock {
 
 #[derive(Serialize)]
 struct FilesIgnoredBlock {
+    /// Change-events on paths that aren't in HEAD (renamed away,
+    /// deleted, or matched by an ignore glob during diff walk).
     deleted_from_head: u64,
+    /// HEAD-tree paths excluded by an ignore glob. Useful for sanity-
+    /// checking that the user's `mokumokuren.toml` is doing something.
+    head_paths_ignored: u64,
 }
 
 #[derive(Serialize)]
@@ -67,6 +72,9 @@ fn rfc3339(ts: i64) -> Option<String> {
     Some(formatted)
 }
 
+/// Write a pretty-printed JSON report to `w`. Schema is the
+/// [`Report`] struct; `version` tracks the crate version so consumers
+/// can spot a breaking change.
 pub fn write<W: Write>(
     w: &mut W,
     ranked: &[HotspotEntry],
@@ -106,6 +114,7 @@ pub fn write<W: Write>(
             },
             files_ignored: FilesIgnoredBlock {
                 deleted_from_head: analysis.counts.non_head_events,
+                head_paths_ignored: analysis.counts.head_paths_ignored,
             },
             duration_ms,
         },

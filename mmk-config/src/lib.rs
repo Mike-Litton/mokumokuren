@@ -1,8 +1,11 @@
-//! Configuration for Mokumokuren. v0.1 ships only in-memory defaults and
-//! CLI-driven overrides — no file loading yet (that lands in v0.2 when it has
-//! to contend with the agent/ci profiles).
+//! Configuration for Mokumokuren. Pure data: in-memory defaults, plus a
+//! TOML loader for repo-local `mokumokuren.toml` files.
 
 use serde::Serialize;
+
+pub mod file;
+
+pub use file::ConfigFile;
 
 pub const SECONDS_PER_DAY: i64 = 86_400;
 
@@ -32,7 +35,8 @@ pub struct Config {
     pub bulk: BulkCfg,
     /// Rename-similarity threshold (0.0–1.0) passed to the diff engine.
     pub rename_similarity: f32,
-    /// User-supplied ignore globs (e.g. `vendor/**`).
+    /// Final ignore globs after merging file + CLI sources. The git layer
+    /// reads only this field; how it got populated isn't its concern.
     pub ignores: Vec<String>,
 }
 

@@ -49,11 +49,11 @@ pub fn commit_all(repo: &Path, msg: &str, when: i64) {
     assert!(status.success(), "git commit failed");
 }
 
-/// Build the v0.1 plan's canonical fixture: commit A adds `a.rs` + `b.rs`,
-/// commit B heavily modifies `a.rs`, commit C renames `b.rs` → `c.rs`,
-/// commit D modifies `c.rs`. `b.rs` exists in-window but is not at HEAD
-/// (it was renamed away), exercising the "deleted from HEAD" counter.
-/// `c.rs` survives to HEAD so its rename-detection event is observable.
+/// Canonical fixture: commit A adds `a.rs` + `b.rs`, commit B heavily
+/// modifies `a.rs`, commit C renames `b.rs` → `c.rs`, commit D modifies
+/// `c.rs`. `b.rs` exists in-window but is not at HEAD (it was renamed
+/// away), exercising the "deleted from HEAD" counter. `c.rs` survives
+/// to HEAD so its rename-detection event is observable.
 pub fn build_canonical_fixture(repo: &Path, now: i64) {
     init_repo(repo);
 

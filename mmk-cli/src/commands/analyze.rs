@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
-use mmk_config::Config;
+use mmk_config::{Config, ConfigFile};
 use std::io::Write;
+use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::args::{AnalyzeArgs, Format};
@@ -14,15 +15,34 @@ pub fn run<O: Write, E: Write>(args: &AnalyzeArgs, stdout: &mut O, stderr: &mut 
         .unwrap_or(u32::MAX)
         .max(1);
 
+    // Load mokumokuren.toml — explicit `--config` wins; otherwise look at
+    // the Git repo root. Discovery uses gix to find the work tree, since
+    // `cwd` may be deep inside a subdirectory.
+    let (file_cfg, file_path) = load_config_file(&cwd, args.config.as_deref())?;
+
     let mut cfg = Config::default();
     cfg.window.days = window_days;
     cfg.hotspot.top_n = args.top;
-    cfg.ignores.clone_from(&args.ignores);
+    // Union: file first (so CLI flags appear after — order matters only
+    // for diagnostics, not glob semantics).
+    cfg.ignores = file_cfg.ignore;
+    cfg.ignores.extend(args.ignores.iter().cloned());
 
     let started = Instant::now();
     let analysis = mmk_git::analyze(&cwd, &cfg)?;
 
     if args.verbose {
+        match &file_path {
+            Some(p) => writeln!(stderr, "loaded config from {}", p.display())?,
+            None => writeln!(stderr, "no mokumokuren.toml found; running with defaults")?,
+        }
+        if analysis.counts.head_paths_ignored > 0 {
+            writeln!(
+                stderr,
+                "{} HEAD path(s) excluded by ignore globs",
+                analysis.counts.head_paths_ignored
+            )?;
+        }
         for warn in &analysis.warnings {
             writeln!(stderr, "warning: {warn}")?;
         }
@@ -55,4 +75,35 @@ pub fn run<O: Write, E: Write>(args: &AnalyzeArgs, stdout: &mut O, stderr: &mut 
         Format::Json => crate::output::json::write(stdout, &ranked, &analysis, duration_ms, &cfg)?,
     }
     Ok(())
+}
+
+/// Resolve which config file to load and load it. Precedence:
+/// 1. Explicit `--config <path>` (must exist; error if missing).
+/// 2. `mokumokuren.toml` at the Git repo root (auto-discovered).
+/// 3. Default-empty.
+fn load_config_file(
+    cwd: &std::path::Path,
+    explicit: Option<&std::path::Path>,
+) -> Result<(ConfigFile, Option<PathBuf>)> {
+    if let Some(path) = explicit {
+        let cfg = ConfigFile::load_from_path(path)
+            .with_context(|| format!("failed to load config from {}", path.display()))?;
+        return Ok((cfg, Some(path.to_path_buf())));
+    }
+    if let Some(repo_root) = discover_repo_root(cwd) {
+        let candidate = repo_root.join("mokumokuren.toml");
+        if candidate.exists() {
+            let cfg = ConfigFile::load_from_path(&candidate)
+                .with_context(|| format!("failed to load config from {}", candidate.display()))?;
+            return Ok((cfg, Some(candidate)));
+        }
+    }
+    Ok((ConfigFile::default(), None))
+}
+
+/// Walk up from `start` to find the Git work-tree root. Returns `None`
+/// if not in a Git repo (the analyze step will then fail with a clearer
+/// error than a missing config).
+fn discover_repo_root(start: &std::path::Path) -> Option<PathBuf> {
+    mmk_git::discover_work_dir(start)
 }

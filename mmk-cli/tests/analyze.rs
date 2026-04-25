@@ -1,11 +1,14 @@
 mod common;
 
-use common::build_canonical_fixture;
+use common::{build_canonical_fixture, CWD_LOCK};
 use mokumokuren::args::{AnalyzeArgs, Format};
 use serde_json::Value;
 use tempfile::TempDir;
 
 fn run_in(repo: &std::path::Path, args: AnalyzeArgs) -> Vec<u8> {
+    let _g = CWD_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let orig = std::env::current_dir().unwrap();
     std::env::set_current_dir(repo).unwrap();
     let mut stdout: Vec<u8> = Vec::new();
@@ -22,6 +25,7 @@ fn default_args() -> AnalyzeArgs {
         top: 20,
         format: Format::Json,
         ignores: Vec::new(),
+        config: None,
         verbose: false,
     }
 }

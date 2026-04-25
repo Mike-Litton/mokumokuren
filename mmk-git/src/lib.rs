@@ -2,7 +2,7 @@
 
 use ahash::AHashMap;
 use anyhow::{Context, Result};
-use globset::{Glob, GlobSetBuilder};
+use globset::{Glob, GlobSet, GlobSetBuilder};
 use mmk_config::Config;
 use mmk_core::types::Commit;
 use rayon::prelude::*;
@@ -12,6 +12,15 @@ pub mod binary;
 pub mod diff;
 pub mod loc;
 pub mod walker;
+
+/// Discover the work-tree root of the Git repo containing `start`, or
+/// `None` if `start` is not inside a Git repo. Re-exports gix's
+/// discovery without requiring the caller to depend on gix directly.
+#[must_use]
+pub fn discover_work_dir(start: &Path) -> Option<PathBuf> {
+    let repo = gix::discover(start).ok()?;
+    repo.workdir().map(Path::to_path_buf)
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct AnalysisCounts {
@@ -27,8 +36,13 @@ pub struct AnalysisCounts {
     /// inflate-skip fast path that excludes them in the first place.
     /// Includes Additions of later-renamed/deleted files, Deletions of
     /// unreachable files, and Modifications where the path was later
-    /// removed. Also includes paths filtered by `--ignore` globs.
+    /// removed. Also includes paths filtered by ignore globs.
     pub non_head_events: u64,
+    /// HEAD-tree files dropped by ignore globs. Distinct count, not
+    /// events. Surfacing this separately from `non_head_events` lets a
+    /// user see at a glance whether their ignore list is actually doing
+    /// something on this repo.
+    pub head_paths_ignored: u64,
 }
 
 #[derive(Debug)]
@@ -87,19 +101,20 @@ pub fn analyze(path: &Path, cfg: &Config) -> Result<AnalyzeOutput> {
 
     // Stage 1: enumerate HEAD paths (cheap tree walk — no blob loads).
     // This set gates inflate work inside diff_commit: paths deleted
-    // before HEAD or --ignore'd don't have their historical blobs loaded.
+    // before HEAD or ignored don't have their historical blobs loaded.
     //
     // NOTE: `head_entries` lossy-converts non-UTF-8 path bytes via
     // `to_str_lossy`, then we reconstitute those bytes here via
     // `as_encoded_bytes`. For the rare repo with invalid UTF-8 in
     // paths, the reconstituted bytes won't byte-match gix's raw
-    // `location.as_bytes()` inside `diff_commit`, and such paths will be
-    // treated as non-HEAD even when they exist at HEAD. v0.1 accepts
-    // this — real Git repositories with non-UTF-8 paths are vanishingly
+    // `location.as_bytes()` inside `diff_commit`, and such paths will
+    // be treated as non-HEAD even when they exist at HEAD. We accept
+    // this: real Git repositories with non-UTF-8 paths are vanishingly
     // rare and the failure mode is a silent undercount, not incorrect
     // ranking on the typical input.
     let t = std::time::Instant::now();
-    let head_entries = loc::head_entries(&walker.repo, &ignores)?;
+    let (head_entries, head_paths_ignored) = loc::head_entries(&walker.repo, &ignores)?;
+    counts.head_paths_ignored = head_paths_ignored;
     let head_paths: diff::HeadPathBytes = head_entries
         .iter()
         .map(|e| e.path.as_os_str().as_encoded_bytes().to_vec())
@@ -196,7 +211,7 @@ pub fn analyze(path: &Path, cfg: &Config) -> Result<AnalyzeOutput> {
     })
 }
 
-fn build_globset(patterns: &[String]) -> Result<globset::GlobSet> {
+fn build_globset(patterns: &[String]) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     for pat in patterns {
         let glob = Glob::new(pat).with_context(|| format!("invalid ignore glob: {pat}"))?;

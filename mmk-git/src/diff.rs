@@ -30,6 +30,12 @@ pub fn make_resource_cache(repo: &gix::Repository) -> Result<gix::diff::blob::Pl
     .context("failed to build diff resource cache")
 }
 
+#[derive(Debug, Default)]
+pub struct DiffStats {
+    pub skipped: u64,
+    pub bulk_filtered: bool,
+}
+
 /// Diff `commit_info` against its first parent.
 ///
 /// If the commit has no parent, diff against the empty tree. Binary files
@@ -40,21 +46,16 @@ pub fn make_resource_cache(repo: &gix::Repository) -> Result<gix::diff::blob::Pl
 /// `head_paths` — if `Some`, only paths present in this set contribute to
 /// the returned deltas. Paths not in `head_paths` (files that no longer
 /// exist at HEAD, or paths filtered by ignore globs) are counted in the
-/// returned `skipped_count` instead of having their blobs inflated. This
-/// is the largest single perf lever available: inflate dominates CPU, and
-/// every churn event for a non-HEAD path is discarded downstream anyway.
+/// returned `DiffStats::skipped` instead of having their blobs inflated.
+/// This is the largest single perf lever available: inflate dominates
+/// CPU, and every churn event for a non-HEAD path is discarded downstream
+/// anyway.
 ///
 /// `bulk_limits` — if `(max_files, max_lines)` is exceeded during the
 /// tree walk, we abort early and return with `bulk_filtered = true`. The
 /// partial deltas are still returned (the caller will discard them) so we
 /// don't need to re-run the walk; the point is to stop inflating *more*
 /// blobs for a commit we're about to throw away.
-#[derive(Debug, Default)]
-pub struct DiffStats {
-    pub skipped: u64,
-    pub bulk_filtered: bool,
-}
-
 pub fn diff_commit(
     repo: &gix::Repository,
     resource_cache: &mut gix::diff::blob::Platform,

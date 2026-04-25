@@ -24,9 +24,13 @@ pub struct HeadEntry {
 
 /// Fast: walk HEAD tree, collect blob entries, apply ignore globs. No
 /// blob loads. Empty vec if HEAD is unborn.
-pub fn head_entries(repo: &gix::Repository, ignores: &GlobSet) -> Result<Vec<HeadEntry>> {
+///
+/// Returns `(entries, head_paths_ignored)` where the second value is
+/// the count of HEAD blobs that matched an ignore glob and were
+/// excluded.
+pub fn head_entries(repo: &gix::Repository, ignores: &GlobSet) -> Result<(Vec<HeadEntry>, u64)> {
     let Ok(commit) = repo.head_commit() else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), 0));
     };
     let tree = commit.tree().context("load HEAD tree")?;
     let entries = tree
@@ -36,12 +40,14 @@ pub fn head_entries(repo: &gix::Repository, ignores: &GlobSet) -> Result<Vec<Hea
         .context("traverse HEAD tree")?;
 
     let mut out = Vec::with_capacity(entries.len());
+    let mut head_paths_ignored: u64 = 0;
     for entry in entries {
         if !entry.mode.is_blob() {
             continue;
         }
         let path_str = entry.filepath.to_str_lossy().into_owned();
         if !ignores.is_empty() && ignores.is_match(&path_str) {
+            head_paths_ignored += 1;
             continue;
         }
         out.push(HeadEntry {
@@ -49,7 +55,7 @@ pub fn head_entries(repo: &gix::Repository, ignores: &GlobSet) -> Result<Vec<Hea
             oid: entry.oid,
         });
     }
-    Ok(out)
+    Ok((out, head_paths_ignored))
 }
 
 /// Slow: inflate each blob in `entries` and count its non-binary lines.

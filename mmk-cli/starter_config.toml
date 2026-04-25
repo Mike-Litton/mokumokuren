@@ -1,0 +1,50 @@
+# mokumokuren.toml — analysis configuration for this repository.
+#
+# `ignore` is a list of glob patterns. Files matching any pattern are
+# excluded from the hotspot ranking. Patterns are unioned with any
+# `--ignore` flags on the command line.
+#
+# The block below lists common ecosystem patterns. Uncomment the ones
+# that apply to this repo. Patterns mokumokuren can't predict (project-
+# specific generated dirs, app-specific vendored trees, build outputs)
+# go in the same list.
+
+ignore = [
+    # Translations — bulk localization commits aren't maintenance signal.
+    # "**/*.po",
+    # "**/*.pot",
+    # "**/locale/**",
+    # "**/Localization/**",
+
+    # Vendored / third-party code you don't author.
+    # "vendor/**",
+    # "thirdparty/**",
+    # "third_party/**",
+    # "node_modules/**",
+    # "Pods/**",
+
+    # Lockfiles — usually rewritten in bulk by package managers.
+    # "Cargo.lock",
+    # "package-lock.json",
+    # "yarn.lock",
+    # "pnpm-lock.yaml",
+    # "go.sum",
+    # "poetry.lock",
+    # "Gemfile.lock",
+
+    # Generated / build output (only relevant if your repo tracks them).
+    # "**/*.generated.*",
+    # "**/*_pb2.py",
+    # "**/*.pb.go",
+    # "target/**",
+    # "build/**",
+    # "dist/**",
+
+    # Engine asset / scene files (Godot, Unity, Unreal). Line counts on
+    # serialized scene data don't mean anything.
+    # "**/*.tscn",
+    # "**/*.tres",
+    # "**/*.unity",
+    # "**/*.uasset",
+    # "**/*.umap",
+]
