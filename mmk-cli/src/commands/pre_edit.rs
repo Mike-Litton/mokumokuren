@@ -8,7 +8,7 @@
 
 use ahash::AHashSet;
 use anyhow::{Context, Result};
-use mmk_config::{Config, ConfigFile};
+use mmk_config::Config;
 use mmk_core::coupling;
 use mmk_core::drift::{compute_drift, Snapshot};
 use std::io::Write;
@@ -17,6 +17,10 @@ use std::time::Instant;
 
 use crate::args::{Format, PreEditArgs};
 use crate::commands::analyze::COUPLES_PER_FILE;
+use crate::commands::common::{
+    analyze_health_for_subject, apply_coupling_file, apply_health_file, coupling_findings,
+    health_to_finding, load_config_file, resolve_patterns, CouplingEmission, CouplingProse,
+};
 use crate::commands::review::{build_partner_globset, verdict_for};
 use crate::output::findings::{render_text, Finding, Layer, Severity};
 use crate::Verdict;
@@ -45,15 +49,19 @@ pub fn run<O: Write, E: Write>(
         cfg.blast_radius.threshold = file_br.threshold;
     }
     if let Some(file_cp) = file_cfg.coupling.as_ref() {
-        if let Some(t) = file_cp.threshold {
-            cfg.coupling.threshold = t;
+        let warns = apply_coupling_file(&mut cfg.coupling, file_cp);
+        if args.verbose {
+            for w in &warns {
+                writeln!(stderr, "{}", w.message())?;
+            }
         }
-        if !file_cp.ignore_partners.is_empty() {
-            cfg.coupling.ignore_partners = file_cp.ignore_partners.clone();
-        }
+    }
+    if let Some(file_h) = file_cfg.health.as_ref() {
+        apply_health_file(&mut cfg.health.ts, file_h);
     }
     if let Some(t) = args.coupling_threshold.or(args.blast_radius_threshold) {
         cfg.coupling.threshold = t;
+        cfg.coupling.confidence_threshold = t;
     }
 
     let started = Instant::now();
@@ -82,7 +90,28 @@ pub fn run<O: Write, E: Write>(
         cfg.hotspot.top_n,
     );
 
-    let mut findings = compute_findings(&args.path, &ranked, &analysis.commits, &cfg, args.top);
+    let mut findings = compute_findings(
+        &args.path,
+        &ranked,
+        &analysis.commits,
+        &commits_touching,
+        &cfg,
+        args.top,
+    );
+
+    // HEALTH: structural-pattern adapter. Pre-edit treats every
+    // Health finding as informational (the agent hasn't acted yet
+    // — surfaces neighbors but doesn't demand edits).
+    let health_patterns = resolve_patterns(&cfg.health.ts.patterns);
+    let health_matches: Vec<mmk_health::HealthFinding> = if cfg.health.ts.enabled {
+        let peer_paths: Vec<PathBuf> = analysis.loc.keys().cloned().collect();
+        analyze_health_for_subject(&cwd, &args.path, &peer_paths, &health_patterns)
+    } else {
+        Vec::new()
+    };
+    for h in &health_matches {
+        findings.push(health_to_finding(h, Severity::Info));
+    }
 
     // DRIFT: only if the user opted in via --drift-sessions K. Slow
     // path (K x analyze) — kept out of the default per-edit hook.
@@ -135,6 +164,35 @@ pub fn run<O: Write, E: Write>(
         }
     }
 
+    // Quiet-file fall-through: if every layer was silent and the
+    // file's history is below the inference floor, emit one OK
+    // finding so the agent can distinguish "mmk was consulted but
+    // had nothing to say" from "mmk wasn't run." Sits under
+    // Layer::Coupling because the absence-of-coupling signal is
+    // what triggers it; Severity::Ok is reserved for exactly this.
+    if findings.is_empty() {
+        let n = commits_touching.get(&args.path).copied().unwrap_or(0);
+        if n < cfg.coupling.min_sample_size {
+            let rank = ranked
+                .iter()
+                .find(|e| e.path == args.path)
+                .map(|e| e.hotspot_rank);
+            findings.push(Finding::new(
+                Layer::Coupling,
+                Severity::Ok,
+                format!(
+                    "{} has insufficient history for coupling inference \
+                     ({} commits in {}-day window{}); pre-edit consulted \
+                     but no signal",
+                    args.path.display(),
+                    n,
+                    cfg.window.days,
+                    rank.map(|r| format!(", rank #{r}")).unwrap_or_default(),
+                ),
+            ));
+        }
+    }
+
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
     match args.format {
@@ -146,6 +204,8 @@ pub fn run<O: Write, E: Write>(
             &analysis,
             duration_ms,
             &cfg,
+            &health_matches,
+            &health_patterns,
         )?,
     }
     Ok(verdict_for(args.gate, &findings))
@@ -155,6 +215,7 @@ fn compute_findings(
     target: &Path,
     ranked: &[mmk_core::HotspotEntry],
     commits: &[mmk_core::types::Commit],
+    commits_touching: &ahash::AHashMap<PathBuf, u32>,
     cfg: &Config,
     top: usize,
 ) -> Vec<Finding> {
@@ -177,55 +238,28 @@ fn compute_findings(
         }
     }
 
-    // COUPLING — list every partner above threshold. Pre-edit is
-    // *informational* (the agent hasn't acted yet), so severity is
-    // Info, not Warn. The hook reader treats it as "you should
-    // probably re-read these too."
+    // COUPLING — delegate to the shared helper. Quiet files
+    // (n < min_sample_size) yield zero findings here and are picked
+    // up by the OK-finding fall-through in `run`.
     let mut targets: AHashSet<PathBuf> = AHashSet::new();
     targets.insert(target.to_path_buf());
-    let mut couples = coupling::top_couples_for(commits, &targets, COUPLES_PER_FILE);
+    let mut couples =
+        coupling::compute_conditional_couples_for(commits, &targets, COUPLES_PER_FILE);
+    let n = commits_touching.get(target).copied().unwrap_or(0);
     if let Some(partners) = couples.remove(target) {
-        let threshold = cfg.coupling.threshold;
         let ignore_set = build_partner_globset(&cfg.coupling.ignore_partners);
-        for p in partners {
-            if p.jaccard < threshold {
-                continue;
-            }
-            if ignore_set
-                .as_ref()
-                .is_some_and(|set| set.is_match(&p.partner))
-            {
-                continue;
-            }
-            findings.push(Finding::new(
-                Layer::Coupling,
-                Severity::Info,
-                format!(
-                    "{} historically co-changes with {} (jaccard {:.2})",
-                    target.display(),
-                    p.partner.display(),
-                    p.jaccard
-                ),
-            ));
-        }
+        let no_excluded: AHashSet<PathBuf> = AHashSet::new();
+        findings.extend(coupling_findings(CouplingEmission {
+            subject: target,
+            n,
+            partners: &partners,
+            cfg: &cfg.coupling,
+            ignore_set: ignore_set.as_ref(),
+            excluded_partners: &no_excluded,
+            severity: Severity::Info,
+            prose: CouplingProse::PreEditExpected,
+        }));
     }
 
     findings
-}
-
-fn load_config_file(cwd: &Path, explicit: Option<&Path>) -> Result<(ConfigFile, Option<PathBuf>)> {
-    if let Some(path) = explicit {
-        let cfg = ConfigFile::load_from_path(path)
-            .with_context(|| format!("failed to load config from {}", path.display()))?;
-        return Ok((cfg, Some(path.to_path_buf())));
-    }
-    if let Some(repo_root) = mmk_git::discover_work_dir(cwd) {
-        let candidate = repo_root.join("mokumokuren.toml");
-        if candidate.exists() {
-            let cfg = ConfigFile::load_from_path(&candidate)
-                .with_context(|| format!("failed to load config from {}", candidate.display()))?;
-            return Ok((cfg, Some(candidate)));
-        }
-    }
-    Ok((ConfigFile::default(), None))
 }

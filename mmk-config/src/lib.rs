@@ -5,7 +5,7 @@ use serde::Serialize;
 
 pub mod file;
 
-pub use file::{BlastRadiusFile, ConfigFile, CouplingFile};
+pub use file::{BlastRadiusFile, ConfigFile, CouplingFile, HealthFile, HealthTsFile};
 
 pub const SECONDS_PER_DAY: i64 = 86_400;
 
@@ -17,13 +17,30 @@ pub const SECONDS_PER_DAY: i64 = 86_400;
 /// `--blast-radius-threshold <FLOAT>` on the CLI.
 pub const DEFAULT_BLAST_RADIUS_THRESHOLD: f64 = 0.10;
 
-/// Default Jaccard threshold for COUPLING findings.
+/// Deprecated alias for the COUPLING threshold.
 ///
-/// Used by `mmk review` and `mmk pre-edit`. Higher than the exploratory
-/// blast-radius default — the eval data showed sub-0.30 partners are
-/// noise on real JS/TS repos and produce wrong-work demands when an
-/// agent acts on them.
+/// Retained so existing `--coupling-threshold` and `[coupling] threshold`
+/// invocations parse; the value is silently mapped to
+/// [`DEFAULT_COUPLING_CONFIDENCE_THRESHOLD`] (with a deprecation note in
+/// `--verbose` mode). Surfaced in diagnostic echoes of `Config`.
 pub const DEFAULT_COUPLING_THRESHOLD: f64 = 0.30;
+
+/// Default Wilson 95 % lower-bound floor for `P(partner | target)`.
+///
+/// Used by `mmk review` and `mmk pre-edit`. Reads as "I want to know
+/// about partners with at least 20 % conditional probability of
+/// co-edit, with 95 % statistical confidence." Frequency-invariant —
+/// hot files (54 / 203 ≈ 0.27) and quiet files (1 / 1 = 1.0) are
+/// scored on the same scale.
+pub const DEFAULT_COUPLING_CONFIDENCE_THRESHOLD: f64 = 0.20;
+
+/// Minimum `commits_touching(target)` required before COUPLING fires.
+///
+/// n=5 is the standard "don't infer from too few observations" floor
+/// (mirrors the chi-square `expected_count ≥ 5` rule of thumb).
+/// Quiet-file edits with `n < min_sample_size` fall through to the
+/// OK-finding path in `mmk pre-edit`.
+pub const DEFAULT_COUPLING_MIN_SAMPLE_SIZE: u32 = 5;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct WindowCfg {
@@ -53,10 +70,18 @@ pub struct BlastRadiusCfg {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CouplingCfg {
-    /// Minimum Jaccard a partner must reach for `mmk review` /
-    /// `mmk pre-edit` to emit a COUPLING finding. Defaults to
-    /// [`DEFAULT_COUPLING_THRESHOLD`].
+    /// Deprecated alias for the COUPLING firing threshold; silently
+    /// mapped to [`Self::confidence_threshold`] when set. Kept so
+    /// older configs and CLI invocations keep working.
     pub threshold: f64,
+    /// Wilson 95 % lower-bound floor for `P(partner | target)`. A
+    /// partner fires COUPLING only if its lower-bound clears this and
+    /// `commits_touching(target) ≥ min_sample_size`. Defaults to
+    /// [`DEFAULT_COUPLING_CONFIDENCE_THRESHOLD`].
+    pub confidence_threshold: f64,
+    /// Floor on the binomial sample size (commits touching the
+    /// target). Defaults to [`DEFAULT_COUPLING_MIN_SAMPLE_SIZE`].
+    pub min_sample_size: u32,
     /// Glob patterns of paths that never trigger a COUPLING finding
     /// as the *missed partner*. Distinct from `ignores`: a workspace's
     /// `package.json` IS legit history; it just shouldn't be demanded
@@ -71,11 +96,44 @@ pub struct Config {
     pub bulk: BulkCfg,
     pub blast_radius: BlastRadiusCfg,
     pub coupling: CouplingCfg,
+    pub health: HealthCfg,
     /// Rename-similarity threshold (0.0–1.0) passed to the diff engine.
     pub rename_similarity: f32,
     /// Final ignore globs after merging file + CLI sources. The git layer
     /// reads only this field; how it got populated isn't its concern.
     pub ignores: Vec<String>,
+}
+
+/// `[health]` block — structural-pattern adapter (mmk-health).
+///
+/// Currently ships a TypeScript adapter only; future implementations
+/// will add `rust`, `python`, `go` subblocks alongside `ts`. The
+/// whole block defaults to disabled so non-TS users don't get
+/// surprised; the `js-ts` profile flips it on with all three
+/// patterns enabled.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct HealthCfg {
+    pub ts: HealthTsCfg,
+}
+
+/// `[health.ts]` — TypeScript Health adapter knobs.
+#[derive(Debug, Clone, Serialize)]
+pub struct HealthTsCfg {
+    pub enabled: bool,
+    /// Pattern tokens (`registration`, `service`, `test_pair`).
+    /// Keep as plain strings here; mmk-health resolves them to
+    /// `HealthPattern` enums at the boundary so this crate doesn't
+    /// pull in tree-sitter.
+    pub patterns: Vec<String>,
+}
+
+impl Default for HealthTsCfg {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            patterns: vec!["registration".into(), "service".into(), "test_pair".into()],
+        }
+    }
 }
 
 impl Default for WindowCfg {
@@ -114,6 +172,8 @@ impl Default for CouplingCfg {
     fn default() -> Self {
         Self {
             threshold: DEFAULT_COUPLING_THRESHOLD,
+            confidence_threshold: DEFAULT_COUPLING_CONFIDENCE_THRESHOLD,
+            min_sample_size: DEFAULT_COUPLING_MIN_SAMPLE_SIZE,
             ignore_partners: Vec::new(),
         }
     }
@@ -127,6 +187,7 @@ impl Default for Config {
             bulk: BulkCfg::default(),
             blast_radius: BlastRadiusCfg::default(),
             coupling: CouplingCfg::default(),
+            health: HealthCfg::default(),
             rename_similarity: 0.5,
             ignores: Vec::new(),
         }

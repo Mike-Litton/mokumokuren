@@ -26,6 +26,10 @@ pub struct ConfigFile {
     /// default ([`crate::DEFAULT_COUPLING_THRESHOLD`], no ignored partners).
     #[serde(default)]
     pub coupling: Option<CouplingFile>,
+    /// Optional `[health]` block. Absent → adapter stays disabled.
+    /// The `js-ts` profile flips it on with all three patterns.
+    #[serde(default)]
+    pub health: Option<HealthFile>,
 }
 
 /// `[blast_radius]` block in `mokumokuren.toml`.
@@ -35,15 +39,41 @@ pub struct BlastRadiusFile {
     pub threshold: f64,
 }
 
-/// `[coupling]` block in `mokumokuren.toml`. Both fields are optional
-/// so users can pin only what they care about.
+/// `[coupling]` block in `mokumokuren.toml`.
+///
+/// Every field is optional so users can pin only what they care
+/// about. `threshold` is a deprecated alias retained for back-compat
+/// (callers map it to a `--verbose` warning); the active gate is
+/// `confidence_threshold` + `min_sample_size`.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CouplingFile {
     #[serde(default)]
     pub threshold: Option<f64>,
     #[serde(default)]
+    pub confidence_threshold: Option<f64>,
+    #[serde(default)]
+    pub min_sample_size: Option<u32>,
+    #[serde(default)]
     pub ignore_partners: Vec<String>,
+}
+
+/// `[health]` block in `mokumokuren.toml`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HealthFile {
+    #[serde(default)]
+    pub ts: Option<HealthTsFile>,
+}
+
+/// `[health.ts]` block in `mokumokuren.toml`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HealthTsFile {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub patterns: Option<Vec<String>>,
 }
 
 impl ConfigFile {

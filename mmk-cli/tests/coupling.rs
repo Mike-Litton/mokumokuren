@@ -71,8 +71,8 @@ fn json_files_carry_top_couples_array() {
         .unwrap();
     let jaccard = b_couple["jaccard"].as_f64().unwrap();
     assert!(
-        (jaccard - 0.75).abs() < 1e-9,
-        "expected jaccard 0.75 on the canonical coupling pair, got {jaccard}"
+        (jaccard - 0.60).abs() < 1e-9,
+        "expected jaccard 0.60 on the canonical coupling pair (3 co-changes / 5 touches A / 3 touches B), got {jaccard}"
     );
 }
 
@@ -190,14 +190,14 @@ fn blast_radius_threshold_cli_override_filters_more() {
     let now = 1_700_000_000_i64;
     build_coupling_fixture(dir.path(), now);
 
-    // Default 0.10: includes the canonical core/b.rs partner (jaccard 0.75).
+    // Default 0.10: includes the canonical core/b.rs partner (jaccard 0.60).
     let mut a = json_args();
     a.blast_radius = Some("core/a.rs".into());
     let lo = run_in(dir.path(), a);
     let lo_v: Value = serde_json::from_slice(&lo).unwrap();
     let lo_nodes = lo_v["blast_radius"]["nodes"].as_array().unwrap().len();
 
-    // Raised threshold to 0.99 — strictly stricter; jaccard 0.75 < 0.99
+    // Raised threshold to 0.99 — strictly stricter; jaccard 0.60 < 0.99
     // so the canonical partner is dropped. Echo must reflect 0.99.
     let mut b = json_args();
     b.blast_radius = Some("core/a.rs".into());

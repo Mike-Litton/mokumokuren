@@ -1,5 +1,6 @@
 pub mod analyze;
 pub mod cache;
+pub mod common;
 pub mod drift;
 pub mod eval;
 pub mod init;

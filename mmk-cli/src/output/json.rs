@@ -333,6 +333,8 @@ struct ReviewReport<'a> {
     analysis: AnalysisBlock,
     review: ReviewBlock<'a>,
     findings: &'a [crate::output::findings::Finding],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    health: Option<HealthBlock<'a>>,
 }
 
 #[derive(Serialize)]
@@ -359,8 +361,10 @@ struct ReviewEmptyDiff {
 
 /// Write a `mmk review` JSON envelope: standard `repo`/`config`/
 /// `analysis` blocks plus a `review` block (mode + per-file diff
-/// numstat) and the `findings` array. Used when there are changes to
-/// review; clean-tree calls go through [`write_review_empty`].
+/// numstat), the `findings` array, and the optional `health` block.
+/// Used when there are changes to review; clean-tree calls go
+/// through [`write_review_empty`].
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn write_review<W: Write>(
     w: &mut W,
     mode: crate::commands::review::ReviewMode,
@@ -369,6 +373,8 @@ pub(crate) fn write_review<W: Write>(
     analysis: &AnalyzeOutput,
     duration_ms: u64,
     config: &Config,
+    health_matches: &[mmk_health::HealthFinding],
+    health_patterns: &[mmk_health::HealthPattern],
 ) -> Result<()> {
     let path_strs: Vec<String> = changed
         .iter()
@@ -418,6 +424,7 @@ pub(crate) fn write_review<W: Write>(
             },
         },
         findings,
+        health: health_block(health_matches, health_patterns),
     };
 
     serde_json::to_writer_pretty(&mut *w, &report)?;
@@ -430,6 +437,49 @@ struct PreEditBlock<'a> {
     path: &'a str,
 }
 
+/// `health` block — present only when the Health adapter ran AND
+/// returned at least one match. Surfaces the pattern + related
+/// list structurally so consumers can read it without parsing
+/// `findings[].message`.
+#[derive(Serialize)]
+struct HealthBlock<'a> {
+    /// Pattern tokens evaluated for this run (echoed from
+    /// `cfg.health.ts.patterns`). Lets the consumer see *what was
+    /// asked*, not just what fired.
+    patterns_evaluated: Vec<&'static str>,
+    matches: Vec<HealthMatchEntry<'a>>,
+}
+
+#[derive(Serialize)]
+struct HealthMatchEntry<'a> {
+    pattern: &'static str,
+    subject: String,
+    related: Vec<String>,
+    #[serde(skip)]
+    _phantom: std::marker::PhantomData<&'a ()>,
+}
+
+fn health_block<'a>(
+    matches: &[mmk_health::HealthFinding],
+    patterns: &[mmk_health::HealthPattern],
+) -> Option<HealthBlock<'a>> {
+    if matches.is_empty() {
+        return None;
+    }
+    Some(HealthBlock {
+        patterns_evaluated: patterns.iter().map(|p| p.token()).collect(),
+        matches: matches
+            .iter()
+            .map(|m| HealthMatchEntry {
+                pattern: m.pattern.token(),
+                subject: m.subject.display().to_string(),
+                related: m.related.iter().map(|r| r.display().to_string()).collect(),
+                _phantom: std::marker::PhantomData,
+            })
+            .collect(),
+    })
+}
+
 #[derive(Serialize)]
 struct PreEditReport<'a> {
     schema_version: &'static str,
@@ -439,11 +489,14 @@ struct PreEditReport<'a> {
     analysis: AnalysisBlock,
     pre_edit: PreEditBlock<'a>,
     findings: &'a [crate::output::findings::Finding],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    health: Option<HealthBlock<'a>>,
 }
 
 /// Write a `mmk pre-edit` JSON envelope: the standard `repo` /
-/// `config` / `analysis` blocks plus a `pre_edit.path` echo and the
-/// `findings` array.
+/// `config` / `analysis` blocks plus a `pre_edit.path` echo, the
+/// `findings` array, and the optional `health` block.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn write_pre_edit<W: Write>(
     w: &mut W,
     target: &std::path::Path,
@@ -451,6 +504,8 @@ pub(crate) fn write_pre_edit<W: Write>(
     analysis: &AnalyzeOutput,
     duration_ms: u64,
     config: &Config,
+    health_matches: &[mmk_health::HealthFinding],
+    health_patterns: &[mmk_health::HealthPattern],
 ) -> Result<()> {
     let path = target.to_string_lossy();
     let report = PreEditReport {
@@ -477,6 +532,7 @@ pub(crate) fn write_pre_edit<W: Write>(
         },
         pre_edit: PreEditBlock { path: &path },
         findings,
+        health: health_block(health_matches, health_patterns),
     };
 
     serde_json::to_writer_pretty(&mut *w, &report)?;
@@ -496,7 +552,7 @@ struct DriftReport<'a> {
 #[derive(Serialize)]
 struct DriftBlock<'a> {
     /// Echoed from `--base` for diagnostics; the boundary walk
-    /// always anchors on HEAD in v0.3.
+    /// currently always anchors on HEAD.
     base: Option<&'a str>,
     sessions: usize,
     /// One label per snapshot (currently the commit OID at the

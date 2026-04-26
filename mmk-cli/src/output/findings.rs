@@ -17,9 +17,11 @@ pub enum Layer {
     Coupling,
     Drift,
     Budget,
-    // v0.4 reserved slots — declared now so adding AST-based adapters
-    // later doesn't bump the schema.
+    /// Structural-pattern adapter findings (mmk-health). Populated
+    /// when `[health.<lang>]` is enabled and a pattern matches.
     Health,
+    /// Reserved for ADR / CHANGELOG / PR-history surfacing —
+    /// declared so adding it later doesn't bump the schema.
     Anchor,
 }
 

@@ -13,7 +13,7 @@
 use ahash::AHashSet;
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use mmk_config::{Config, ConfigFile};
+use mmk_config::Config;
 use mmk_core::coupling;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -22,6 +22,11 @@ use std::time::Instant;
 
 use crate::args::{Format, Gate, ReviewArgs};
 use crate::commands::analyze::COUPLES_PER_FILE;
+use crate::commands::common::{
+    analyze_health_for_subject, apply_coupling_file, apply_health_file, coupling_findings,
+    health_severity_for_review, health_to_finding, load_config_file, resolve_patterns,
+    CouplingEmission, CouplingProse,
+};
 use crate::output::findings::{render_text, Finding, Layer, Severity};
 use crate::Verdict;
 
@@ -95,18 +100,23 @@ pub fn run<O: Write, E: Write>(
         cfg.blast_radius.threshold = file_br.threshold;
     }
     if let Some(file_cp) = file_cfg.coupling.as_ref() {
-        if let Some(t) = file_cp.threshold {
-            cfg.coupling.threshold = t;
-        }
-        if !file_cp.ignore_partners.is_empty() {
-            cfg.coupling.ignore_partners = file_cp.ignore_partners.clone();
+        let warns = apply_coupling_file(&mut cfg.coupling, file_cp);
+        if args.verbose {
+            for w in &warns {
+                writeln!(stderr, "{}", w.message())?;
+            }
         }
     }
+    if let Some(file_h) = file_cfg.health.as_ref() {
+        apply_health_file(&mut cfg.health.ts, file_h);
+    }
     // Explicit --coupling-threshold wins; fall back to the
-    // (deprecated) --blast-radius-threshold so existing CLI invocations
-    // keep working until users migrate.
+    // (deprecated) --blast-radius-threshold so existing CLI
+    // invocations keep working until users migrate. Both are routed
+    // to confidence_threshold — the active gate.
     if let Some(t) = args.coupling_threshold.or(args.blast_radius_threshold) {
         cfg.coupling.threshold = t;
+        cfg.coupling.confidence_threshold = t;
     }
 
     let started = Instant::now();
@@ -148,7 +158,41 @@ pub fn run<O: Write, E: Write>(
         cfg.hotspot.top_n,
     );
 
-    let findings = compute_findings(&changed, &ranked, &analysis.commits, &cfg, args.top);
+    let mut findings = compute_findings(
+        &changed,
+        &ranked,
+        &analysis.commits,
+        &commits_touching,
+        &cfg,
+        args.top,
+    );
+
+    // HEALTH: structural-pattern adapter. Pattern C is **Warn**
+    // when the implementation moved without its test partner; A/B
+    // stay Info. The existing peer-touched filter for COUPLING
+    // applies analogously: if the test partner is in the changed
+    // set, suppress the Warn (the agent did touch it).
+    let health_patterns = resolve_patterns(&cfg.health.ts.patterns);
+    let mut health_matches: Vec<mmk_health::HealthFinding> = Vec::new();
+    if cfg.health.ts.enabled {
+        let peer_paths: Vec<PathBuf> = analysis.loc.keys().cloned().collect();
+        let changed_set: AHashSet<PathBuf> = changed.iter().map(|c| c.path.clone()).collect();
+        for c in &changed {
+            for h in analyze_health_for_subject(&cwd, &c.path, &peer_paths, &health_patterns) {
+                if h.pattern == mmk_health::HealthPattern::TestPair
+                    && h.related.iter().all(|p| changed_set.contains(p))
+                {
+                    // Test partner *was* touched in this diff —
+                    // suppress, same shape as COUPLING's "partner
+                    // also touched" filter.
+                    continue;
+                }
+                let severity = health_severity_for_review(h.pattern);
+                findings.push(health_to_finding(&h, severity));
+                health_matches.push(h);
+            }
+        }
+    }
 
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
@@ -162,6 +206,8 @@ pub fn run<O: Write, E: Write>(
             &analysis,
             duration_ms,
             &cfg,
+            &health_matches,
+            &health_patterns,
         )?,
     }
     Ok(verdict_for(args.gate, &findings))
@@ -238,10 +284,9 @@ pub(crate) fn verdict_for(gate: Gate, findings: &[Finding]) -> Verdict {
     }
 }
 
-/// Shell to `git` for diff parsing. Faster to write and externally
-/// validated. Format is `--numstat`: tab-separated `added deleted path`,
-/// one file per line. Binary files come back as `- - path` and are
-/// skipped (no line counts).
+/// Parse `git diff --numstat` output. Binary files (numstat
+/// emits `- -` for added/deleted) are skipped because they don't
+/// contribute line-budget signal and have no rank data anyway.
 pub(crate) fn collect_diff(
     cwd: &Path,
     mode: ReviewMode,
@@ -303,6 +348,7 @@ pub(crate) fn compute_findings(
     changed: &[ChangedFile],
     ranked: &[mmk_core::HotspotEntry],
     commits: &[mmk_core::types::Commit],
+    commits_touching: &ahash::AHashMap<PathBuf, u32>,
     cfg: &Config,
     top: usize,
 ) -> Vec<Finding> {
@@ -327,40 +373,28 @@ pub(crate) fn compute_findings(
         }
     }
 
-    // COUPLING — changed file's expected partner above threshold not
-    // also touched. Threshold and ignore_partners come from
-    // `cfg.coupling`: separate knobs from the exploratory blast-radius
-    // surface, since the eval data showed sub-0.30 partners are noise
-    // here.
+    // COUPLING — delegate to the shared helper. The Wilson gate
+    // (Wilson lower ≥ confidence_threshold AND n ≥ min_sample_size)
+    // and the per-partner glob filter live in one place.
     if !changed_set.is_empty() {
-        let couples_map = coupling::top_couples_for(commits, &changed_set, COUPLES_PER_FILE);
-        let threshold = cfg.coupling.threshold;
+        let couples_map =
+            coupling::compute_conditional_couples_for(commits, &changed_set, COUPLES_PER_FILE);
         let ignore_set = build_partner_globset(&cfg.coupling.ignore_partners);
         for c in changed {
+            let n = commits_touching.get(&c.path).copied().unwrap_or(0);
             let Some(partners) = couples_map.get(&c.path) else {
                 continue;
             };
-            for p in partners {
-                if p.jaccard < threshold || changed_set.contains(&p.partner) {
-                    continue;
-                }
-                if ignore_set
-                    .as_ref()
-                    .is_some_and(|set| set.is_match(&p.partner))
-                {
-                    continue;
-                }
-                findings.push(Finding::new(
-                    Layer::Coupling,
-                    Severity::Warn,
-                    format!(
-                        "{} edited; expected partner {} not touched (jaccard {:.2})",
-                        c.path.display(),
-                        p.partner.display(),
-                        p.jaccard
-                    ),
-                ));
-            }
+            findings.extend(coupling_findings(CouplingEmission {
+                subject: &c.path,
+                n,
+                partners,
+                cfg: &cfg.coupling,
+                ignore_set: ignore_set.as_ref(),
+                excluded_partners: &changed_set,
+                severity: Severity::Warn,
+                prose: CouplingProse::ReviewMissed,
+            }));
         }
     }
 
@@ -401,21 +435,4 @@ pub(crate) fn build_partner_globset(globs: &[String]) -> Option<GlobSet> {
         }
     }
     builder.build().ok()
-}
-
-fn load_config_file(cwd: &Path, explicit: Option<&Path>) -> Result<(ConfigFile, Option<PathBuf>)> {
-    if let Some(path) = explicit {
-        let cfg = ConfigFile::load_from_path(path)
-            .with_context(|| format!("failed to load config from {}", path.display()))?;
-        return Ok((cfg, Some(path.to_path_buf())));
-    }
-    if let Some(repo_root) = mmk_git::discover_work_dir(cwd) {
-        let candidate = repo_root.join("mokumokuren.toml");
-        if candidate.exists() {
-            let cfg = ConfigFile::load_from_path(&candidate)
-                .with_context(|| format!("failed to load config from {}", candidate.display()))?;
-            return Ok((cfg, Some(candidate)));
-        }
-    }
-    Ok((ConfigFile::default(), None))
 }

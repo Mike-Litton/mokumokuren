@@ -1,6 +1,5 @@
-//! Coupling-stage perf budget. The v0.2.0 plan calls for the
-//! coupling pass to stay under ~50ms on a 2k-commit synthetic
-//! fixture; this is the guard.
+//! Coupling-stage perf budget: the coupling pass stays under ~50 ms
+//! on a 2k-commit synthetic fixture. This bench is the guard.
 
 use ahash::AHashSet;
 use criterion::{criterion_group, criterion_main, Criterion};

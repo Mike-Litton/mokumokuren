@@ -18,7 +18,8 @@ ignore = [
 ]
 
 [coupling]
-threshold = 0.30
+confidence_threshold = 0.20
+min_sample_size = 5
 ignore_partners = [
     "**/package.json",
     "**/*-lock.json",
@@ -32,3 +33,11 @@ ignore_partners = [
 
 [blast_radius]
 threshold = 0.10
+
+# v0.4 Health adapter: structural-pattern findings for TS files.
+# Surfaces architectural neighbors the empirical co-change cone
+# can't see (e.g. preferences.contribution.ts as a precedent for
+# extensions.contribution.ts even when they have no commit overlap).
+[health.ts]
+enabled = true
+patterns = ["registration", "service", "test_pair"]

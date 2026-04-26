@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["mmk-core", "mmk-git", "mmk-config", "mmk-cli"]
+members = ["mmk-core", "mmk-git", "mmk-config", "mmk-cli", "mmk-health"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 authors = ["Mike Litton"]
 license = "MIT OR Apache-2.0"
@@ -30,6 +30,8 @@ serde_json = "1"
 sha2 = "0.10"
 tempfile = "3"
 toml = "0.8"
+tree-sitter = "0.24"
+tree-sitter-typescript = "0.23"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -67,24 +67,27 @@ is that the call belongs to the repo's maintainers, not the tool.
 
 Controls COUPLING findings emitted by `mmk review` and
 `mmk pre-edit`. See [`coupling.md`](coupling.md) for the design
-rationale.
+rationale (Wilson 95 % lower bound on conditional probability).
 
 ```toml
 [coupling]
-threshold = 0.30
+confidence_threshold = 0.20
+min_sample_size      = 5
 ignore_partners = [
     "**/package.json",
     "**/*-lock.json",
 ]
 ```
 
-| Field             | Default | Notes                                                                  |
-| ----------------- | ------- | ---------------------------------------------------------------------- |
-| `threshold`       | `0.30`  | Minimum Jaccard a partner must reach to fire a COUPLING finding.       |
-| `ignore_partners` | `[]`    | Glob list — paths that never fire as the *missed partner*.             |
+| Field                  | Default | Notes                                                                  |
+| ---------------------- | ------- | ---------------------------------------------------------------------- |
+| `confidence_threshold` | `0.20`  | Minimum Wilson 95 % lower bound on `P(partner | subject)` for COUPLING to fire. |
+| `min_sample_size`      | `5`     | Minimum `commits_touching(subject)` before COUPLING infers anything. Below it, pre-edit emits an OK fall-through finding. |
+| `ignore_partners`      | `[]`    | Glob list — paths that never fire as the *missed partner*.             |
+| `threshold`            | (alias) | Deprecated. Silently mapped to `confidence_threshold`; `--verbose` surfaces a one-line note. |
 
 CLI overrides: `--coupling-threshold <FLOAT>` on review / pre-edit /
-session-summary.
+session-summary (also routed to `confidence_threshold`).
 
 ## `[blast_radius]`
 
@@ -99,6 +102,33 @@ threshold = 0.10
 ```
 
 CLI override: `--blast-radius-threshold <FLOAT>`.
+
+## `[health.ts]`
+
+Enables the structural-pattern adapter (`mmk-health`) for
+TypeScript files. Surfaces architectural neighbors empirical
+co-change history cannot see — e.g. a contribution-registration
+file's peer contribution files in the same `contrib/` subtree, or
+the `*.test.ts` partner of an implementation file.
+
+```toml
+[health.ts]
+enabled  = true
+patterns = ["registration", "service", "test_pair"]
+```
+
+| Field      | Default     | Notes                                                                                    |
+| ---------- | ----------- | ---------------------------------------------------------------------------------------- |
+| `enabled`  | `false`     | Off by default outside the `js-ts` profile so non-TS users aren't surprised.             |
+| `patterns` | all three   | Subset of `"registration"`, `"service"`, `"test_pair"`. Unknown tokens are dropped silently. |
+
+Pattern semantics (review/pre-edit):
+
+| Pattern        | Trigger                                                                  | Severity                            |
+| -------------- | ------------------------------------------------------------------------ | ----------------------------------- |
+| `registration` | `*.contribution.ts` or imports/extends from `vs/platform/actions/...`.   | Info (architectural precedent).     |
+| `service`      | Declares `interface IFoo` + `registerSingleton(IFoo, ...)` / `createDecorator`. | Info (consumer list).        |
+| `test_pair`    | Implementation file with a sibling `*.test.ts` / `*.spec.ts`.            | Warn in review when the test partner isn't in the diff; Info in pre-edit. |
 
 ## CLI flags vs file config
 

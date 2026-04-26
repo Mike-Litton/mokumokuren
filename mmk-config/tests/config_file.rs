@@ -115,3 +115,40 @@ fn missing_blast_radius_block_yields_none() {
         "default ConfigFile must not synthesize a blast_radius block"
     );
 }
+
+#[test]
+fn loads_coupling_v0_4_fields() {
+    let dir = TempDir::new().unwrap();
+    let p = write_toml(
+        dir.path(),
+        r#"
+[coupling]
+confidence_threshold = 0.25
+min_sample_size = 8
+ignore_partners = ["**/CHANGELOG.md"]
+"#,
+    );
+    let cfg = ConfigFile::load_from_path(&p).expect("load");
+    let cp = cfg.coupling.expect("coupling block parsed");
+    assert!((cp.confidence_threshold.unwrap() - 0.25).abs() < 1e-12);
+    assert_eq!(cp.min_sample_size, Some(8));
+    assert_eq!(cp.ignore_partners, vec!["**/CHANGELOG.md".to_string()]);
+}
+
+#[test]
+fn loads_health_ts_block() {
+    let dir = TempDir::new().unwrap();
+    let p = write_toml(
+        dir.path(),
+        r#"
+[health.ts]
+enabled = true
+patterns = ["test_pair"]
+"#,
+    );
+    let cfg = ConfigFile::load_from_path(&p).expect("load");
+    let h = cfg.health.expect("health block parsed");
+    let ts = h.ts.expect("ts subblock parsed");
+    assert_eq!(ts.enabled, Some(true));
+    assert_eq!(ts.patterns, Some(vec!["test_pair".to_string()]));
+}

@@ -84,7 +84,7 @@ fn pre_edit_emits_coupling_for_partners_above_threshold() {
         .collect();
     assert!(
         !coupling.is_empty(),
-        "core/a.rs has jaccard 0.75 with core/b.rs — must fire COUPLING informational; got: {}",
+        "core/a.rs has Wilson 95% lower ≈ 0.23 with core/b.rs — must fire COUPLING informational; got: {}",
         v["findings"]
     );
     let mentions_b = coupling
@@ -97,7 +97,11 @@ fn pre_edit_emits_coupling_for_partners_above_threshold() {
 }
 
 #[test]
-fn pre_edit_silent_on_quiet_file() {
+fn pre_edit_emits_ok_finding_for_quiet_file() {
+    // When a file's commit count is below coupling.min_sample_size
+    // and no other layer fires, pre-edit emits a single Severity::Ok
+    // finding so the agent can tell "mmk had nothing to say" from
+    // "mmk wasn't consulted."
     let dir = TempDir::new().unwrap();
     let now = 1_700_000_000_i64;
     init_repo(dir.path());
@@ -122,9 +126,82 @@ fn pre_edit_silent_on_quiet_file() {
     let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
 
     let findings = v["findings"].as_array().expect("findings array");
+    assert_eq!(
+        findings.len(),
+        1,
+        "quiet file must surface exactly one OK finding; got: {findings:?}"
+    );
+    let f = &findings[0];
+    assert_eq!(
+        f["severity"], "ok",
+        "the quiet-file fall-through has severity ok; got: {f}"
+    );
+    assert_eq!(
+        f["layer"], "coupling",
+        "absence-of-coupling signal lives under the coupling layer; got: {f}"
+    );
+    let msg = f["message"].as_str().unwrap_or("");
     assert!(
-        findings.is_empty(),
-        "quiet, low-rank, non-coupled file must produce no findings; got: {findings:?}"
+        msg.contains("quiet.rs"),
+        "OK finding must name the queried path; got: {msg}"
+    );
+    assert!(
+        msg.contains("insufficient history"),
+        "message should call out insufficient history; got: {msg}"
+    );
+}
+
+#[test]
+fn pre_edit_no_ok_finding_when_coupling_already_fires() {
+    // The OK finding is a fall-through, not an addition. If the
+    // file is rich enough to fire COUPLING (or any other layer),
+    // the OK finding must not appear.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    common::build_coupling_fixture(dir.path(), now);
+
+    let stdout = run_in(dir.path(), pre_edit_args("core/a.rs"));
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let findings = v["findings"].as_array().expect("findings array");
+    let any_ok = findings.iter().any(|f| f["severity"] == "ok");
+    assert!(
+        !any_ok,
+        "OK fall-through must not fire when other findings exist; got: {findings:?}"
+    );
+}
+
+#[test]
+fn pre_edit_no_ok_finding_when_file_has_enough_history_but_no_partners() {
+    // Edge case: a file with ≥ min_sample_size commits but no
+    // qualifying partners. The gate is "n < min_sample_size", not
+    // "no partners", so this case must stay silent — emitting OK
+    // here would mislead the agent that history was insufficient.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    // Seven solo commits to lonely.rs — no partner ever.
+    for i in 0..7 {
+        write(dir.path(), "lonely.rs", &format!("l{i}\n"));
+        commit_all(dir.path(), &format!("lonely {i}"), now - (30 - i) * DAY);
+    }
+
+    // top=20 keeps the lone file from auto-firing HOTSPOT — we
+    // want the no-partners-but-enough-history path, not the
+    // hotspot-rank path.
+    let stdout = run_in(dir.path(), pre_edit_args("lonely.rs"));
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let findings = v["findings"].as_array().expect("findings array");
+    let any_ok = findings.iter().any(|f| f["severity"] == "ok");
+    assert!(
+        !any_ok,
+        "n=7 ≥ min_sample_size=5; quiet-file fall-through must stay silent. got: {findings:?}"
+    );
+    let any_coupling = findings.iter().any(|f| f["layer"] == "coupling");
+    assert!(
+        !any_coupling,
+        "no co-changes → no COUPLING finding either. got: {findings:?}"
     );
 }
 
@@ -171,6 +248,85 @@ fn pre_edit_with_drift_sessions_runs_and_shapes_findings() {
             "DRIFT findings in pre-edit must concern the queried path; got: {f}"
         );
     }
+}
+
+#[test]
+fn pre_edit_emits_health_test_pair_finding_when_partner_exists() {
+    // With [health.ts] enabled, pre-edit on a TS impl file whose
+    // `.test.ts` partner exists must surface a HEALTH info finding
+    // pointing at the test partner.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    write(dir.path(), "src/foo.ts", "export const foo = 1;\n");
+    write(
+        dir.path(),
+        "src/foo.test.ts",
+        "import {foo} from './foo';\n",
+    );
+    commit_all(dir.path(), "seed", now - 5 * common::DAY);
+
+    std::fs::write(
+        dir.path().join("mokumokuren.toml"),
+        "[health.ts]\nenabled = true\npatterns = [\"test_pair\"]\n",
+    )
+    .unwrap();
+
+    let stdout = run_in(dir.path(), pre_edit_args("src/foo.ts"));
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let findings = v["findings"].as_array().expect("findings array");
+    let health: Vec<&Value> = findings.iter().filter(|f| f["layer"] == "health").collect();
+    assert!(
+        !health.is_empty(),
+        "test-pair pattern must fire when foo.test.ts exists; got: {findings:?}"
+    );
+    let mentions_test = health
+        .iter()
+        .any(|f| f["message"].as_str().unwrap_or("").contains("foo.test.ts"));
+    assert!(
+        mentions_test,
+        "HEALTH finding must surface the test partner; got: {health:?}"
+    );
+
+    // The top-level health block must also be present, with the
+    // pattern + related list mirrored structurally.
+    let block = v["health"]
+        .as_object()
+        .expect("top-level health block must accompany Health findings");
+    assert_eq!(
+        block["patterns_evaluated"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["test_pair"]
+    );
+    let matches = block["matches"].as_array().unwrap();
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0]["pattern"], "test_pair");
+    assert_eq!(matches[0]["subject"], "src/foo.ts");
+}
+
+#[test]
+fn pre_edit_health_block_absent_when_disabled() {
+    // Default pre-edit (no [health.ts]) emits no `health` block,
+    // matching the schema's "optional, present only when fired"
+    // rule.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    write(dir.path(), "src/foo.ts", "export const foo = 1;\n");
+    write(dir.path(), "src/foo.test.ts", "ok\n");
+    commit_all(dir.path(), "seed", now - 5 * common::DAY);
+
+    let stdout = run_in(dir.path(), pre_edit_args("src/foo.ts"));
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+    assert!(
+        v.get("health").is_none(),
+        "health block must be absent when adapter is disabled; got: {v}"
+    );
 }
 
 #[test]

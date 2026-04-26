@@ -85,12 +85,23 @@ pub fn build_canonical_fixture(repo: &Path, now: i64) {
     commit_all(repo, "D: modify c.rs", now - DAY);
 }
 
-/// Coupling fixture: four commits over `core/a.rs` and `core/b.rs`
-/// designed to land jaccard(a,b) = 0.75 exactly (3 co-changes, 4
-/// commits touching either, 1 A-only commit). A third file
-/// `core/c.rs` is touched once alone, providing a low-jaccard
-/// non-partner. Mirrors the hand-built scenario in
-/// `mmk-core/tests/coupling.rs::jaccard_three_quarters_on_hand_built_fixture`,
+/// Coupling fixture: six commits over `core/a.rs` and `core/b.rs`,
+/// designed to land both metrics in the same range so a single
+/// fixture exercises blast-radius (jaccard) and COUPLING (Wilson
+/// lower bound on conditional probability). The 5-touch floor on A
+/// satisfies the default `coupling.min_sample_size = 5`; if you
+/// tighten the floor further, increase A's commit count too.
+///
+/// Derived metrics:
+/// - co(A,B) = 3, touches_A = 5, touches_B = 3.
+/// - jaccard(A,B) = 3 / (5+3-3) = 0.60.
+/// - P(B|A) = 3/5 = 0.60.
+/// - Wilson 95 % lower for 3/5, n=5 ≈ 0.231 (above the 0.20 default).
+///
+/// A sidecar `core/c.rs` touches once alone, providing a low-jaccard
+/// non-partner for the "popular files" sanity check. Mirrors the
+/// hand-built scenario in
+/// `mmk-core/tests/coupling.rs::jaccard_three_quarters_on_hand_built_fixture`
 /// but goes through the full `gix` walk so the CLI integration is
 /// exercised end-to-end.
 #[allow(dead_code)] // not all integration test files use this fixture
@@ -99,23 +110,28 @@ pub fn build_coupling_fixture(repo: &Path, now: i64) {
 
     write(repo, "core/a.rs", "a1\n");
     write(repo, "core/b.rs", "b1\n");
-    commit_all(repo, "1: a+b co-change", now - 4 * DAY);
+    commit_all(repo, "1: a+b co-change", now - 6 * DAY);
 
     write(repo, "core/a.rs", "a1\na2\n");
-    commit_all(repo, "2: a only", now - 3 * DAY);
+    commit_all(repo, "2: a only", now - 5 * DAY);
 
     write(repo, "core/a.rs", "a1\na2\na3\n");
     write(repo, "core/b.rs", "b1\nb2\n");
-    commit_all(repo, "3: a+b co-change", now - 2 * DAY);
+    commit_all(repo, "3: a+b co-change", now - 4 * DAY);
 
     write(repo, "core/a.rs", "a1\na2\na3\na4\n");
     write(repo, "core/b.rs", "b1\nb2\nb3\n");
-    commit_all(repo, "4: a+b co-change", now - DAY);
+    commit_all(repo, "4: a+b co-change", now - 3 * DAY);
 
-    // Sidecar file that touches once alone, providing a low-jaccard
-    // partner for risk-register-1 ("popular files" sanity).
+    // Extra A-only commit lifts touches_A to 5 so the default
+    // `coupling.min_sample_size = 5` floor lets COUPLING fire.
+    write(repo, "core/a.rs", "a1\na2\na3\na4\na5\n");
+    commit_all(repo, "5: a only", now - 2 * DAY);
+
+    // Sidecar file that touches once alone, providing a non-partner
+    // sanity check (a popular-file edit that's unrelated to A or B).
     write(repo, "core/c.rs", "c1\n");
-    commit_all(repo, "5: c only", now - DAY / 2);
+    commit_all(repo, "6: c only", now - DAY);
 }
 
 /// Session fixture: `main` carries heavy historical churn across

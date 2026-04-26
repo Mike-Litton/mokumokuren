@@ -341,7 +341,7 @@ pub struct InitArgs {
 
     /// Bundled profile to write. Default = the generic starter
     /// (no opinionated ignores). `js-ts`, `rust`, `python`, `go`
-    /// ship ecosystem-specific defaults derived from the v0.3 eval.
+    /// ship ecosystem-specific defaults.
     #[arg(long, value_name = "NAME")]
     pub profile: Option<String>,
 }
@@ -373,6 +373,14 @@ pub struct EvalArgs {
     /// Print extra progress on stderr.
     #[arg(short, long)]
     pub verbose: bool,
+
+    /// Append a `[coupling] ignore_partners = [...]` suggestion block
+    /// to the report, listing partners that fire across many
+    /// unrelated subjects (high breadth, low inverse conditional
+    /// probability — typically system-level files like CHANGELOG that
+    /// move whenever anything ships).
+    #[arg(long)]
+    pub learn: bool,
 }
 
 #[derive(Debug, Parser)]

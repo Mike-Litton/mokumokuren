@@ -2,22 +2,22 @@
 //! report.
 //!
 //! Built so a new adopter can answer "do my mmk defaults fit my
-//! repo?" in under a minute, without writing scratch shell. The
-//! aggregation surfaces three things the v0.3 four-repo eval showed
-//! were the deciding signals: firing rate, layer mix, and the
-//! jaccard distribution of COUPLING findings (so the user knows
-//! whether to raise `[coupling] threshold`).
+//! repo?" in under a minute. The aggregation surfaces three deciding
+//! signals: firing rate, layer mix, and the Wilson-95 %-lower-bound
+//! distribution of COUPLING findings — letting the user decide
+//! whether to raise `[coupling] confidence_threshold`.
 
 use anyhow::{Context, Result};
-use mmk_config::{Config, ConfigFile};
+use mmk_config::Config;
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
 use crate::args::{EvalArgs, Format};
+use crate::commands::common::{apply_coupling_file, apply_health_file, load_config_file};
 use crate::commands::review::{
     bulk_self_findings, collect_diff, compute_findings, ChangedFile, ReviewMode,
 };
@@ -41,14 +41,15 @@ pub fn run<O: Write, E: Write>(args: &EvalArgs, stdout: &mut O, stderr: &mut E) 
         cfg.blast_radius.threshold = file_br.threshold;
     }
     if let Some(file_cp) = file_cfg.coupling.as_ref() {
-        if let Some(t) = file_cp.threshold {
-            cfg.coupling.threshold = t;
+        let warns = apply_coupling_file(&mut cfg.coupling, file_cp);
+        if args.verbose {
+            for w in &warns {
+                writeln!(stderr, "{}", w.message())?;
+            }
         }
-        if !file_cp.ignore_partners.is_empty() {
-            cfg.coupling
-                .ignore_partners
-                .clone_from(&file_cp.ignore_partners);
-        }
+    }
+    if let Some(file_h) = file_cfg.health.as_ref() {
+        apply_health_file(&mut cfg.health.ts, file_h);
     }
 
     if args.verbose {
@@ -108,14 +109,29 @@ pub fn run<O: Write, E: Write>(args: &EvalArgs, stdout: &mut O, stderr: &mut E) 
         let findings = if files_n > cfg.bulk.max_files || lines_n > u64::from(cfg.bulk.max_lines) {
             bulk_self_findings(files_n, lines_n, &cfg)
         } else {
-            compute_findings(&changed, &ranked, &analysis.commits, &cfg, args.top)
+            compute_findings(
+                &changed,
+                &ranked,
+                &analysis.commits,
+                &commits_touching,
+                &cfg,
+                args.top,
+            )
         };
         report.absorb(&findings);
     }
 
+    if args.learn {
+        report.learn_suggestions = synthesize_learn_suggestions(
+            &report.partner_subjects,
+            &commits_touching,
+            &analysis.commits,
+        );
+    }
+
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     report.duration_ms = duration_ms;
-    report.threshold = cfg.coupling.threshold;
+    report.threshold = cfg.coupling.confidence_threshold;
 
     match args.format {
         Format::Text => write_text(stdout, &report)?,
@@ -173,12 +189,39 @@ struct AggregateReport {
     /// COUPLING-finding count per partner path. Only the missed
     /// partner (the second `<file>` in the message) is counted.
     noisy_partners: BTreeMap<String, usize>,
-    /// Bucketed jaccard distribution for COUPLING findings:
-    /// "0.10-0.30", "0.30-0.50", "0.50+".
-    jaccard_buckets: BTreeMap<&'static str, usize>,
-    /// Effective coupling threshold for context.
+    /// Bucketed Wilson-95 %-lower-bound distribution for COUPLING
+    /// findings: `"0.00-0.20"`, `"0.20-0.40"`, `"0.40+"`.
+    wilson_lower_buckets: BTreeMap<&'static str, usize>,
+    /// Set of distinct subjects that fired COUPLING for each
+    /// partner. Drives the `--learn` heuristic: a partner blamed
+    /// across many unrelated subjects is system-level noise, not
+    /// pairwise coupling. Skipped from JSON output (callers consume
+    /// the synthesized `learn_suggestions` block, not the raw set).
+    #[serde(skip)]
+    partner_subjects: BTreeMap<String, BTreeSet<String>>,
+    /// Effective `coupling.confidence_threshold` for context.
     threshold: f64,
+    /// Suggested `[coupling] ignore_partners` additions, populated
+    /// when `--learn` is set. Empty otherwise. Each entry is a
+    /// glob-style partner path plus the supporting evidence.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    learn_suggestions: Vec<LearnSuggestion>,
     duration_ms: u64,
+}
+
+/// One adoption suggestion from `--learn`. Includes the supporting
+/// evidence so the user can sanity-check the heuristic before
+/// pasting the path into their `mokumokuren.toml`.
+#[derive(Debug, Clone, Serialize)]
+pub struct LearnSuggestion {
+    pub partner: String,
+    /// Number of distinct subject files that fired this partner.
+    pub subject_count: usize,
+    /// `co_change(subject, partner) / commits_touching(partner)`,
+    /// averaged over the firing subjects. Low values indicate the
+    /// partner moves for reasons unrelated to any one subject — the
+    /// system-level-noise signature.
+    pub mean_inverse_conditional_probability: f64,
 }
 
 impl AggregateReport {
@@ -190,11 +233,19 @@ impl AggregateReport {
             self.total_findings += 1;
             *self.by_layer.entry(layer_label(f.layer)).or_default() += 1;
             if f.layer == Layer::Coupling {
-                if let Some(partner) = parse_partner(&f.message) {
-                    *self.noisy_partners.entry(partner).or_default() += 1;
+                let partner = parse_partner(&f.message);
+                let subject = parse_subject(&f.message);
+                if let Some(p) = partner.as_deref() {
+                    *self.noisy_partners.entry(p.to_owned()).or_default() += 1;
                 }
-                if let Some(j) = parse_jaccard(&f.message) {
-                    *self.jaccard_buckets.entry(jaccard_bucket(j)).or_default() += 1;
+                if let (Some(p), Some(s)) = (partner, subject) {
+                    self.partner_subjects.entry(p).or_default().insert(s);
+                }
+                if let Some(w) = parse_wilson_lower(&f.message) {
+                    *self
+                        .wilson_lower_buckets
+                        .entry(wilson_lower_bucket(w))
+                        .or_default() += 1;
                 }
             }
         }
@@ -212,39 +263,142 @@ const fn layer_label(l: Layer) -> &'static str {
     }
 }
 
-/// COUPLING messages have two shapes:
-///   review:    `<file> edited; expected partner <X> not touched (jaccard 0.NN)`
-///   pre-edit:  `<file> historically co-changes with <X> (jaccard 0.NN)`
-/// We pull `<X>` between "partner " / "with " and the next sentinel
-/// (" not touched" for review, " (jaccard" for pre-edit).
+/// COUPLING messages come in two shapes:
+///   review:    `<file> edited; expected partner <X> not touched (...)`
+///   pre-edit:  `<file> historically co-changes with <X> (...)`
+/// Pull `<X>` between "partner " / "with " and the next sentinel
+/// (" not touched" for review, " (" for pre-edit).
 fn parse_partner(msg: &str) -> Option<String> {
-    let (key, sentinel) = if let Some(idx) = msg.find("partner ") {
+    let (after_keyword, end_sentinel) = if let Some(idx) = msg.find("partner ") {
         (idx + "partner ".len(), " not touched")
     } else if let Some(idx) = msg.find("with ") {
-        (idx + "with ".len(), " (jaccard")
+        (idx + "with ".len(), " (")
     } else {
         return None;
     };
-    let rest = &msg[key..];
-    let end = rest.find(sentinel)?;
+    let rest = &msg[after_keyword..];
+    let end = rest.find(end_sentinel)?;
     Some(rest[..end].trim().to_owned())
 }
 
-fn parse_jaccard(msg: &str) -> Option<f64> {
-    let idx = msg.find("jaccard ")? + "jaccard ".len();
+/// Extract the subject (the file the user edited / queried) from a
+/// COUPLING message. The subject is the leading path before either
+/// " edited;" (review) or " historically " (pre-edit).
+fn parse_subject(msg: &str) -> Option<String> {
+    for sentinel in [" edited;", " historically "] {
+        if let Some(end) = msg.find(sentinel) {
+            return Some(msg[..end].trim().to_owned());
+        }
+    }
+    None
+}
+
+/// Extract the Wilson 95 % lower bound from a COUPLING message.
+/// The `"Wilson 95% lower X.YZ"` suffix is appended by both the
+/// review and pre-edit emitters.
+fn parse_wilson_lower(msg: &str) -> Option<f64> {
+    let key = "Wilson 95% lower ";
+    let idx = msg.find(key)? + key.len();
     let rest = &msg[idx..];
     let end = rest.find(')').unwrap_or(rest.len());
     rest[..end].trim().parse().ok()
 }
 
-const fn jaccard_bucket(j: f64) -> &'static str {
-    if j < 0.30 {
-        "0.10-0.30"
-    } else if j < 0.50 {
-        "0.30-0.50"
+/// Bucket a Wilson 95 % lower bound into a coarse band. Boundaries
+/// land on the default `confidence_threshold = 0.20` and the next
+/// round step at 0.40 — gives a "below firing threshold / just
+/// above / well above" visualization.
+const fn wilson_lower_bucket(w: f64) -> &'static str {
+    if w < 0.20 {
+        "0.00-0.20"
+    } else if w < 0.40 {
+        "0.20-0.40"
     } else {
-        "0.50+"
+        "0.40+"
     }
+}
+
+/// Minimum distinct subjects a partner must fire across to be a
+/// `--learn` candidate. Set conservatively so a 50-commit sample on
+/// a small repo can still produce useful suggestions.
+const LEARN_MIN_SUBJECT_COUNT: usize = 3;
+
+/// Synthesize `--learn` suggestions from the post-aggregation state.
+///
+/// Surfaces every partner blamed across `≥ LEARN_MIN_SUBJECT_COUNT`
+/// distinct subjects. Breadth alone is the gate: legit pairwise
+/// coupling fires from one subject's history, so a partner appearing
+/// across multiple unrelated subjects is the noise pattern (CHANGELOG,
+/// archived-version snapshots, lockstep manifest files).
+///
+/// `mean_inverse_conditional_probability` is reported as evidence
+/// rather than used as a filter — it would mis-classify legit
+/// 1-to-N parent-file patterns (e.g. an `index.ts` re-exporting many
+/// children) as noise. The user reads the suggestion + evidence and
+/// decides whether to add the path to `ignore_partners`.
+fn synthesize_learn_suggestions(
+    partner_subjects: &BTreeMap<String, BTreeSet<String>>,
+    commits_touching: &ahash::AHashMap<PathBuf, u32>,
+    commits: &[mmk_core::types::Commit],
+) -> Vec<LearnSuggestion> {
+    let mut out = Vec::new();
+    for (partner, subjects) in partner_subjects {
+        if subjects.len() < LEARN_MIN_SUBJECT_COUNT {
+            continue;
+        }
+        let partner_path = PathBuf::from(partner);
+        let n_partner = commits_touching.get(&partner_path).copied().unwrap_or(0);
+        let mean_inv = if n_partner == 0 {
+            0.0
+        } else {
+            let sum_inv: f64 = subjects
+                .iter()
+                .map(|s| {
+                    let co = co_change_count(commits, &PathBuf::from(s), &partner_path);
+                    f64::from(co) / f64::from(n_partner)
+                })
+                .sum();
+            sum_inv / subjects.len() as f64
+        };
+        out.push(LearnSuggestion {
+            partner: partner.clone(),
+            subject_count: subjects.len(),
+            mean_inverse_conditional_probability: mean_inv,
+        });
+    }
+    // Highest-breadth suggestions first; tie-break on path so output is stable.
+    out.sort_by(|a, b| {
+        b.subject_count
+            .cmp(&a.subject_count)
+            .then_with(|| a.partner.cmp(&b.partner))
+    });
+    out
+}
+
+/// Count distinct commits touching both `a` and `b`. One pass over
+/// the window — we only call this for the handful of `--learn`
+/// candidates so the cost stays in the noise.
+fn co_change_count(commits: &[mmk_core::types::Commit], a: &Path, b: &Path) -> u32 {
+    let mut n = 0_u32;
+    for c in commits {
+        let mut has_a = false;
+        let mut has_b = false;
+        for d in &c.deltas {
+            if d.path == a {
+                has_a = true;
+            }
+            if d.path == b {
+                has_b = true;
+            }
+            if has_a && has_b {
+                break;
+            }
+        }
+        if has_a && has_b {
+            n = n.saturating_add(1);
+        }
+    }
+    n
 }
 
 fn write_text<W: Write>(w: &mut W, r: &AggregateReport) -> Result<()> {
@@ -303,11 +457,11 @@ fn write_text<W: Write>(w: &mut W, r: &AggregateReport) -> Result<()> {
         writeln!(w)?;
     }
 
-    if !r.jaccard_buckets.is_empty() {
-        writeln!(w, "  jaccard distribution (coupling findings):")?;
-        let total_coupling: usize = r.jaccard_buckets.values().sum();
-        for bucket in ["0.10-0.30", "0.30-0.50", "0.50+"] {
-            let n = r.jaccard_buckets.get(bucket).copied().unwrap_or(0);
+    if !r.wilson_lower_buckets.is_empty() {
+        writeln!(w, "  Wilson 95% lower distribution (coupling findings):")?;
+        let total_coupling: usize = r.wilson_lower_buckets.values().sum();
+        for bucket in ["0.00-0.20", "0.20-0.40", "0.40+"] {
+            let n = r.wilson_lower_buckets.get(bucket).copied().unwrap_or(0);
             let pct = if total_coupling == 0 {
                 0.0
             } else {
@@ -317,17 +471,23 @@ fn write_text<W: Write>(w: &mut W, r: &AggregateReport) -> Result<()> {
             writeln!(w, "    {bucket:<10}  {bars:<20} {pct:.0}%")?;
         }
         writeln!(w)?;
+    }
 
-        let low_pct = r.jaccard_buckets.get("0.10-0.30").copied().unwrap_or(0) as f64
-            / total_coupling.max(1) as f64;
-        if low_pct > 0.5 && r.threshold < 0.30 {
+    if !r.learn_suggestions.is_empty() {
+        writeln!(w, "suggested mokumokuren.toml additions:")?;
+        writeln!(w)?;
+        writeln!(w, "  [coupling]")?;
+        writeln!(w, "  ignore_partners = [")?;
+        for s in &r.learn_suggestions {
             writeln!(
                 w,
-                "  consider raising [coupling] threshold to 0.30 — \
-                 over half of COUPLING findings sit in the 0.10-0.30 \
-                 noise band on this repo."
+                "      {:?},  # fires across {} unrelated subjects \
+                 (mean P(subject|partner) {:.2})",
+                s.partner, s.subject_count, s.mean_inverse_conditional_probability,
             )?;
         }
+        writeln!(w, "  ]")?;
+        writeln!(w)?;
     }
 
     Ok(())
@@ -339,40 +499,25 @@ fn write_json<W: Write>(w: &mut W, r: &AggregateReport) -> Result<()> {
     Ok(())
 }
 
-fn load_config_file(cwd: &Path, explicit: Option<&Path>) -> Result<(ConfigFile, Option<PathBuf>)> {
-    if let Some(path) = explicit {
-        let cfg = ConfigFile::load_from_path(path)
-            .with_context(|| format!("failed to load config from {}", path.display()))?;
-        return Ok((cfg, Some(path.to_path_buf())));
-    }
-    if let Some(repo_root) = mmk_git::discover_work_dir(cwd) {
-        let candidate = repo_root.join("mokumokuren.toml");
-        if candidate.exists() {
-            let cfg = ConfigFile::load_from_path(&candidate)
-                .with_context(|| format!("failed to load config from {}", candidate.display()))?;
-            return Ok((cfg, Some(candidate)));
-        }
-    }
-    Ok((ConfigFile::default(), None))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{jaccard_bucket, parse_jaccard, parse_partner};
+    use super::{parse_partner, parse_subject, parse_wilson_lower, wilson_lower_bucket};
 
     #[test]
     fn parse_partner_extracts_review_partner_without_trailing_text() {
         // Regression: an earlier version sliced from "partner " all
-        // the way to " (jaccard", swallowing " not touched" into the
-        // captured partner — which made `noisy_partners` keys like
-        // "Cargo.toml not touched" instead of "Cargo.toml".
-        let msg = "core/a.rs edited; expected partner core/b.rs not touched (jaccard 0.75)";
+        // the way to the next paren, swallowing " not touched" into
+        // the captured partner — which made `noisy_partners` keys
+        // like "Cargo.toml not touched" instead of "Cargo.toml".
+        let msg = "core/a.rs edited; expected partner core/b.rs not touched \
+                   (54/203 = 27% historical co-edit, Wilson 95% lower 0.21)";
         assert_eq!(parse_partner(msg).as_deref(), Some("core/b.rs"));
     }
 
     #[test]
     fn parse_partner_extracts_pre_edit_partner() {
-        let msg = "core/a.rs historically co-changes with core/b.rs (jaccard 0.75)";
+        let msg = "core/a.rs historically co-changes with core/b.rs \
+                   (3/4 = 75% historical co-edit, Wilson 95% lower 0.30)";
         assert_eq!(parse_partner(msg).as_deref(), Some("core/b.rs"));
     }
 
@@ -382,18 +527,38 @@ mod tests {
     }
 
     #[test]
-    fn parse_jaccard_pulls_float_from_message() {
-        let msg = "core/a.rs edited; expected partner core/b.rs not touched (jaccard 0.42)";
-        assert!((parse_jaccard(msg).unwrap() - 0.42).abs() < 1e-6);
+    fn parse_wilson_lower_pulls_float_from_message() {
+        let msg = "core/a.rs edited; expected partner core/b.rs not touched \
+                   (54/203 = 27% historical co-edit, Wilson 95% lower 0.21)";
+        assert!((parse_wilson_lower(msg).unwrap() - 0.21).abs() < 1e-6);
     }
 
     #[test]
-    fn jaccard_bucket_partitions_at_0_30_and_0_50() {
-        assert_eq!(jaccard_bucket(0.10), "0.10-0.30");
-        assert_eq!(jaccard_bucket(0.29), "0.10-0.30");
-        assert_eq!(jaccard_bucket(0.30), "0.30-0.50");
-        assert_eq!(jaccard_bucket(0.49), "0.30-0.50");
-        assert_eq!(jaccard_bucket(0.50), "0.50+");
-        assert_eq!(jaccard_bucket(0.99), "0.50+");
+    fn parse_subject_extracts_review_subject() {
+        let msg = "core/a.rs edited; expected partner core/b.rs not touched \
+                   (54/203 = 27% historical co-edit, Wilson 95% lower 0.21)";
+        assert_eq!(parse_subject(msg).as_deref(), Some("core/a.rs"));
+    }
+
+    #[test]
+    fn parse_subject_extracts_pre_edit_subject() {
+        let msg = "core/a.rs historically co-changes with core/b.rs \
+                   (3/4 = 75% historical co-edit, Wilson 95% lower 0.30)";
+        assert_eq!(parse_subject(msg).as_deref(), Some("core/a.rs"));
+    }
+
+    #[test]
+    fn parse_subject_returns_none_on_unrelated_message() {
+        assert!(parse_subject("just some other text").is_none());
+    }
+
+    #[test]
+    fn wilson_lower_bucket_partitions_at_0_20_and_0_40() {
+        assert_eq!(wilson_lower_bucket(0.10), "0.00-0.20");
+        assert_eq!(wilson_lower_bucket(0.19), "0.00-0.20");
+        assert_eq!(wilson_lower_bucket(0.20), "0.20-0.40");
+        assert_eq!(wilson_lower_bucket(0.39), "0.20-0.40");
+        assert_eq!(wilson_lower_bucket(0.40), "0.40+");
+        assert_eq!(wilson_lower_bucket(0.99), "0.40+");
     }
 }

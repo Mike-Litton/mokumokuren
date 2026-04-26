@@ -59,27 +59,94 @@ The effective threshold is echoed in the JSON output
 (`blast_radius.threshold`) so consumers can see what filter produced
 the listed nodes.
 
-## COUPLING findings: the review/pre-edit threshold
+## COUPLING findings: the v0.4 Wilson rule
 
 `mmk review` and `mmk pre-edit` emit COUPLING findings that flag
-historical partners not touched in the current edit. These have a
-**separate threshold** from blast-radius, governed by
-`[coupling] threshold` (default `0.30`):
+historical partners not touched in the current edit. The decision
+rule changed in v0.4 — see *Why conditional probability + Wilson*
+below for the full reasoning. The knobs:
 
 ```toml
 [coupling]
-threshold = 0.30
-ignore_partners = []
+confidence_threshold = 0.20  # Wilson 95% lower bound on P(partner | subject)
+min_sample_size      = 5     # don't infer from too few observations
+ignore_partners      = []
 ```
 
-The split exists because the two surfaces optimize for different
-things. Blast-radius is the exploratory query — surfacing faint
-signal is the point. COUPLING findings flow into the agent's edit
-loop, where a sub-0.30 partner is noise that costs context tokens
-and can drive wrong work. The four-repo eval showed 67 % of
-COUPLING findings under the old single-threshold default sat in the
-0.10–0.30 range — borderline signal at best, false positives at
-worst.
+A partner fires COUPLING when **both** conditions hold:
+
+1. `commits_touching(subject) ≥ min_sample_size` — the subject has
+   at least `n=5` commits in the window. Below that the binomial
+   sample is too small for any inference; pre-edit falls through
+   to a `Severity::Ok` "insufficient history" finding instead.
+2. `wilson_lower_95(co_change(subject, partner), n) ≥ confidence_threshold`
+   — the 95 % lower confidence bound on the conditional probability
+   `P(partner | subject)` clears 0.20.
+
+The legacy `threshold` field is silently mapped to
+`confidence_threshold` for back-compat (`--verbose` surfaces a
+deprecation note). Sub-0.30 partners on the v0.3 jaccard scale don't
+translate cleanly to the new metric — a fresh `mmk eval` run is
+worth a minute.
+
+### Why conditional probability + Wilson
+
+The v0.3 rule was `jaccard(A, B) ≥ threshold`. Jaccard is a
+*symmetric similarity*. The agent's actual question is *asymmetric
+and probabilistic*: "given I just edited A, what fraction of
+historical edits to A also touched B?" That's
+`P(B | A) = co_change(A, B) / commits_touching(A)`. v0.4's switch
+to that quantity has three properties the jaccard rule lacked:
+
+- **Statistically calibrated.** 95 % confidence is a standard, not a
+  tuned hyperparameter. `confidence_threshold = 0.20` reads as "I
+  want to know about partners with ≥ 20 % conditional probability,
+  and I want statistical confidence in that estimate."
+- **Frequency-invariant.** Hot files (54/203 ≈ 0.27) and quiet
+  files (1/1 = 1.0) land on the same scale. The Wilson lower
+  bound naturally penalizes low-N: a single 1/1 hit doesn't fire
+  because the CI is wide.
+- **Asymmetric, matching the agent's question.** "Given I edited
+  A, what does A's history say about B?" — not "are A and B similar
+  overall." Catches cases where A→B is strong but B→A is weak.
+
+The v0.3 vscode validation found two failure modes the new rule
+fixes:
+
+| Subject (n)             | Partner (k)             | jaccard | Wilson lower 95% | v0.3 fired? | v0.4 fires? |
+| ----------------------- | ----------------------- | ------: | ---------------: | :---------: | :---------: |
+| `runInTerminalTool.ts` (203) | `*.test.ts` (54)   | 0.21    | 0.21             |   no   |   yes  |
+| `chatWidget.ts` (133)   | `chatInputPart.ts` (27) | 0.08    | 0.14             |   no   |   no   |
+| `breakpointsView.ts` (3)| `debugViewlet.css` (3)  | 0.23    | 0.44             |   no   |   no¹  |
+
+¹ Wilson lower 0.44 *would* clear 0.20, but `n=3 < min_sample_size=5`
+suppresses inference. Pre-edit emits an OK finding instead so the
+agent can tell "no signal" from "mmk wasn't run."
+
+The dual-condition gate (Wilson lower **AND** min_sample_size)
+isn't curve-fitting — it's the standard "don't infer from too few
+observations" practice. n=5 is the smallest sample where Wilson is
+meaningfully informative; the same cutoff drives the chi-square
+`expected_count ≥ 5` rule.
+
+### Effective field on `top_couples[]`
+
+Each entry in the JSON output now carries both views:
+
+```json
+{
+  "partner": "src/foo.test.ts",
+  "co_change_count": 54,
+  "jaccard": 0.21,
+  "conditional_probability": 0.266,
+  "wilson_lower_95": 0.21
+}
+```
+
+`jaccard` is preserved — it still drives `--blast-radius` (the
+exploratory "what's near this file" surface, where symmetry is the
+right question). `conditional_probability` and `wilson_lower_95`
+drive review/pre-edit's COUPLING gate.
 
 ## `ignore_partners`: pruning the missed-partner list
 
@@ -112,17 +179,31 @@ paths from the analyze ranking entirely.
 ## Tuning for your repo
 
 The defaults are calibrated against the v0.3 eval (cal.diy, immich,
-n8n, vscode). Real repos vary. To measure the noise floor on yours:
+n8n, vscode) and re-validated under the v0.4 Wilson rule. Real repos
+vary. To measure the noise floor on yours:
 
 ```shell
 mmk eval --sample 50
 ```
 
 emits a noise-floor report covering firing rate, layer mix, and the
-jaccard distribution of COUPLING findings. If a majority of findings
-sit in the 0.10–0.30 bucket, raise `[coupling] threshold`. If
-specific partner paths dominate the noisy-partner list, add them to
-`[coupling] ignore_partners`.
+Wilson-95 %-lower-bound distribution of COUPLING findings (buckets:
+`0.00-0.20`, `0.20-0.40`, `0.40+`). If most findings sit in the
+0.20-0.40 bucket and the firing rate feels noisy, raise
+`[coupling] confidence_threshold` (e.g. to 0.30).
+
+For high-breadth noise — the same `CHANGELOG.md` blamed across
+many unrelated subjects — let `mmk eval --learn` synthesize a
+suggested `ignore_partners` block:
+
+```shell
+mmk eval --sample 50 --learn
+```
+
+The suggestion uses the inverse conditional probability
+`P(subject | partner)`: a partner that fires across many subjects
+but no individual subject "owns" is the system-level-noise
+signature. Paste the block into `mokumokuren.toml`.
 
 For the JS/TS ecosystem, `mmk init --profile js-ts` ships defaults
 derived directly from the eval — workspace `package.json`,

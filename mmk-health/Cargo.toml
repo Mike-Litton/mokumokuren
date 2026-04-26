@@ -1,0 +1,21 @@
+[package]
+name = "mmk-health"
+description = "Structural-pattern adapter (Health layer) for Mokumokuren."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ahash = { workspace = true }
+serde = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-typescript = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

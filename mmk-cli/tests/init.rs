@@ -140,14 +140,17 @@ fn init_with_js_ts_profile_writes_expected_keys() {
     );
     res.expect("js-ts profile should write");
     let body = std::fs::read_to_string(dir.path().join("mokumokuren.toml")).unwrap();
-    // Snapshot-style: pin signal patterns derived from the v0.3 eval
+    // Snapshot-style: pin signal patterns the profile must contain
     // so a regression in the profile content fails this test.
     for needle in [
         "node_modules",
         "**/package.json",
         "**/Fastfile",
         "[coupling]",
-        "threshold = 0.30",
+        "confidence_threshold = 0.20",
+        "min_sample_size = 5",
+        "[health.ts]",
+        "test_pair",
     ] {
         assert!(
             body.contains(needle),

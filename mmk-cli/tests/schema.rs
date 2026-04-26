@@ -52,7 +52,7 @@ fn schema_version_present_and_pinned() {
     let stdout = run_in(dir.path(), json_args());
     let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
     assert_eq!(
-        v["schema_version"], "0.3.0",
+        v["schema_version"], "0.4.0",
         "schema_version should be pinned to the mmk minor release"
     );
 }
@@ -139,6 +139,19 @@ fn ranking_entry_keys() -> Vec<&'static str> {
     ]
 }
 
+/// Strict shape for `top_couples[]` entries. Tested via the coupling
+/// fixture (the canonical fixture has no co-changes so its
+/// top_couples arrays come back empty and don't exercise this).
+fn coupling_entry_keys() -> Vec<&'static str> {
+    vec![
+        "partner",
+        "jaccard",
+        "co_change_count",
+        "conditional_probability",
+        "wilson_lower_95",
+    ]
+}
+
 #[test]
 fn schema_shape_matches_docs_contract() {
     let dir = TempDir::new().unwrap();
@@ -214,18 +227,73 @@ fn schema_shape_matches_docs_contract() {
     );
     for (i, entry) in files.iter().enumerate() {
         expect_required_keys(entry, &ranking_entry_keys(), &format!("files[{i}]"));
-        // top_couples is an array, possibly empty.
+        // The canonical fixture intentionally has no co-changes so
+        // top_couples arrays come back empty here. The strict
+        // entry-shape lock lives in
+        // [`schema_top_couples_entry_shape_against_coupling_fixture`],
+        // which uses build_coupling_fixture.
         let couples = entry["top_couples"]
             .as_array()
             .unwrap_or_else(|| panic!("files[{i}].top_couples must be an array"));
         for (j, c) in couples.iter().enumerate() {
             expect_required_keys(
                 c,
-                &["partner", "jaccard", "co_change_count"],
+                &coupling_entry_keys(),
                 &format!("files[{i}].top_couples[{j}]"),
             );
         }
     }
+}
+
+#[test]
+fn schema_top_couples_entry_shape_against_coupling_fixture() {
+    // Pin the `top_couples[]` entry shape on a fixture that
+    // *actually populates* the array. The canonical fixture's empty
+    // arrays meant the contract test would silently pass with the
+    // wrong field set — this closes that hole.
+    let dir = TempDir::new().unwrap();
+    let now: i64 = 1_700_000_000;
+    build_coupling_fixture(dir.path(), now);
+
+    let mut args = json_args();
+    args.since = "60days".into();
+    let stdout = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let files = v["files"].as_array().expect("files array");
+    let a_entry = files
+        .iter()
+        .find(|f| f["path"] == "core/a.rs")
+        .expect("core/a.rs in files");
+    let couples = a_entry["top_couples"]
+        .as_array()
+        .expect("top_couples on core/a.rs");
+    assert!(
+        !couples.is_empty(),
+        "coupling fixture must populate top_couples[] on core/a.rs"
+    );
+    for (j, c) in couples.iter().enumerate() {
+        expect_required_keys(c, &coupling_entry_keys(), &format!("top_couples[{j}]"));
+    }
+
+    let b_couple = couples
+        .iter()
+        .find(|c| c["partner"] == "core/b.rs")
+        .expect("canonical core/b.rs partner");
+    // Lock the populated values too — the contract is "right keys,
+    // right values," not just keys. P(B|A) = 3/5 = 0.60; jaccard = 0.60.
+    let p = b_couple["conditional_probability"].as_f64().unwrap();
+    assert!(
+        (p - 0.60).abs() < 1e-9,
+        "conditional_probability for canonical pair = 3/5; got {p}"
+    );
+    let w = b_couple["wilson_lower_95"].as_f64().unwrap();
+    assert!(
+        w > 0.20 && w < 0.30,
+        "Wilson 95% lower for 3/5, n=5 should be ≈0.231; got {w}"
+    );
+    let co = b_couple["co_change_count"].as_u64().unwrap();
+    assert_eq!(co, 3, "co_change_count of canonical pair");
 }
 
 #[test]
@@ -376,7 +444,7 @@ fn schema_session_shape_matches_docs_contract() {
     }
 }
 
-// --- v0.3 surface: review / pre-edit / drift envelope locks. ---
+// --- review / pre-edit / drift envelope locks. ---
 
 fn run_review_in(repo: &std::path::Path, args: ReviewArgs) -> Vec<u8> {
     let _g = CWD_LOCK

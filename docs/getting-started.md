@@ -17,7 +17,8 @@ Pick the path that matches what you're trying to do.
    ```
    This writes a `mokumokuren.toml` calibrated for JS/TS monorepos
    (workspace-package.json suppression, lockfile ignores, sane
-   `[coupling]` threshold). Commit it.
+   `[coupling]` defaults, plus the `[health.ts]` structural-pattern
+   adapter enabled). Commit it.
 
 3. Wire mmk into Claude Code's `PostToolUse:Edit` hook. Add to
    `.claude/settings.json`:

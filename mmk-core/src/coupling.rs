@@ -8,9 +8,9 @@
 //! ```
 //!
 //! Coupling answers "if I touch X, what historically co-changes?" — the
-//! load-bearing signal for an LLM-agent edit decision (per the v0.2.0
-//! plan, derived from CodeScene's *Pull Risk Forward* and the Hallucinated
-//! Coupling failure mode in the LLM-architectures paper).
+//! load-bearing signal for an LLM-agent edit decision (motivated by
+//! CodeScene's *Pull Risk Forward* and the Hallucinated Coupling
+//! failure mode in the LLM-architectures paper).
 //!
 //! ## Cost
 //!
@@ -25,16 +25,34 @@ use std::path::PathBuf;
 
 use crate::types::Commit;
 
+pub mod wilson;
+
+pub use wilson::wilson_lower_95;
+
 /// One co-changing partner for a target file.
+///
+/// `jaccard` remains the symmetric similarity — it answers "how
+/// related are A and B overall" and drives `--blast-radius` (the
+/// exploratory neighborhood). `conditional_probability` and
+/// `wilson_lower_95` are asymmetric: they answer "given an edit to
+/// A's history, how often is B also touched?" — the question the
+/// COUPLING finding actually wants.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct CouplingEntry {
     pub partner: PathBuf,
     pub jaccard: f64,
     pub co_change_count: u32,
+    /// `co_change_count / commits_touching(target)`. Direct point
+    /// estimate of `P(partner | target)`.
+    pub conditional_probability: f64,
+    /// Wilson 95 % lower bound for `conditional_probability`. Used by
+    /// `mmk review` / `mmk pre-edit` to decide whether to surface the
+    /// partner as a missed-edit warning.
+    pub wilson_lower_95: f64,
 }
 
 /// Compute, for each path in `targets`, its top-`k` co-changing
-/// partners.
+/// partners ranked by symmetric jaccard descending.
 ///
 /// Walks `commits` once. For every commit, only updates pair counts
 /// `(t, p)` where `t ∈ targets`; this bounds work to
@@ -48,21 +66,44 @@ pub fn top_couples_for(
     targets: &AHashSet<PathBuf>,
     k: usize,
 ) -> AHashMap<PathBuf, Vec<CouplingEntry>> {
+    let mut by_target = collect_couples_for(commits, targets);
+    rank_and_truncate(&mut by_target, jaccard_ordering, k);
+    by_target
+}
+
+/// Same shape as [`top_couples_for`] but ranks each target's
+/// partners by [`CouplingEntry::wilson_lower_95`] descending.
+#[must_use]
+pub fn compute_conditional_couples_for(
+    commits: &[Commit],
+    targets: &AHashSet<PathBuf>,
+    k: usize,
+) -> AHashMap<PathBuf, Vec<CouplingEntry>> {
+    let mut by_target = collect_couples_for(commits, targets);
+    rank_and_truncate(&mut by_target, wilson_ordering, k);
+    by_target
+}
+
+/// Build the unsorted partner map for `targets`. Single commit walk;
+/// caller picks the sort order via [`rank_and_truncate`]. Splitting
+/// the collection step from ordering means callers asking for both
+/// jaccard- and Wilson-ordered views (analyze + review on the same
+/// repo) do the O(commits × files) work once each, not twice.
+fn collect_couples_for(
+    commits: &[Commit],
+    targets: &AHashSet<PathBuf>,
+) -> AHashMap<PathBuf, Vec<CouplingEntry>> {
     if targets.is_empty() {
         return AHashMap::new();
     }
 
-    // (target_path, partner_path) -> co_change_count.
     let mut pair_counts: AHashMap<(PathBuf, PathBuf), u32> = AHashMap::new();
-    // Touch counts across the whole window (needed for the jaccard
-    // denominator, including for non-target partners). Walking commits
-    // once gives us this for free; we'd need it anyway.
     let mut touches: AHashMap<PathBuf, u32> = AHashMap::new();
 
     for commit in commits {
-        // Distinct paths in the commit. A `FileDelta` is keyed by path
-        // already (renames fold into a single delta on the new path),
-        // so duplicates are not expected, but be defensive.
+        // A `FileDelta` is keyed by path (renames fold into a single
+        // delta on the new path), so duplicates aren't expected, but
+        // be defensive.
         let mut paths: Vec<&PathBuf> = commit.deltas.iter().map(|d| &d.path).collect();
         paths.sort();
         paths.dedup();
@@ -71,9 +112,6 @@ pub fn top_couples_for(
             *touches.entry((*p).clone()).or_insert(0) += 1;
         }
 
-        // Pair updates: only where at least one side is a target.
-        // Iterate target-first so we can short-circuit on commits that
-        // touch no targeted files.
         let touched_targets: Vec<&PathBuf> = paths
             .iter()
             .copied()
@@ -95,7 +133,6 @@ pub fn top_couples_for(
         }
     }
 
-    // Bucket pair_counts by target.
     let mut by_target: AHashMap<PathBuf, Vec<CouplingEntry>> =
         targets.iter().map(|t| (t.clone(), Vec::new())).collect();
 
@@ -108,41 +145,67 @@ pub fn top_couples_for(
         } else {
             f64::from(co) / f64::from(union)
         };
+        let conditional_probability = if touches_t == 0 {
+            0.0
+        } else {
+            f64::from(co) / f64::from(touches_t)
+        };
+        let wilson_lower_95 = wilson_lower_95(co, touches_t);
         let bucket = by_target.entry(t).or_default();
         bucket.push(CouplingEntry {
             partner,
             jaccard,
             co_change_count: co,
+            conditional_probability,
+            wilson_lower_95,
         });
     }
 
-    // Sort each bucket by jaccard desc, then co_change desc, then path asc.
-    for entries in by_target.values_mut() {
-        entries.sort_by(|a, b| {
-            b.jaccard
-                .partial_cmp(&a.jaccard)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| b.co_change_count.cmp(&a.co_change_count))
-                .then_with(|| a.partner.cmp(&b.partner))
-        });
-        if k > 0 && entries.len() > k {
-            entries.truncate(k);
-        }
-    }
-
-    // Drop targets that appeared in `targets` but never showed up in any
-    // commit — they have no couples and would otherwise emit empty
-    // entries downstream. Keep targets that appeared but had no
-    // co-changes (rare, but possible for files only ever touched alone)
-    // since "no couples" is itself information.
+    // Drop targets that never appeared in any commit — they have no
+    // couples and would otherwise emit empty entries downstream.
+    // Keep targets that appeared but had no co-changes (rare, but
+    // possible for files only ever touched alone) since "no couples"
+    // is itself information.
     by_target.retain(|t, _| touches.contains_key(t));
 
     by_target
 }
 
-/// One node of a 1-hop blast-radius neighborhood. Hop is implicit (1)
-/// in v0.2.0; the field exists so that promoting to multi-hop in v0.3
-/// is a contained schema change.
+fn rank_and_truncate<F>(by_target: &mut AHashMap<PathBuf, Vec<CouplingEntry>>, cmp: F, k: usize)
+where
+    F: Fn(&CouplingEntry, &CouplingEntry) -> std::cmp::Ordering + Copy,
+{
+    for entries in by_target.values_mut() {
+        entries.sort_by(cmp);
+        if k > 0 && entries.len() > k {
+            entries.truncate(k);
+        }
+    }
+}
+
+fn jaccard_ordering(a: &CouplingEntry, b: &CouplingEntry) -> std::cmp::Ordering {
+    b.jaccard
+        .partial_cmp(&a.jaccard)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| b.co_change_count.cmp(&a.co_change_count))
+        .then_with(|| a.partner.cmp(&b.partner))
+}
+
+fn wilson_ordering(a: &CouplingEntry, b: &CouplingEntry) -> std::cmp::Ordering {
+    b.wilson_lower_95
+        .partial_cmp(&a.wilson_lower_95)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| {
+            b.conditional_probability
+                .partial_cmp(&a.conditional_probability)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .then_with(|| b.co_change_count.cmp(&a.co_change_count))
+        .then_with(|| a.partner.cmp(&b.partner))
+}
+
+/// One node of a 1-hop blast-radius neighborhood. `hops` is reserved
+/// for forward compatibility with multi-hop neighborhoods.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct NeighborhoodNode {
     pub path: PathBuf,
@@ -153,9 +216,9 @@ pub struct NeighborhoodNode {
 
 /// 1-hop blast radius: every partner of `root` whose jaccard ≥ `threshold`.
 ///
-/// `hops` is reserved for forward compatibility; v0.2.x rejects
-/// anything other than `1` with an error so callers can surface a
-/// clean diagnostic. Multi-hop arrives in v0.3.
+/// `hops` is currently fixed at 1. Other values return `Err` so
+/// callers can surface a clean diagnostic instead of silently getting
+/// the wrong topology.
 pub fn neighborhood(
     commits: &[Commit],
     root: &std::path::Path,
@@ -164,7 +227,7 @@ pub fn neighborhood(
 ) -> anyhow::Result<Vec<NeighborhoodNode>> {
     if hops != 1 {
         return Err(anyhow::anyhow!(
-            "v0.2.x supports only 1-hop blast radius (got {hops})"
+            "neighborhood currently supports only 1-hop blast radius (got {hops})"
         ));
     }
 

@@ -8,4 +8,5 @@ ignore = [
 ]
 
 [coupling]
-threshold = 0.30
+confidence_threshold = 0.20
+min_sample_size = 5

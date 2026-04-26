@@ -1,6 +1,6 @@
-//! `mmk review` — the v0.3 headline. Compares a diff (working-tree
-//! by default, or `--staged`/`--range`/`--commit`) against the
-//! historical baseline and emits layer-labeled findings.
+//! `mmk review` — compare a diff (working-tree by default, or
+//! `--staged`/`--range`/`--commit`) against the historical baseline
+//! and emit layer-labeled findings.
 //!
 //! Orthogonality tag: protects **agent mode** (the
 //! `PostToolUse:Edit` hook reads JSON findings) and **human mode**
@@ -126,8 +126,9 @@ fn review_emits_coupling_miss_on_uncommitted_diff() {
     build_coupling_fixture(dir.path(), now);
 
     // Edit core/a.rs but leave its historical partner core/b.rs
-    // untouched. jaccard(a,b) = 0.75 in this fixture; the COUPLING
-    // finding fires for the missed partner.
+    // untouched. The fixture lands P(B|A) = 0.60 with Wilson 95 %
+    // lower ≈ 0.23 — above the default 0.20 confidence floor — so
+    // the COUPLING finding fires for the missed partner.
     write(dir.path(), "core/a.rs", "a1\na2\na3\na4\na5\nNEW\n");
 
     let mut args = review_args();
@@ -263,10 +264,10 @@ fn review_range_uses_committed_diff() {
 
 #[test]
 fn review_self_throttles_on_bulk_diff() {
-    // §1c: when the input diff itself trips bulk thresholds, review
-    // emits exactly one BUDGET finding and skips HOTSPOT/COUPLING. The
-    // alternative (running coupling against a vendored snapshot) is
-    // what produced the cal.diy 257-finding storm in the eval.
+    // When the input diff itself trips bulk thresholds, review
+    // emits exactly one BUDGET finding and skips HOTSPOT/COUPLING.
+    // The alternative — running coupling against a vendored snapshot
+    // — produces a finding storm on bulk imports.
     use std::fmt::Write as _;
     let dir = TempDir::new().unwrap();
     let now = 1_700_000_000_i64;
@@ -304,8 +305,9 @@ fn review_self_throttles_on_bulk_diff() {
 
 #[test]
 fn review_respects_coupling_threshold() {
-    // §1a: --coupling-threshold above jaccard(a,b)=0.75 must suppress
-    // the would-be COUPLING finding for core/b.rs.
+    // --coupling-threshold above the partner's Wilson lower bound
+    // (~0.23) must suppress the would-be COUPLING finding for
+    // core/b.rs. The flag routes to confidence_threshold.
     let dir = TempDir::new().unwrap();
     let now = 1_700_000_000_i64;
     build_coupling_fixture(dir.path(), now);
@@ -325,13 +327,13 @@ fn review_respects_coupling_threshold() {
         .collect();
     assert!(
         coupling.is_empty(),
-        "threshold 0.99 must suppress coupling at jaccard 0.75; got: {coupling:?}"
+        "threshold 0.99 must suppress coupling whose Wilson lower is ≈0.23; got: {coupling:?}"
     );
 }
 
 #[test]
 fn review_respects_coupling_ignore_partners() {
-    // §1b: a glob in [coupling] ignore_partners must drop the matching
+    // A glob in [coupling] ignore_partners must drop the matching
     // partner from COUPLING findings even when it's above threshold.
     let dir = TempDir::new().unwrap();
     let now = 1_700_000_000_i64;
@@ -365,10 +367,11 @@ fn review_respects_coupling_ignore_partners() {
 
 #[test]
 fn review_gate_warn_returns_nonzero_on_warn_finding() {
-    // §5c: --gate warn must surface a non-zero verdict when any
-    // warn-severity finding fires. With the default coupling
-    // threshold (0.30), editing core/a.rs alone surfaces COUPLING
-    // for core/b.rs at jaccard 0.75 — solidly above the threshold.
+    // --gate warn must surface a non-zero verdict when any
+    // warn-severity finding fires. With the default
+    // confidence_threshold (0.20) and min_sample_size (5), editing
+    // core/a.rs alone surfaces COUPLING for core/b.rs (Wilson
+    // lower ≈ 0.23) — above the floor.
     let dir = TempDir::new().unwrap();
     let now = 1_700_000_000_i64;
     build_coupling_fixture(dir.path(), now);
@@ -392,6 +395,168 @@ fn review_gate_none_returns_ok_even_with_findings() {
     args.format = Format::Json;
     let (_, verdict) = run_in_with_verdict(dir.path(), args);
     assert_eq!(verdict, mokumokuren::Verdict::Ok);
+}
+
+#[test]
+fn review_legacy_coupling_threshold_emits_deprecation_warning_in_verbose() {
+    // Pinning [coupling] threshold = X must surface a one-line
+    // deprecation note on stderr when the user passes -v. Locks the
+    // back-compat behavior so a future refactor that silently drops
+    // the alias gets caught.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_coupling_fixture(dir.path(), now);
+    write(dir.path(), "core/a.rs", "a1\na2\na3\na4\na5\nNEW\n");
+
+    std::fs::write(
+        dir.path().join("mokumokuren.toml"),
+        "[coupling]\nthreshold = 0.30\n",
+    )
+    .unwrap();
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    args.verbose = true;
+
+    let _g = CWD_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let orig = std::env::current_dir().unwrap();
+    std::env::set_current_dir(dir.path()).unwrap();
+    let mut stdout: Vec<u8> = Vec::new();
+    let mut stderr: Vec<u8> = Vec::new();
+    let _ = mokumokuren::commands::review::run(&args, &mut stdout, &mut stderr).expect("review");
+    std::env::set_current_dir(orig).unwrap();
+    let err = String::from_utf8(stderr).unwrap();
+    assert!(
+        err.contains("[coupling] threshold is deprecated"),
+        "verbose stderr should call out the legacy [coupling] threshold; got: {err}"
+    );
+}
+
+#[test]
+fn review_legacy_coupling_threshold_silent_without_verbose() {
+    // Same config, no -v → no deprecation noise. The warning is
+    // opt-in so production hooks aren't spammed.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_coupling_fixture(dir.path(), now);
+    write(dir.path(), "core/a.rs", "a1\na2\na3\na4\na5\nNEW\n");
+
+    std::fs::write(
+        dir.path().join("mokumokuren.toml"),
+        "[coupling]\nthreshold = 0.30\n",
+    )
+    .unwrap();
+
+    let mut args = review_args();
+    args.format = Format::Json;
+
+    let _g = CWD_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let orig = std::env::current_dir().unwrap();
+    std::env::set_current_dir(dir.path()).unwrap();
+    let mut stdout: Vec<u8> = Vec::new();
+    let mut stderr: Vec<u8> = Vec::new();
+    let _ = mokumokuren::commands::review::run(&args, &mut stdout, &mut stderr).expect("review");
+    std::env::set_current_dir(orig).unwrap();
+    let err = String::from_utf8(stderr).unwrap();
+    assert!(
+        !err.contains("deprecated"),
+        "non-verbose stderr must not warn about the legacy field; got: {err}"
+    );
+}
+
+#[test]
+fn review_emits_health_warn_when_test_partner_not_touched() {
+    // Editing src/foo.ts without touching src/foo.test.ts must
+    // surface a HEALTH Warn finding via Pattern C (test-pair).
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    write(dir.path(), "src/foo.ts", "export const foo = 1;\n");
+    write(
+        dir.path(),
+        "src/foo.test.ts",
+        "import {foo} from './foo';\n",
+    );
+    commit_all(dir.path(), "seed", now - 5 * DAY);
+
+    std::fs::write(
+        dir.path().join("mokumokuren.toml"),
+        "[health.ts]\nenabled = true\npatterns = [\"test_pair\"]\n",
+    )
+    .unwrap();
+
+    // Edit foo.ts without touching foo.test.ts.
+    write(dir.path(), "src/foo.ts", "export const foo = 2;\n");
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let findings = v["findings"].as_array().expect("findings array");
+    let health: Vec<&Value> = findings.iter().filter(|f| f["layer"] == "health").collect();
+    assert!(
+        !health.is_empty(),
+        "Pattern C must fire when impl moves but test partner doesn't; got: {findings:?}"
+    );
+    let warn = health.iter().any(|f| {
+        f["severity"] == "warn" && f["message"].as_str().unwrap_or("").contains("foo.test.ts")
+    });
+    assert!(
+        warn,
+        "Pattern C in review mode must be Warn (not Info); got: {health:?}"
+    );
+}
+
+#[test]
+fn review_health_warn_suppressed_when_test_partner_also_touched() {
+    // The Warn for Pattern C is the "you forgot the test" signal.
+    // If the agent *did* touch the test in this diff, the Warn must
+    // not fire — same shape as COUPLING's "partner also touched"
+    // suppression.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    write(dir.path(), "src/foo.ts", "export const foo = 1;\n");
+    write(
+        dir.path(),
+        "src/foo.test.ts",
+        "import {foo} from './foo';\n",
+    );
+    commit_all(dir.path(), "seed", now - 5 * DAY);
+
+    std::fs::write(
+        dir.path().join("mokumokuren.toml"),
+        "[health.ts]\nenabled = true\npatterns = [\"test_pair\"]\n",
+    )
+    .unwrap();
+
+    // Edit BOTH the impl and its test.
+    write(dir.path(), "src/foo.ts", "export const foo = 2;\n");
+    write(
+        dir.path(),
+        "src/foo.test.ts",
+        "import {foo} from './foo'; // updated\n",
+    );
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let findings = v["findings"].as_array().expect("findings array");
+    let health_warn: Vec<&Value> = findings
+        .iter()
+        .filter(|f| f["layer"] == "health" && f["severity"] == "warn")
+        .collect();
+    assert!(
+        health_warn.is_empty(),
+        "test partner WAS touched — Pattern C Warn must be suppressed; got: {health_warn:?}"
+    );
 }
 
 #[test]
