@@ -560,6 +560,180 @@ fn review_health_warn_suppressed_when_test_partner_also_touched() {
 }
 
 #[test]
+fn review_includes_untracked_in_changed_files() {
+    // An untracked file (created on disk, not `git add`-ed) should be
+    // visible in `review.diff.files` for working-tree mode, with
+    // `added > 0` reflecting its line count. Without this, an agent's
+    // brand-new file is invisible to coupling-suppression and BUDGET
+    // accounting.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    write(dir.path(), "seed.rs", "x\n");
+    commit_all(dir.path(), "seed", now - DAY);
+
+    write(dir.path(), "new.rs", "alpha\nbeta\ngamma\n");
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let files = v["review"]["diff"]["files"]
+        .as_array()
+        .expect("review.diff.files array");
+    let new_entry = files
+        .iter()
+        .find(|f| f["path"] == "new.rs")
+        .unwrap_or_else(|| panic!("untracked new.rs missing from diff.files; got: {files:?}"));
+    let added = new_entry["added"].as_u64().unwrap_or(0);
+    assert!(
+        added >= 3,
+        "untracked file's `added` should be >= line count; got {added} for {new_entry:?}"
+    );
+}
+
+#[test]
+fn review_suppresses_coupling_when_partner_is_now_untracked() {
+    // The historical partner `core/b.rs` is a co-changer of
+    // `core/a.rs`. If the agent edits `core/a.rs` AND creates an
+    // untracked file at `core/b.rs`, the COUPLING "partner not in
+    // diff" finding must be suppressed — the partner IS in the diff,
+    // just not yet `git add`-ed.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_coupling_fixture(dir.path(), now);
+
+    // Sanity: in the fixture, core/b.rs already exists and was
+    // committed. To exercise the untracked-as-partner path, recreate
+    // the partner's path as an untracked sibling. We delete the
+    // tracked file from the worktree (its deletion will appear as a
+    // separate diff event) and then write it as untracked.
+    //
+    // Simpler: just edit core/a.rs and create a NEW untracked file
+    // with a partner-style name that's actually a known partner from
+    // the fixture. core/b.rs is already tracked so editing it would
+    // show up as tracked. To prove the suppression-via-untracked
+    // path, we rely on the fact that any modification of core/b.rs
+    // (including a create-after-delete) will surface via either the
+    // tracked-diff path OR the untracked path.
+    //
+    // Concretely: remove core/b.rs first (it'll show up as a tracked
+    // deletion), then re-create it untracked (it'll show up via
+    // list_untracked). The combined effect must still suppress the
+    // COUPLING miss for core/b.rs.
+    write(dir.path(), "core/a.rs", "a1\na2\na3\na4\na5\nNEW\n");
+    // Stage the deletion; that takes core/b.rs out of the worktree
+    // entirely, leaving room for an untracked replacement.
+    common::git(dir.path(), &["rm", "-q", "core/b.rs"]);
+    write(dir.path(), "core/b.rs", "fresh body\n");
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let files = v["review"]["diff"]["files"]
+        .as_array()
+        .expect("review.diff.files array");
+    let touches_b = files.iter().any(|f| f["path"] == "core/b.rs");
+    assert!(
+        touches_b,
+        "core/b.rs (recreated untracked) must appear in diff.files; got: {files:?}"
+    );
+    let coupling_b: Vec<&Value> = v["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .filter(|f| {
+            f["layer"] == "coupling" && f["message"].as_str().unwrap_or("").contains("core/b.rs")
+        })
+        .collect();
+    assert!(
+        coupling_b.is_empty(),
+        "untracked partner must suppress COUPLING miss for core/b.rs; got: {coupling_b:?}"
+    );
+}
+
+#[test]
+fn review_respects_ignores_for_untracked() {
+    // An untracked file matching an ignore glob must not appear in
+    // diff.files. Mirrors how head-tree enumeration filters by the
+    // same globset.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    write(dir.path(), "seed.rs", "x\n");
+    commit_all(dir.path(), "seed", now - DAY);
+
+    std::fs::write(
+        dir.path().join("mokumokuren.toml"),
+        "ignore = [\"dist/**\"]\n",
+    )
+    .unwrap();
+    write(dir.path(), "dist/foo.js", "console.log('x')\n");
+    write(dir.path(), "src/keep.rs", "kept\n");
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let files = v["review"]["diff"]["files"]
+        .as_array()
+        .expect("review.diff.files array");
+    let paths: Vec<&str> = files
+        .iter()
+        .map(|f| f["path"].as_str().unwrap_or(""))
+        .collect();
+    assert!(
+        !paths.iter().any(|p| p.starts_with("dist/")),
+        "ignore glob must filter untracked files; got: {paths:?}"
+    );
+    assert!(
+        paths.contains(&"src/keep.rs"),
+        "non-ignored untracked must still appear; got: {paths:?}"
+    );
+}
+
+#[test]
+fn review_skips_binary_untracked() {
+    // Untracked files whose first 8 KiB contains a NUL byte must be
+    // dropped — same shape as `git diff --numstat` skipping binary
+    // files via the `- -` columns.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    write(dir.path(), "seed.rs", "x\n");
+    commit_all(dir.path(), "seed", now - DAY);
+
+    let bin_path = dir.path().join("blob.bin");
+    std::fs::write(&bin_path, b"some text\0and a NUL").unwrap();
+    write(dir.path(), "text.rs", "hello\n");
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let files = v["review"]["diff"]["files"]
+        .as_array()
+        .expect("review.diff.files array");
+    let paths: Vec<&str> = files
+        .iter()
+        .map(|f| f["path"].as_str().unwrap_or(""))
+        .collect();
+    assert!(
+        !paths.contains(&"blob.bin"),
+        "binary untracked must be skipped; got: {paths:?}"
+    );
+    assert!(
+        paths.contains(&"text.rs"),
+        "text untracked must still appear; got: {paths:?}"
+    );
+}
+
+#[test]
 fn review_emits_budget_when_diff_exceeds() {
     let dir = TempDir::new().unwrap();
     let now = 1_700_000_000_i64;

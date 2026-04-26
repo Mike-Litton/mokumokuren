@@ -74,16 +74,6 @@ pub fn run<O: Write, E: Write>(
         ReviewMode::WorkingTree
     };
 
-    let changed = collect_diff(&cwd, mode, args)?;
-
-    // Clean tree / no-op range: text mode says nothing, JSON mode
-    // emits the envelope with empty findings so harnesses can still
-    // parse a stable shape.
-    if changed.is_empty() {
-        emit_empty(args, mode, stdout)?;
-        return Ok(Verdict::Ok);
-    }
-
     let window = humantime::parse_duration(&args.since)
         .with_context(|| format!("invalid --since value: {}", args.since))?;
     let window_days = u32::try_from(window.as_secs() / 86_400)
@@ -97,6 +87,17 @@ pub fn run<O: Write, E: Write>(
     cfg.hotspot.top_n = args.top;
     cfg.ignores = file_cfg.ignore;
     cfg.ignores.extend(args.ignores.iter().cloned());
+
+    let changed = collect_diff(&cwd, mode, args, &cfg.ignores)?;
+
+    // Clean tree / no-op range: text mode says nothing, JSON mode
+    // emits the envelope with empty findings so harnesses can still
+    // parse a stable shape.
+    if changed.is_empty() {
+        emit_empty(args, mode, stdout)?;
+        return Ok(Verdict::Ok);
+    }
+
     if let Some(file_br) = file_cfg.blast_radius.as_ref() {
         cfg.blast_radius.threshold = file_br.threshold;
     }
@@ -280,10 +281,16 @@ pub(crate) fn verdict_for(gate: Gate, findings: &[Finding]) -> Verdict {
 /// Parse `git diff --numstat` output. Binary files (numstat
 /// emits `- -` for added/deleted) are skipped because they don't
 /// contribute line-budget signal and have no rank data anyway.
+///
+/// In `WorkingTree` mode the result is augmented with untracked
+/// (not-yet-`git add`-ed) files via `mmk_git::list_untracked`. The
+/// other modes (Staged / Range / Commit) operate on index/commit
+/// state where untracked is by definition out of scope.
 pub(crate) fn collect_diff(
     cwd: &Path,
     mode: ReviewMode,
     args: &ReviewArgs,
+    ignores: &[String],
 ) -> Result<Vec<ChangedFile>> {
     let mut cmd = Command::new("git");
     cmd.arg("diff").arg("--numstat").current_dir(cwd);
@@ -334,6 +341,27 @@ pub(crate) fn collect_diff(
             deleted,
         });
     }
+
+    if mode == ReviewMode::WorkingTree {
+        let globset = mmk_git::build_globset(ignores)
+            .context("failed to compile ignore globs for untracked enumeration")?;
+        let untracked = mmk_git::list_untracked(cwd, &globset)?;
+        let known: AHashSet<PathBuf> = files.iter().map(|c| c.path.clone()).collect();
+        for u in untracked {
+            // `git diff HEAD` reports a stage-deletion as one entry;
+            // an untracked file at the same path is a separate entry.
+            // Dedup defensively in case of any overlap.
+            if known.contains(&u.path) {
+                continue;
+            }
+            files.push(ChangedFile {
+                path: u.path,
+                added: u.line_count,
+                deleted: 0,
+            });
+        }
+    }
+
     Ok(files)
 }
 

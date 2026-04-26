@@ -12,8 +12,10 @@ pub mod binary;
 pub mod cache;
 pub mod diff;
 pub mod loc;
+pub mod untracked;
 pub mod walker;
 
+pub use untracked::{list_untracked, UntrackedFile};
 pub use walker::{BaseResolution, BaseResolvedVia, RepoWalker};
 
 /// Discover the work-tree root of the Git repo containing `start`, or
@@ -574,7 +576,7 @@ fn walk_ancestors(
     Ok(out)
 }
 
-fn build_globset(patterns: &[String]) -> Result<GlobSet> {
+pub fn build_globset(patterns: &[String]) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     for pat in patterns {
         let glob = Glob::new(pat).with_context(|| format!("invalid ignore glob: {pat}"))?;
