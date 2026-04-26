@@ -8,9 +8,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.4.0] - 2026-04-26
 
-Closes the empirical gaps surfaced by validating v0.3 against the
-four-repo example set in `~/Code/js-examples`. Three semantic shifts
-in COUPLING behavior plus a new structural-pattern adapter.
+Closes the empirical gaps surfaced by validating v0.3 against a
+four-repo TypeScript benchmark set. Three semantic shifts in COUPLING
+behavior plus a new structural-pattern adapter.
 
 ### Added
 
@@ -20,9 +20,11 @@ in COUPLING behavior plus a new structural-pattern adapter.
   `[coupling] confidence_threshold` (default `0.20`), gated by a
   `min_sample_size` floor (default `5`). The legacy symmetric jaccard
   rule was statistically miscalibrated for hot files; the asymmetric
-  conditional-probability view fires correctly on the
-  `runInTerminalTool.ts ↔ *.test.ts` 54/203 pair while continuing to
-  suppress the `chatWidget.ts ↔ chatInputPart.ts` 27/133 borderline.
+  conditional-probability view fires correctly on real
+  implementation ↔ test pairs (e.g. 54/203 co-changes) while
+  continuing to suppress coincidental hot-file neighbors (27/133
+  co-changes, large enough to clear jaccard but not the conditional
+  bound).
 - **Quiet-file fall-through.** `mmk pre-edit` on a file with
   `commits_touching < min_sample_size` and no other firing layer emits
   one `Severity::Ok` finding so the agent can distinguish "mmk had
