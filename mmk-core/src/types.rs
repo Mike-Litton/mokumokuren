@@ -4,10 +4,11 @@
 //! constructs `Vec<Commit>` from a real repository and hands it to the metric
 //! functions here.
 
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Metadata for a single commit in the analysis window.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommitInfo {
     pub sha: String,
     pub parent_sha: Option<String>,
@@ -19,7 +20,7 @@ pub struct CommitInfo {
 /// One file's contribution to a commit: absolute added/deleted line counts.
 ///
 /// Renames are folded into a single `FileDelta` on the *new* path.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileDelta {
     pub path: PathBuf,
     pub added: u32,
@@ -27,7 +28,7 @@ pub struct FileDelta {
 }
 
 /// A commit plus its per-file deltas.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Commit {
     pub info: CommitInfo,
     pub deltas: Vec<FileDelta>,

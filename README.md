@@ -282,10 +282,32 @@ that the call belongs to the repo's maintainers, not the tool.
 
 Both `mokumokuren` and `mmk` land on `$PATH`.
 
+## Caching
+
+The first `mmk analyze` on a repository computes per-commit deltas via
+gix; that takes ~5 s on a 14k-commit JS monorepo. Every subsequent
+call reuses a per-commit cache and finishes in ~300 ms.
+
+The cache lives at the OS user cache directory, separate per repository:
+
+- **macOS**: `~/Library/Caches/mmk/<repo-id>/cache.bincode.v1`
+- **Linux**: `~/.cache/mmk/<repo-id>/cache.bincode.v1`
+- **Windows**: `%LOCALAPPDATA%\mmk\cache\<repo-id>\cache.bincode.v1`
+
+Override with `MMK_CACHE_DIR`. Inspect / clear via:
+
+```shell
+mmk cache info     # location, entry count, size
+mmk cache clear    # delete cache for the current repo
+```
+
+Nothing inside the repository tree changes — no `.gitignore` entries
+needed. CI runs are cold by default; pipelines can opt-in by caching
+the directory above (e.g. GitHub Actions `actions/cache` keyed on
+the cache path).
+
 ## Known limitations
 
-- **Single snapshot per run.** No persistence between runs beyond what
-  `mmk session --since-commit <SHA>` enables; no caching.
 - **Shallow clones are warned but not rejected.** History before the
   shallow boundary isn't analyzed; the JSON output flags it.
 - **Non-UTF8 paths are lossy.** A repository with non-UTF-8 path bytes

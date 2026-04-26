@@ -14,7 +14,9 @@ rust-version = "1.80"
 [workspace.dependencies]
 ahash = "0.8"
 anyhow = "1"
+bincode = { version = "2", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
+directories = "5"
 globset = "0.4"
 gix = { version = "0.73", default-features = false, features = [
     "revision",
@@ -25,6 +27,7 @@ humantime = "2"
 rayon = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 tempfile = "3"
 toml = "0.8"
 
@@ -56,9 +59,13 @@ too_many_lines = "allow"
 [profile.release]
 lto = "thin"
 codegen-units = 1
-strip = "symbols"
+debug = "line-tables-only"
+
+[profile.bench]
+inherits = "release"
 
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"
 lto = "thin"
+strip = "symbols"

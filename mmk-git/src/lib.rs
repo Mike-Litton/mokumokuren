@@ -9,6 +9,7 @@ use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 
 pub mod binary;
+pub mod cache;
 pub mod diff;
 pub mod loc;
 pub mod walker;
@@ -125,8 +126,39 @@ pub fn analyze(path: &Path, cfg: &Config) -> Result<AnalyzeOutput> {
 
     let bulk_limits = (cfg.bulk.max_files, cfg.bulk.max_lines);
 
+    // Persistent cache: per-commit deltas keyed by SHA. Survives across
+    // invocations; populated as gix-LCS results land. The hot path for
+    // calls 2-N is "every commit hits the cache, gix is never invoked".
+    let cache_path = cache::cache_path(walker.repo.git_dir())?;
     let t = std::time::Instant::now();
-    let raw: Vec<(Commit, diff::DiffStats)> = commit_infos
+    let mut commit_cache = cache::Cache::load(&cache_path).unwrap_or_else(|err| {
+        if trace {
+            eprintln!("[mmk] cache load failed: {err:#}; starting empty");
+        }
+        cache::Cache::empty()
+    });
+    phase("cache load", t);
+
+    // Partition commits: cached (delta lookup is free) vs missing
+    // (must run gix-LCS). The missing set is what the parallel diff
+    // phase actually has to do work for.
+    let t = std::time::Instant::now();
+    let missing: Vec<&mmk_core::types::CommitInfo> = commit_infos
+        .iter()
+        .filter(|info| !commit_cache.entries.contains_key(&info.sha))
+        .collect();
+    if trace {
+        eprintln!(
+            "[mmk] cache: {} cached / {} missing of {} commits",
+            commit_infos.len() - missing.len(),
+            missing.len(),
+            commit_infos.len(),
+        );
+    }
+    phase("cache partition", t);
+
+    let t = std::time::Instant::now();
+    let computed: Vec<(Commit, diff::DiffStats)> = missing
         .par_iter()
         .map_init(
             || -> Result<(gix::Repository, gix::diff::blob::Platform)> {
@@ -154,7 +186,7 @@ pub fn analyze(path: &Path, cfg: &Config) -> Result<AnalyzeOutput> {
                 )?;
                 Ok((
                     Commit {
-                        info: info.clone(),
+                        info: (*info).clone(),
                         deltas,
                     },
                     stats,
@@ -162,7 +194,63 @@ pub fn analyze(path: &Path, cfg: &Config) -> Result<AnalyzeOutput> {
             },
         )
         .collect::<Result<Vec<_>>>()?;
-    phase("per-commit diff", t);
+    phase("per-commit diff (missing only)", t);
+
+    // Insert freshly-computed entries into the cache.
+    for (commit, stats) in &computed {
+        commit_cache.entries.insert(
+            commit.info.sha.clone(),
+            cache::CommitDeltas {
+                deltas: commit.deltas.clone(),
+                skipped: stats.skipped,
+                bulk_filtered: stats.bulk_filtered,
+            },
+        );
+    }
+
+    // Persist if we added anything new. Atomic via tmp-rename.
+    if !computed.is_empty() {
+        let t = std::time::Instant::now();
+        if let Err(err) = commit_cache.save(&cache_path) {
+            if trace {
+                eprintln!("[mmk] cache save failed: {err:#}; continuing");
+            }
+        }
+        phase("cache save", t);
+    }
+
+    // Materialize the full result: cached entries → freshly-built
+    // (Commit, DiffStats), interleaved with the just-computed ones in
+    // commit_infos order.
+    let t = std::time::Instant::now();
+    let mut computed_by_sha: AHashMap<String, (Commit, diff::DiffStats)> = computed
+        .into_iter()
+        .map(|(c, s)| (c.info.sha.clone(), (c, s)))
+        .collect();
+    let raw: Vec<(Commit, diff::DiffStats)> = commit_infos
+        .iter()
+        .map(|info| {
+            if let Some(v) = computed_by_sha.remove(&info.sha) {
+                v
+            } else {
+                let cd = commit_cache
+                    .entries
+                    .get(&info.sha)
+                    .expect("cache hit must be present");
+                (
+                    Commit {
+                        info: info.clone(),
+                        deltas: cd.deltas.clone(),
+                    },
+                    diff::DiffStats {
+                        skipped: cd.skipped,
+                        bulk_filtered: cd.bulk_filtered,
+                    },
+                )
+            }
+        })
+        .collect();
+    phase("cache materialize", t);
 
     // Only compute LOC for paths that actually churned in the window.
     // Saves inflating tens of thousands of HEAD blobs for untouched files

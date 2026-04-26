@@ -23,6 +23,7 @@ pub fn run() -> ExitCode {
         args::Command::Analyze(a) => commands::analyze::run(&a, &mut out, &mut err),
         args::Command::Session(a) => commands::session::run(&a, &mut out, &mut err),
         args::Command::Init(a) => commands::init::run(&a, &mut out, &mut err),
+        args::Command::Cache(a) => commands::cache::run(&a, &mut out, &mut err),
     };
 
     match result {

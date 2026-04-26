@@ -23,7 +23,7 @@ use mokumokuren::args::{Cli, Command};
 use std::fs;
 use tempfile::TempDir;
 
-const SKIP_TOKENS: &[&str] = &["init"];
+const SKIP_TOKENS: &[&str] = &["init", "cache"];
 
 fn extract_shell_blocks(readme: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -105,7 +105,7 @@ fn run_cmd_against_fixture(cmd: &[String]) -> Result<(), String> {
     let result = match cli.command {
         Command::Analyze(a) => mokumokuren::commands::analyze::run(&a, &mut stdout, &mut stderr),
         Command::Session(a) => mokumokuren::commands::session::run(&a, &mut stdout, &mut stderr),
-        Command::Init(_) => unreachable!("filtered by SKIP_TOKENS"),
+        Command::Init(_) | Command::Cache(_) => unreachable!("filtered by SKIP_TOKENS"),
     };
 
     std::env::set_current_dir(orig).unwrap();

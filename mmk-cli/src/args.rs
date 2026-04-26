@@ -24,6 +24,8 @@ pub enum Command {
     Session(SessionArgs),
     /// Write a starter `mokumokuren.toml` config file.
     Init(InitArgs),
+    /// Inspect or clear the per-commit delta cache.
+    Cache(CacheArgs),
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -140,4 +142,19 @@ pub struct InitArgs {
     /// Overwrite an existing `mokumokuren.toml`.
     #[arg(long)]
     pub force: bool,
+}
+
+#[derive(Debug, Parser)]
+pub struct CacheArgs {
+    #[command(subcommand)]
+    pub command: CacheCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CacheCommand {
+    /// Print the cache location, entry count, and on-disk size for the
+    /// current repository.
+    Info,
+    /// Delete the cache for the current repository. Next `analyze` rebuilds.
+    Clear,
 }

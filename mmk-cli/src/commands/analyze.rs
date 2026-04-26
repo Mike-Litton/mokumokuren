@@ -71,10 +71,31 @@ pub fn run<O: Write, E: Write>(args: &AnalyzeArgs, stdout: &mut O, stderr: &mut 
             .unwrap_or(0)
     });
 
+    // `MMK_TRACE=1` prints per-phase wall times for the post-diff
+    // aggregation. Mirrors the gate in `mmk_git::analyze`.
+    let trace = std::env::var_os("MMK_TRACE").is_some();
+    let phase = |name: &str, t: Instant| {
+        if trace {
+            eprintln!(
+                "[mmk] {name}: {:>6.1} ms",
+                t.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+    };
+
+    let t = Instant::now();
     let weighted = mmk_core::churn::weighted_churn(&analysis.commits, now_ts, cfg.tau_seconds());
+    phase("weighted_churn", t);
+    let t = Instant::now();
     let relative = mmk_core::churn::relative_churn(&weighted, &analysis.loc);
+    phase("relative_churn", t);
+    let t = Instant::now();
     let commits_touching = mmk_core::churn::commits_touching(&analysis.commits);
+    phase("commits_touching", t);
+    let t = Instant::now();
     let last_modified = mmk_core::last_modified(&analysis.commits);
+    phase("last_modified", t);
+    let t = Instant::now();
     let mut ranked = mmk_core::hotspot::rank(
         mmk_core::hotspot::RankInputs {
             weighted: &weighted,
@@ -85,10 +106,12 @@ pub fn run<O: Write, E: Write>(args: &AnalyzeArgs, stdout: &mut O, stderr: &mut 
         },
         cfg.hotspot.top_n,
     );
+    phase("hotspot::rank", t);
 
     // Coupling: walk commits once for the top-N targets and attach the
     // top-K partners to each ranked entry. `rank()` stays cheap and
     // pure; coupling is a separate, optional pass.
+    let t = Instant::now();
     let targets: AHashSet<PathBuf> = ranked.iter().map(|e| e.path.clone()).collect();
     if !targets.is_empty() {
         let mut couples = coupling::top_couples_for(&analysis.commits, &targets, COUPLES_PER_FILE);
@@ -98,6 +121,7 @@ pub fn run<O: Write, E: Write>(args: &AnalyzeArgs, stdout: &mut O, stderr: &mut 
             }
         }
     }
+    phase("coupling::top_couples_for", t);
 
     // Optional 1-hop blast-radius lookup. Threshold is the effective
     // value resolved from CLI/TOML/default into `cfg.blast_radius`.

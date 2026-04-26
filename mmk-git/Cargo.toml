@@ -16,9 +16,13 @@ mmk-core = { path = "../mmk-core" }
 mmk-config = { path = "../mmk-config" }
 ahash = { workspace = true }
 anyhow = { workspace = true }
+bincode = { workspace = true }
+directories = { workspace = true }
 globset = { workspace = true }
 gix = { workspace = true }
 rayon = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

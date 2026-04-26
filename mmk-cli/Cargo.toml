@@ -33,6 +33,15 @@ globset = { workspace = true }
 humantime = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Optional heap profiler. Off by default; enable for diagnostic runs
+# only — `cargo build --release --features dhat-heap`. See
+# `docs/performance.md` § Measuring.
+dhat = { version = "0.3", optional = true }
+
+[features]
+# Swaps in dhat's global allocator and a Profiler that writes
+# dhat-heap.json on exit. Wired in src/bin/mmk.rs behind `cfg(feature)`.
+dhat-heap = ["dep:dhat"]
 
 [dev-dependencies]
 serde_json = { workspace = true }
