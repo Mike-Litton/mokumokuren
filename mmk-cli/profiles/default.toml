@@ -8,6 +8,10 @@
 # that apply to this repo. Patterns mokumokuren can't predict (project-
 # specific generated dirs, app-specific vendored trees, build outputs)
 # go in the same list.
+#
+# If your project is a JS/TS monorepo, `mmk init --profile js-ts`
+# ships an opinionated set of defaults derived from the v0.3 eval.
+# `--profile rust|python|go` exist for those ecosystems too.
 
 ignore = [
     # Translations — bulk localization commits aren't maintenance signal.
@@ -49,17 +53,28 @@ ignore = [
     # "**/*.umap",
 ]
 
+# `[coupling]` controls COUPLING findings emitted by `mmk review` and
+# `mmk pre-edit`. `threshold` is the minimum Jaccard a partner must
+# reach to fire as a "missed partner" warning. Default: 0.30.
+#
+# `ignore_partners` is a glob list of paths that never trigger a
+# COUPLING finding as the missed partner — useful for files that
+# legitimately co-change but shouldn't be demanded (sibling-workspace
+# manifests, generated artifacts).
+#
+# Run `mmk eval --sample 50` to measure the noise floor on this repo
+# and decide whether to raise the threshold.
+
+# [coupling]
+# threshold = 0.30
+# ignore_partners = []
+
 # `[blast_radius]` controls the 1-hop co-change neighborhood emitted
 # by `--blast-radius <PATH>`. The threshold is the minimum Jaccard a
 # partner file must reach to be included. Default: 0.10.
 #
-# A higher threshold (e.g. 0.30) shows only the strongest couplings
-# — useful for filtering merge-commit storms on busy repos. A lower
-# threshold (e.g. 0.05) surfaces faint signal — useful for early-
-# stage repos where co-change history is sparse.
-#
-# CI users typically pin this here; agents can still override per
-# call with `--blast-radius-threshold <FLOAT>`.
+# Lower than `[coupling] threshold` on purpose: blast-radius is the
+# exploratory query, where surfacing faint signal is the point.
 
 # [blast_radius]
 # threshold = 0.10

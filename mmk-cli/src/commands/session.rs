@@ -9,9 +9,15 @@ use std::time::Instant;
 
 use crate::args::{Format, SessionArgs};
 use crate::commands::analyze::COUPLES_PER_FILE;
+use crate::commands::review::verdict_for;
 use crate::output::findings::{Finding, Layer, Severity};
+use crate::Verdict;
 
-pub fn run<O: Write, E: Write>(args: &SessionArgs, stdout: &mut O, stderr: &mut E) -> Result<()> {
+pub fn run<O: Write, E: Write>(
+    args: &SessionArgs,
+    stdout: &mut O,
+    stderr: &mut E,
+) -> Result<Verdict> {
     run_session_summary(args, stdout, stderr)
 }
 
@@ -19,7 +25,7 @@ fn run_session_summary<O: Write, E: Write>(
     args: &SessionArgs,
     stdout: &mut O,
     stderr: &mut E,
-) -> Result<()> {
+) -> Result<Verdict> {
     let cwd = std::env::current_dir().context("failed to determine current directory")?;
 
     let window = humantime::parse_duration(&args.since)
@@ -263,7 +269,7 @@ fn run_session_summary<O: Write, E: Write>(
     if matches!(args.format, Format::Text) && !findings.is_empty() {
         crate::output::findings::render_text(stdout, &findings)?;
     }
-    Ok(())
+    Ok(verdict_for(args.gate, &findings))
 }
 
 fn load_config_file(

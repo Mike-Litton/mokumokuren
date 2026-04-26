@@ -1,0 +1,34 @@
+# mokumokuren.toml — JS/TS profile.
+#
+# Derived from the v0.3 eval (cal.diy, immich, n8n, vscode). Catches
+# the documented noise patterns: workspace-package.json constellation,
+# lockfile bulk rewrites, generated artifacts, build/release config.
+
+ignore = [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/.next/**",
+    "**/coverage/**",
+    "**/*.generated.*",
+    "**/*.d.ts",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+]
+
+[coupling]
+threshold = 0.30
+ignore_partners = [
+    "**/package.json",
+    "**/*-lock.json",
+    "**/*-lock.yaml",
+    "**/.yarnrc*",
+    "**/Fastfile",
+    "**/pubspec.yaml",
+    "**/openapi*.json",
+    "**/*.generated.*",
+]
+
+[blast_radius]
+threshold = 0.10

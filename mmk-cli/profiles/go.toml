@@ -1,0 +1,11 @@
+# mokumokuren.toml — Go profile.
+
+ignore = [
+    "vendor/**",
+    "go.sum",
+    "**/*.pb.go",
+    "**/*_gen.go",
+]
+
+[coupling]
+threshold = 0.30

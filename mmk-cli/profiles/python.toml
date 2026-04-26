@@ -1,0 +1,18 @@
+# mokumokuren.toml — Python profile.
+
+ignore = [
+    "**/__pycache__/**",
+    "**/*.pyc",
+    "**/.venv/**",
+    "**/venv/**",
+    "**/.tox/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/*.egg-info/**",
+    "poetry.lock",
+    "Pipfile.lock",
+    "uv.lock",
+]
+
+[coupling]
+threshold = 0.30

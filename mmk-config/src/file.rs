@@ -22,6 +22,10 @@ pub struct ConfigFile {
     /// default ([`crate::DEFAULT_BLAST_RADIUS_THRESHOLD`]).
     #[serde(default)]
     pub blast_radius: Option<BlastRadiusFile>,
+    /// Optional `[coupling]` block. Absent → use the in-code
+    /// default ([`crate::DEFAULT_COUPLING_THRESHOLD`], no ignored partners).
+    #[serde(default)]
+    pub coupling: Option<CouplingFile>,
 }
 
 /// `[blast_radius]` block in `mokumokuren.toml`.
@@ -29,6 +33,17 @@ pub struct ConfigFile {
 #[serde(deny_unknown_fields)]
 pub struct BlastRadiusFile {
     pub threshold: f64,
+}
+
+/// `[coupling]` block in `mokumokuren.toml`. Both fields are optional
+/// so users can pin only what they care about.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CouplingFile {
+    #[serde(default)]
+    pub threshold: Option<f64>,
+    #[serde(default)]
+    pub ignore_partners: Vec<String>,
 }
 
 impl ConfigFile {

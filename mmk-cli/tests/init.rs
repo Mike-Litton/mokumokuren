@@ -29,7 +29,13 @@ fn run_init_in(dir: &Path, args: InitArgs) -> (Result<(), anyhow::Error>, Vec<u8
 #[test]
 fn init_creates_mokumokuren_toml_in_cwd() {
     let dir = TempDir::new().unwrap();
-    let (res, stdout, _) = run_init_in(dir.path(), InitArgs { force: false });
+    let (res, stdout, _) = run_init_in(
+        dir.path(),
+        InitArgs {
+            force: false,
+            profile: None,
+        },
+    );
     res.expect("init should succeed");
 
     let target = dir.path().join("mokumokuren.toml");
@@ -44,7 +50,13 @@ fn init_creates_mokumokuren_toml_in_cwd() {
 #[test]
 fn init_output_parses_as_a_valid_config_file() {
     let dir = TempDir::new().unwrap();
-    let (res, _, _) = run_init_in(dir.path(), InitArgs { force: false });
+    let (res, _, _) = run_init_in(
+        dir.path(),
+        InitArgs {
+            force: false,
+            profile: None,
+        },
+    );
     res.expect("init");
     let path = dir.path().join("mokumokuren.toml");
     let cfg =
@@ -61,7 +73,13 @@ fn init_output_parses_as_a_valid_config_file() {
 #[test]
 fn init_starter_mentions_common_ecosystem_patterns() {
     let dir = TempDir::new().unwrap();
-    let (res, _, _) = run_init_in(dir.path(), InitArgs { force: false });
+    let (res, _, _) = run_init_in(
+        dir.path(),
+        InitArgs {
+            force: false,
+            profile: None,
+        },
+    );
     res.expect("init");
     let body = std::fs::read_to_string(dir.path().join("mokumokuren.toml")).unwrap();
     // Don't pin exact wording — pin that each common case shows up so
@@ -91,7 +109,13 @@ fn init_refuses_to_overwrite_without_force() {
     )
     .unwrap();
 
-    let (res, _, _) = run_init_in(dir.path(), InitArgs { force: false });
+    let (res, _, _) = run_init_in(
+        dir.path(),
+        InitArgs {
+            force: false,
+            profile: None,
+        },
+    );
     let err = res.expect_err("should refuse to clobber");
     let msg = format!("{err:#}");
     assert!(
@@ -105,6 +129,68 @@ fn init_refuses_to_overwrite_without_force() {
 }
 
 #[test]
+fn init_with_js_ts_profile_writes_expected_keys() {
+    let dir = TempDir::new().unwrap();
+    let (res, _, _) = run_init_in(
+        dir.path(),
+        InitArgs {
+            force: false,
+            profile: Some("js-ts".into()),
+        },
+    );
+    res.expect("js-ts profile should write");
+    let body = std::fs::read_to_string(dir.path().join("mokumokuren.toml")).unwrap();
+    // Snapshot-style: pin signal patterns derived from the v0.3 eval
+    // so a regression in the profile content fails this test.
+    for needle in [
+        "node_modules",
+        "**/package.json",
+        "**/Fastfile",
+        "[coupling]",
+        "threshold = 0.30",
+    ] {
+        assert!(
+            body.contains(needle),
+            "js-ts profile missing {needle:?}; body was:\n{body}"
+        );
+    }
+}
+
+#[test]
+fn init_with_rust_profile_writes_minimal_config() {
+    let dir = TempDir::new().unwrap();
+    let (res, _, _) = run_init_in(
+        dir.path(),
+        InitArgs {
+            force: false,
+            profile: Some("rust".into()),
+        },
+    );
+    res.expect("rust profile should write");
+    let body = std::fs::read_to_string(dir.path().join("mokumokuren.toml")).unwrap();
+    assert!(body.contains("Cargo.lock"));
+    assert!(body.contains("[coupling]"));
+}
+
+#[test]
+fn init_unknown_profile_is_an_error() {
+    let dir = TempDir::new().unwrap();
+    let (res, _, _) = run_init_in(
+        dir.path(),
+        InitArgs {
+            force: false,
+            profile: Some("not-a-real-profile".into()),
+        },
+    );
+    let err = res.expect_err("unknown profile must error");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("not-a-real-profile") && msg.contains("js-ts"),
+        "error should name the bad profile and list available ones: {msg}"
+    );
+}
+
+#[test]
 fn init_force_overwrites_existing_file() {
     let dir = TempDir::new().unwrap();
     std::fs::write(
@@ -113,7 +199,13 @@ fn init_force_overwrites_existing_file() {
     )
     .unwrap();
 
-    let (res, _, _) = run_init_in(dir.path(), InitArgs { force: true });
+    let (res, _, _) = run_init_in(
+        dir.path(),
+        InitArgs {
+            force: true,
+            profile: None,
+        },
+    );
     res.expect("--force should succeed");
     let body = std::fs::read_to_string(dir.path().join("mokumokuren.toml")).unwrap();
     assert!(

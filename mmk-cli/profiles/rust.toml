@@ -1,0 +1,9 @@
+# mokumokuren.toml — Rust profile.
+
+ignore = [
+    "Cargo.lock",
+    "target/**",
+]
+
+[coupling]
+threshold = 0.30

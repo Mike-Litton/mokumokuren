@@ -23,7 +23,7 @@ use mokumokuren::args::{Cli, Command};
 use std::fs;
 use tempfile::TempDir;
 
-const SKIP_TOKENS: &[&str] = &["init", "cache"];
+const SKIP_TOKENS: &[&str] = &["init", "cache", "eval"];
 
 fn extract_shell_blocks(readme: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -102,15 +102,21 @@ fn run_cmd_against_fixture(cmd: &[String]) -> Result<(), String> {
 
     let mut stdout: Vec<u8> = Vec::new();
     let mut stderr: Vec<u8> = Vec::new();
-    let result = match cli.command {
+    let result: anyhow::Result<()> = match cli.command {
         Command::Analyze(a) => mokumokuren::commands::analyze::run(&a, &mut stdout, &mut stderr),
         Command::SessionSummary(a) => {
-            mokumokuren::commands::session::run(&a, &mut stdout, &mut stderr)
+            mokumokuren::commands::session::run(&a, &mut stdout, &mut stderr).map(|_| ())
         }
-        Command::Review(a) => mokumokuren::commands::review::run(&a, &mut stdout, &mut stderr),
-        Command::PreEdit(a) => mokumokuren::commands::pre_edit::run(&a, &mut stdout, &mut stderr),
+        Command::Review(a) => {
+            mokumokuren::commands::review::run(&a, &mut stdout, &mut stderr).map(|_| ())
+        }
+        Command::PreEdit(a) => {
+            mokumokuren::commands::pre_edit::run(&a, &mut stdout, &mut stderr).map(|_| ())
+        }
         Command::Drift(a) => mokumokuren::commands::drift::run(&a, &mut stdout, &mut stderr),
-        Command::Init(_) | Command::Cache(_) => unreachable!("filtered by SKIP_TOKENS"),
+        Command::Init(_) | Command::Eval(_) | Command::Cache(_) => {
+            unreachable!("filtered by SKIP_TOKENS")
+        }
     };
 
     std::env::set_current_dir(orig).unwrap();

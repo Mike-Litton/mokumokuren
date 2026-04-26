@@ -272,6 +272,7 @@ fn session_args() -> SessionArgs {
         blast_radius: None,
         blast_radius_threshold: None,
         drift_sessions: 0,
+        gate: mokumokuren::args::Gate::None,
     }
 }
 
@@ -442,7 +443,9 @@ fn schema_review_shape_with_changes() {
         ignores: Vec::new(),
         config: None,
         verbose: false,
+        coupling_threshold: None,
         blast_radius_threshold: None,
+        gate: mokumokuren::args::Gate::None,
     };
     let stdout = run_review_in(dir.path(), args);
     let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
@@ -501,7 +504,9 @@ fn schema_review_clean_tree_minimal_envelope() {
         ignores: Vec::new(),
         config: None,
         verbose: false,
+        coupling_threshold: None,
         blast_radius_threshold: None,
+        gate: mokumokuren::args::Gate::None,
     };
     let stdout = run_review_in(dir.path(), args);
     let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
@@ -531,8 +536,10 @@ fn schema_pre_edit_shape() {
         ignores: Vec::new(),
         config: None,
         verbose: false,
+        coupling_threshold: None,
         blast_radius_threshold: None,
         drift_sessions: 0,
+        gate: mokumokuren::args::Gate::None,
     };
     let stdout = run_pre_edit_in(dir.path(), args);
     let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");

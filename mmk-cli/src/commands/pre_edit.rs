@@ -17,9 +17,15 @@ use std::time::Instant;
 
 use crate::args::{Format, PreEditArgs};
 use crate::commands::analyze::COUPLES_PER_FILE;
+use crate::commands::review::{build_partner_globset, verdict_for};
 use crate::output::findings::{render_text, Finding, Layer, Severity};
+use crate::Verdict;
 
-pub fn run<O: Write, E: Write>(args: &PreEditArgs, stdout: &mut O, stderr: &mut E) -> Result<()> {
+pub fn run<O: Write, E: Write>(
+    args: &PreEditArgs,
+    stdout: &mut O,
+    stderr: &mut E,
+) -> Result<Verdict> {
     let cwd = std::env::current_dir().context("failed to determine current directory")?;
 
     let window = humantime::parse_duration(&args.since)
@@ -38,8 +44,16 @@ pub fn run<O: Write, E: Write>(args: &PreEditArgs, stdout: &mut O, stderr: &mut 
     if let Some(file_br) = file_cfg.blast_radius.as_ref() {
         cfg.blast_radius.threshold = file_br.threshold;
     }
-    if let Some(t) = args.blast_radius_threshold {
-        cfg.blast_radius.threshold = t;
+    if let Some(file_cp) = file_cfg.coupling.as_ref() {
+        if let Some(t) = file_cp.threshold {
+            cfg.coupling.threshold = t;
+        }
+        if !file_cp.ignore_partners.is_empty() {
+            cfg.coupling.ignore_partners = file_cp.ignore_partners.clone();
+        }
+    }
+    if let Some(t) = args.coupling_threshold.or(args.blast_radius_threshold) {
+        cfg.coupling.threshold = t;
     }
 
     let started = Instant::now();
@@ -134,7 +148,7 @@ pub fn run<O: Write, E: Write>(args: &PreEditArgs, stdout: &mut O, stderr: &mut 
             &cfg,
         )?,
     }
-    Ok(())
+    Ok(verdict_for(args.gate, &findings))
 }
 
 fn compute_findings(
@@ -171,20 +185,28 @@ fn compute_findings(
     targets.insert(target.to_path_buf());
     let mut couples = coupling::top_couples_for(commits, &targets, COUPLES_PER_FILE);
     if let Some(partners) = couples.remove(target) {
-        let threshold = cfg.blast_radius.threshold;
+        let threshold = cfg.coupling.threshold;
+        let ignore_set = build_partner_globset(&cfg.coupling.ignore_partners);
         for p in partners {
-            if p.jaccard >= threshold {
-                findings.push(Finding::new(
-                    Layer::Coupling,
-                    Severity::Info,
-                    format!(
-                        "{} historically co-changes with {} (jaccard {:.2})",
-                        target.display(),
-                        p.partner.display(),
-                        p.jaccard
-                    ),
-                ));
+            if p.jaccard < threshold {
+                continue;
             }
+            if ignore_set
+                .as_ref()
+                .is_some_and(|set| set.is_match(&p.partner))
+            {
+                continue;
+            }
+            findings.push(Finding::new(
+                Layer::Coupling,
+                Severity::Info,
+                format!(
+                    "{} historically co-changes with {} (jaccard {:.2})",
+                    target.display(),
+                    p.partner.display(),
+                    p.jaccard
+                ),
+            ));
         }
     }
 

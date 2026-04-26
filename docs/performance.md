@@ -59,6 +59,27 @@ A PreToolUse + PostToolUse pair on the largest fixture is now
 JSON output is byte-identical to the cold-path baseline; the caches
 only change timing.
 
+## `mmk drift` — boundary-walk short-circuit
+
+Drift takes K snapshots, each calling `analyze_at(anchor_oid)`. Even
+warm, drift was paying ~1.1 s on vscode regardless of K because
+`walker::find_session_boundaries` ran a full HEAD revwalk with no
+committer-time cutoff — ~150 k commits walked just to grab the K most
+recent merges. The fix breaks the loop as soon as `merges.len() >= k`
+(the linear-chunk fallback only fires when fewer than K merges exist,
+in which case `all` is still complete because we never break early).
+
+| repo    | drift cold | drift warm |
+| ------- | ---------: | ---------: |
+| immich  |      1.04s |      0.13s |
+| cal.diy |      1.12s |      0.17s |
+| n8n     |      3.07s |      0.21s |
+| vscode  |      6.52s |      0.37s |
+
+Vscode warm drift dropped 4×. Per-snapshot `analyze_at` cost is now
+~50 ms warm; ~28 ms of that is `loc (touched only)` (the same phase
+that dominates `mmk analyze` warm — see "Round-3 candidates" below).
+
 ## Measuring
 
 | Tool         | Command                                                           |
@@ -112,8 +133,24 @@ the cross-compiled release artefacts pay the fat-LTO build cost.
 
 Deliberately *not* set:
 - `target-cpu=native` — non-portable, useful only for local benching.
-  Whether to add a `target-cpu=x86-64-v3` matrix to `[profile.dist]`
-  is a Compiler-Explorer / measurement question, not a default flip.
+- `target-cpu=x86-64-v3` — inspected on the four kernels the round-2
+  plan flagged (`is_binary`, `bytecount_nl`, `bstr_to_pathbuf`, the
+  coupling inner loop). Findings:
+  - `is_binary` calls `core::slice::memchr::memchr_aligned` OOL; std
+    runtime-detects AVX2 already.
+  - `bytecount_nl` autovectorizes to wide SIMD on baseline (NEON/SSE2,
+    16-byte). AVX2 (256-bit) would 1.5-2× the inner loop, but total
+    cost is ~30 ms warm vscode for *all* `count_lines` calls combined.
+  - `bstr_to_pathbuf` bottleneck is allocation + std's scalar
+    `from_utf8`. AVX2 doesn't unlock anything; the real SIMD win
+    requires the `simdutf8` crate (runtime-dispatched, no profile
+    change needed).
+  - Coupling inner loop is hashmap-bound (CLMUL is baseline x86-64
+    since Westmere/2010) + `PathBuf` allocation. Branch- and
+    pointer-chasing-bound, not autovectorizable.
+  Estimated wall-time win on shipped binaries: ~10-15 ms warm vscode
+  best case, traded for dropping pre-Haswell (2013) CPU support. Not
+  worth the portability cost. Don't redo without new evidence.
 - `mimalloc` / `jemalloc` — DHAT shows the hot allocator is gix's
   blob cache; swap won't help until gix's path is bypassed.
 
@@ -178,28 +215,52 @@ latency.
 
 ## Deferred — round 3 candidates
 
-**`imara-diff` direct, inside gix's filtered-blob pipeline.** The
-warm path is now bounded by `loc (touched only)` (~28 ms vscode)
-plus aggregation (~30 ms vscode). The cold-path bottleneck — gix
-LCS — only fires on first-call-per-repo. Worth attacking only if
-cold latency becomes a felt concern (e.g. CI, or a repo with a much
-higher commit-churn rate than the current fixtures).
+Ranked by ms-saved-per-effort on the warm path. After round 2 +
+drift, vscode warm `mmk analyze` is ~80 ms; the per-phase headroom is:
+
+| phase                          | warm vscode | candidate | est. saving |
+| ------------------------------ | ----------: | --------- | ----------: |
+| `loc (touched only)`           |       28 ms | content-addressed `(blob_oid) → loc` cache | ~25 ms |
+| `coupling::top_couples_for`    |       13 ms | path interning (PathId integers) in the inner loop | ~8 ms |
+| `mmk review` git-diff subprocess |     30 ms | replace with gix `index → tree` diff | ~25 ms |
+| `cache materialize`            |        4 ms | borrow cached deltas instead of cloning | ~2 ms |
+| aggregation total              |       10 ms | hygiene; capped by Amdahl | ~3 ms |
+
+**Content-addressed LOC cache.** The biggest single warm-path win.
+Key on `blob_oid` only (not `(commit_sha, blob_oid)`) — line count is
+a property of the blob bytes, identical across every commit that
+references that blob. Fits in the existing `<repo-id>/loc.bincode.v1`
+shape. Benefits drift snapshots too (each snapshot pays the same
+~28 ms loc phase today).
+
+**Path interning in coupling.** `pair_counts` is keyed by
+`(PathBuf, PathBuf)`; on vscode the inner loop allocates millions of
+`PathBuf` clones. Intern paths to `u32` IDs at the entry to
+`top_couples_for`, key by `(u32, u32)`, materialize the original
+`PathBuf` only at finalisation. Round-2 path interning was rejected
+for the *aggregation* maps (capped at 0.6 % wall); coupling is a
+distinct site with much higher allocation pressure.
+
+**`mmk review` subprocess swap.** `Command::new("git").arg("diff")
+.arg("--numstat")` in `commands/review.rs` is ~30 ms warm just for
+process fork + binary load + parse. gix can produce the same numstat
+via `repo.index_to_tree_diff` or equivalent. Drops review warm vscode
+~25 ms, putting it below `pre-edit`.
+
+**`imara-diff` direct, inside gix's filtered-blob pipeline.** Cold-
+path attack: gix LCS is still 95 % of cold wall, ~4.7 s on vscode
+cold. Worth doing only if cold latency becomes a felt concern (CI,
+much-higher-churn repos than the current fixtures).
 
 **Cache sharding by hash prefix** (Astral uv pattern). Premature
 until 100k-commit-class repos appear in our fixture set. Today's
 single-file caches deserialise in <5 ms even for vscode.
 
-**LOC-at-HEAD cache for the touched-blob set.** The remaining ~28 ms
-warm vscode is per-blob inflation in `loc::count_loc`. Caching this
-is keyed by `(commit_sha, touched_paths_hash)` — but `touched_paths`
-is the dynamic output of cache materialisation, so the key is
-expensive to compute. Likely better to cache by individual
-`(commit_sha, blob_oid) → loc` pairs, i.e. a content-addressed LOC
-table.
-
-**`bytecount` for `count_lines`** — burntsushi himself notes ~10–
-20 ms cold against a 5 s LCS dominator; noise-tier. Reconsider once
-LCS itself is no longer dominant.
+**`bytecount` / `simdutf8` runtime-dispatched SIMD.** Drop-in
+replacements for `bytes.iter().filter(==b'\n').count()` and
+`String::from_utf8_lossy` respectively. Both runtime-detect features.
+Estimated ~5-10 ms warm vscode combined; below the LOC cache and
+coupling interning by an order of magnitude.
 
 **Salsa / turbo-tasks query engine.** matklad's *Against query-based
 compilers* (2026-02) argues this exact case: linear non-reactive

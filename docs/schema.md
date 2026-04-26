@@ -15,6 +15,7 @@ Subcommands at v0.3.0:
   tree by default; `--staged`, `--range A..B`, `--commit <SHA>`).
 - `mmk pre-edit <PATH>` — historical context for a path before edit.
 - `mmk drift --sessions K` — climb signal across K session boundaries.
+- `mmk eval --sample N` — sampled noise-floor report (adoption tool).
 
 ## Stability contract
 
@@ -118,6 +119,25 @@ ranking answers "what shifted while the agent was working?"
 | `churn_of_churn`     | array    | `[{ "path": string, "ratio": float }]`. Symmetric thrash ratio in `[0, 1]`.    |
 | `commit_entropy`     | float    | Shannon entropy of files-touched-per-commit, normalized by `log(commits)`.     |
 
+### `config` (effective configuration echo)
+
+The `config` block is the merged in-memory `Config` after applying
+`mokumokuren.toml`, profile, and CLI overrides. Consumers can read
+it to understand exactly what produced the result.
+
+| Field                          | Type     | Notes                                                        |
+| ------------------------------ | -------- | ------------------------------------------------------------ |
+| `window.days`                  | uint     | Effective `--since` in days.                                 |
+| `window.tau_days`              | uint     | Recency-decay 1/e point.                                     |
+| `hotspot.top_n`                | uint     | Effective `--top`.                                           |
+| `bulk.max_files`               | uint     | Bulk-filter file threshold.                                  |
+| `bulk.max_lines`               | uint     | Bulk-filter line threshold.                                  |
+| `blast_radius.threshold`       | float    | Min Jaccard for `--blast-radius` neighborhood.               |
+| `coupling.threshold`           | float    | Min Jaccard for review/pre-edit COUPLING findings (default 0.30). |
+| `coupling.ignore_partners`     | string[] | Globs that never fire as the missed partner in COUPLING.     |
+| `rename_similarity`            | float    | Diff-engine rename threshold.                                |
+| `ignores`                      | string[] | Final ignore globs after merging file + CLI sources.         |
+
 ### `blast_radius` (present when `--blast-radius <PATH>` is set)
 
 | Field       | Type     | Notes                                                       |
@@ -154,6 +174,24 @@ and emits findings before any commit lands.
 | `diff.lines_deleted`   | uint   |                                                                                |
 | `diff.files[]`         | array  | `[{ "path": string, "added": uint, "deleted": uint }]`. Binary files omitted. |
 
+#### `mmk review` bulk-self-filter envelope
+
+When the input diff itself trips `bulk.max_files` or
+`bulk.max_lines`, review skips the (expensive) hotspot/coupling
+analysis and emits a slimmer envelope:
+
+| Field            | Type    | Notes                                                            |
+| ---------------- | ------- | ---------------------------------------------------------------- |
+| `schema_version` | string  | `"0.3.0"`.                                                       |
+| `crate_version`  | string  |                                                                  |
+| `review`         | object  | `mode` + per-file diff numstat.                                  |
+| `findings`       | array   | One BUDGET finding describing the trip; HOTSPOT/COUPLING skipped. |
+| `duration_ms`    | uint    | Wall time (no analyze ran).                                      |
+
+The clean-tree envelope (no diff) keeps its existing shape:
+`schema_version`, `crate_version`, `review` with empty `diff.files`,
+empty `findings`.
+
 ### `mmk pre-edit`
 
 Pre-edit context: rank, expected partners, optional drift for the
@@ -168,6 +206,22 @@ queried path.
 | `analysis`       | object  |                                                                                        |
 | `pre_edit.path`  | string  | Echo of the queried path.                                                              |
 | `findings`       | array   | HOTSPOT (Warn), COUPLING (Info), DRIFT (Warn, when `--drift-sessions K > 0`).          |
+
+### `mmk eval`
+
+Aggregated noise-floor report from sampling N recent commits. Built
+for `mmk eval --sample N`; not on the agent edit-loop hot path.
+
+| Field                  | Type     | Notes                                                              |
+| ---------------------- | -------- | ------------------------------------------------------------------ |
+| `commits_sampled`      | uint     | Number of non-merge commits actually sampled.                      |
+| `commits_with_findings`| uint     | Of those, how many fired at least one finding.                     |
+| `total_findings`       | uint     | Sum of findings across the sample.                                 |
+| `by_layer`             | object   | `{layer: count}` over `hotspot`, `coupling`, `drift`, `budget`, ...|
+| `noisy_partners`       | object   | `{path: count}` — partner paths most often blamed in COUPLING.    |
+| `jaccard_buckets`      | object   | `{ "0.10-0.30": uint, "0.30-0.50": uint, "0.50+": uint }`.        |
+| `threshold`            | float    | Effective `[coupling] threshold` for context.                      |
+| `duration_ms`          | uint     |                                                                    |
 
 ### `mmk drift`
 

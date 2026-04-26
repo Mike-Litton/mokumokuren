@@ -558,6 +558,63 @@ pub(crate) fn write_drift<W: Write>(
     Ok(())
 }
 
+#[derive(Serialize)]
+struct ReviewBulkReport<'a> {
+    schema_version: &'static str,
+    crate_version: &'static str,
+    review: ReviewBlock<'a>,
+    findings: &'a [crate::output::findings::Finding],
+    duration_ms: u64,
+}
+
+/// `mmk review` envelope for the bulk-self-filter path: the input
+/// diff itself tripped `bulk.max_files` / `max_lines`, so HOTSPOT and
+/// COUPLING were intentionally suppressed. Emits the diff numstat +
+/// the single BUDGET finding without paying the analyze cost.
+pub(crate) fn write_review_bulk<W: Write>(
+    w: &mut W,
+    mode: crate::commands::review::ReviewMode,
+    changed: &[crate::commands::review::ChangedFile],
+    findings: &[crate::output::findings::Finding],
+    duration_ms: u64,
+) -> Result<()> {
+    let path_strs: Vec<String> = changed
+        .iter()
+        .map(|c| c.path.to_string_lossy().into_owned())
+        .collect();
+    let files: Vec<ReviewDiffFile<'_>> = changed
+        .iter()
+        .zip(path_strs.iter())
+        .map(|(c, s)| ReviewDiffFile {
+            path: s.as_str(),
+            added: c.added,
+            deleted: c.deleted,
+        })
+        .collect();
+    let lines_added: u64 = changed.iter().map(|c| c.added).sum();
+    let lines_deleted: u64 = changed.iter().map(|c| c.deleted).sum();
+
+    let report = ReviewBulkReport {
+        schema_version: crate::output::schema::SCHEMA_VERSION,
+        crate_version: env!("CARGO_PKG_VERSION"),
+        review: ReviewBlock {
+            mode: mode.as_str(),
+            diff: ReviewDiffBlock {
+                files_changed: u32::try_from(changed.len()).unwrap_or(u32::MAX),
+                lines_added,
+                lines_deleted,
+                files,
+            },
+        },
+        findings,
+        duration_ms,
+    };
+
+    serde_json::to_writer_pretty(&mut *w, &report)?;
+    writeln!(w)?;
+    Ok(())
+}
+
 /// Minimal `mmk review` envelope for the clean-tree / no-op-range
 /// case: skips `repo`/`config`/`analysis` (we didn't run analyze)
 /// and emits `findings: []`. Lets a hook see the same top-level

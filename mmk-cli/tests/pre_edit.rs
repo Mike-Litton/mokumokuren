@@ -7,7 +7,7 @@
 mod common;
 
 use common::{build_coupling_fixture, commit_all, init_repo, write, CWD_LOCK, DAY};
-use mokumokuren::args::{Format, PreEditArgs};
+use mokumokuren::args::{Format, Gate, PreEditArgs};
 use serde_json::Value;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -21,8 +21,10 @@ fn pre_edit_args(path: &str) -> PreEditArgs {
         ignores: Vec::new(),
         config: None,
         verbose: false,
+        coupling_threshold: None,
         blast_radius_threshold: None,
         drift_sessions: 0,
+        gate: Gate::None,
     }
 }
 

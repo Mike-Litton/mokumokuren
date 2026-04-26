@@ -42,6 +42,10 @@ pub enum Command {
     Drift(DriftArgs),
     /// Write a starter `mokumokuren.toml` config file.
     Init(InitArgs),
+    /// Sample recent commits, run `mmk review` against each, and emit
+    /// a noise-floor report. Lets a new user calibrate
+    /// `[coupling] threshold` and `ignore_partners` for their repo.
+    Eval(EvalArgs),
     /// Inspect or clear the per-commit delta cache.
     Cache(CacheArgs),
 }
@@ -159,6 +163,10 @@ pub struct SessionArgs {
     /// end-of-session view.
     #[arg(long = "drift-sessions", value_name = "K", default_value_t = 0)]
     pub drift_sessions: usize,
+
+    /// Exit-code policy (see `mmk review --help`).
+    #[arg(long, value_enum, default_value_t = Gate::None)]
+    pub gate: Gate,
 }
 
 #[derive(Debug, Parser)]
@@ -204,10 +212,30 @@ pub struct ReviewArgs {
     #[arg(short, long)]
     pub verbose: bool,
 
-    /// Override the Jaccard threshold for COUPLING findings (default
-    /// 0.10, also overridable via `mokumokuren.toml`).
-    #[arg(long = "blast-radius-threshold", value_name = "FLOAT")]
+    /// Override the Jaccard threshold for COUPLING findings.
+    /// Falls back to `[coupling] threshold` in `mokumokuren.toml`,
+    /// then to the built-in default (0.30).
+    #[arg(long = "coupling-threshold", value_name = "FLOAT")]
+    pub coupling_threshold: Option<f64>,
+
+    /// Deprecated alias for `--coupling-threshold`. Kept so existing
+    /// CLI invocations don't break; users should migrate to
+    /// `--coupling-threshold`.
+    #[arg(long = "blast-radius-threshold", value_name = "FLOAT", hide = true)]
     pub blast_radius_threshold: Option<f64>,
+
+    /// Exit-code policy. `none` (default) always exits 0 unless mmk
+    /// itself errors. `warn` exits 1 if any warn-severity finding
+    /// fires; `error` exits 1 if any error-severity finding fires.
+    #[arg(long, value_enum, default_value_t = Gate::None)]
+    pub gate: Gate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Gate {
+    None,
+    Warn,
+    Error,
 }
 
 #[derive(Debug, Parser)]
@@ -243,7 +271,14 @@ pub struct PreEditArgs {
     pub verbose: bool,
 
     /// Override the Jaccard threshold for COUPLING findings.
-    #[arg(long = "blast-radius-threshold", value_name = "FLOAT")]
+    /// Falls back to `[coupling] threshold` in `mokumokuren.toml`,
+    /// then to the built-in default (0.30).
+    #[arg(long = "coupling-threshold", value_name = "FLOAT")]
+    pub coupling_threshold: Option<f64>,
+
+    /// Deprecated alias for `--coupling-threshold`. Kept so existing
+    /// CLI invocations don't break.
+    #[arg(long = "blast-radius-threshold", value_name = "FLOAT", hide = true)]
     pub blast_radius_threshold: Option<f64>,
 
     /// Number of recent sessions to inspect for DRIFT findings.
@@ -252,6 +287,10 @@ pub struct PreEditArgs {
     /// `mmk drift` default.
     #[arg(long = "drift-sessions", value_name = "K", default_value_t = 0)]
     pub drift_sessions: usize,
+
+    /// Exit-code policy (see `mmk review --help`).
+    #[arg(long, value_enum, default_value_t = Gate::None)]
+    pub gate: Gate,
 }
 
 #[derive(Debug, Parser)]
@@ -299,6 +338,41 @@ pub struct InitArgs {
     /// Overwrite an existing `mokumokuren.toml`.
     #[arg(long)]
     pub force: bool,
+
+    /// Bundled profile to write. Default = the generic starter
+    /// (no opinionated ignores). `js-ts`, `rust`, `python`, `go`
+    /// ship ecosystem-specific defaults derived from the v0.3 eval.
+    #[arg(long, value_name = "NAME")]
+    pub profile: Option<String>,
+}
+
+#[derive(Debug, Parser)]
+pub struct EvalArgs {
+    /// Number of recent (non-merge) commits to sample.
+    #[arg(long, default_value_t = 50)]
+    pub sample: usize,
+
+    /// Window for the historical baseline used by each `mmk review`
+    /// invocation. Same semantics as `mmk review --since`.
+    #[arg(long, default_value = "180days")]
+    pub since: String,
+
+    /// Top-N hotspot threshold passed to each underlying review.
+    #[arg(long, default_value_t = 20)]
+    pub top: usize,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = Format::Text)]
+    pub format: Format,
+
+    /// Path to a config file. Defaults to `mokumokuren.toml` at the
+    /// repo root if present.
+    #[arg(long, value_name = "PATH")]
+    pub config: Option<PathBuf>,
+
+    /// Print extra progress on stderr.
+    #[arg(short, long)]
+    pub verbose: bool,
 }
 
 #[derive(Debug, Parser)]

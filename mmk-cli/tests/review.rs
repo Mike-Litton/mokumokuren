@@ -9,7 +9,7 @@
 mod common;
 
 use common::{build_coupling_fixture, commit_all, init_repo, write, CWD_LOCK, DAY};
-use mokumokuren::args::{Format, ReviewArgs};
+use mokumokuren::args::{Format, Gate, ReviewArgs};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -24,7 +24,9 @@ fn review_args() -> ReviewArgs {
         ignores: Vec::new(),
         config: None,
         verbose: false,
+        coupling_threshold: None,
         blast_radius_threshold: None,
+        gate: Gate::None,
     }
 }
 
@@ -40,6 +42,23 @@ fn run_in(repo: &std::path::Path, args: ReviewArgs) -> (Vec<u8>, Vec<u8>) {
     std::env::set_current_dir(orig).unwrap();
     res.expect("review should succeed on fixture");
     (stdout, stderr)
+}
+
+fn run_in_with_verdict(
+    repo: &std::path::Path,
+    args: ReviewArgs,
+) -> (Vec<u8>, mokumokuren::Verdict) {
+    let _g = CWD_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let orig = std::env::current_dir().unwrap();
+    std::env::set_current_dir(repo).unwrap();
+    let mut stdout: Vec<u8> = Vec::new();
+    let mut stderr: Vec<u8> = Vec::new();
+    let verdict =
+        mokumokuren::commands::review::run(&args, &mut stdout, &mut stderr).expect("review");
+    std::env::set_current_dir(orig).unwrap();
+    (stdout, verdict)
 }
 
 #[test]
@@ -240,6 +259,139 @@ fn review_range_uses_committed_diff() {
         r["review"]["diff"]["files"], c["review"]["diff"]["files"],
         "--range parent..head and --commit head must produce identical diff.files"
     );
+}
+
+#[test]
+fn review_self_throttles_on_bulk_diff() {
+    // §1c: when the input diff itself trips bulk thresholds, review
+    // emits exactly one BUDGET finding and skips HOTSPOT/COUPLING. The
+    // alternative (running coupling against a vendored snapshot) is
+    // what produced the cal.diy 257-finding storm in the eval.
+    use std::fmt::Write as _;
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_coupling_fixture(dir.path(), now);
+
+    // Edit core/a.rs (which has a known partner core/b.rs) AND drop a
+    // huge unrelated commit-sized blob. If self-filter works, the
+    // would-be COUPLING finding for core/b.rs is suppressed because
+    // the diff itself blew past bulk thresholds.
+    let mut huge = String::with_capacity(6000 * 8);
+    for i in 0..6000 {
+        writeln!(huge, "line{i}").unwrap();
+    }
+    write(dir.path(), "core/a.rs", &huge);
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let findings = v["findings"].as_array().expect("findings array");
+    let layers: Vec<&str> = findings
+        .iter()
+        .map(|f| f["layer"].as_str().unwrap_or(""))
+        .collect();
+    assert!(
+        layers.iter().all(|l| *l == "budget"),
+        "bulk-self-filter must suppress non-budget findings; got layers: {layers:?}"
+    );
+    assert!(
+        !layers.is_empty(),
+        "must still emit at least one BUDGET finding; got: {findings:?}"
+    );
+}
+
+#[test]
+fn review_respects_coupling_threshold() {
+    // §1a: --coupling-threshold above jaccard(a,b)=0.75 must suppress
+    // the would-be COUPLING finding for core/b.rs.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_coupling_fixture(dir.path(), now);
+    write(dir.path(), "core/a.rs", "a1\na2\na3\na4\na5\nNEW\n");
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    args.coupling_threshold = Some(0.99);
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let coupling: Vec<&Value> = v["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .filter(|f| f["layer"] == "coupling")
+        .collect();
+    assert!(
+        coupling.is_empty(),
+        "threshold 0.99 must suppress coupling at jaccard 0.75; got: {coupling:?}"
+    );
+}
+
+#[test]
+fn review_respects_coupling_ignore_partners() {
+    // §1b: a glob in [coupling] ignore_partners must drop the matching
+    // partner from COUPLING findings even when it's above threshold.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_coupling_fixture(dir.path(), now);
+    write(dir.path(), "core/a.rs", "a1\na2\na3\na4\na5\nNEW\n");
+
+    std::fs::write(
+        dir.path().join("mokumokuren.toml"),
+        "[coupling]\nthreshold = 0.10\nignore_partners = [\"core/b.rs\"]\n",
+    )
+    .unwrap();
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let coupling_b: Vec<&Value> = v["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .filter(|f| {
+            f["layer"] == "coupling" && f["message"].as_str().unwrap_or("").contains("core/b.rs")
+        })
+        .collect();
+    assert!(
+        coupling_b.is_empty(),
+        "core/b.rs glob in ignore_partners must suppress its coupling finding; got: {coupling_b:?}"
+    );
+}
+
+#[test]
+fn review_gate_warn_returns_nonzero_on_warn_finding() {
+    // §5c: --gate warn must surface a non-zero verdict when any
+    // warn-severity finding fires. With the default coupling
+    // threshold (0.30), editing core/a.rs alone surfaces COUPLING
+    // for core/b.rs at jaccard 0.75 — solidly above the threshold.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_coupling_fixture(dir.path(), now);
+    write(dir.path(), "core/a.rs", "a1\na2\na3\na4\na5\nNEW\n");
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    args.gate = Gate::Warn;
+    let (_, verdict) = run_in_with_verdict(dir.path(), args);
+    assert_eq!(verdict, mokumokuren::Verdict::GateTriggered);
+}
+
+#[test]
+fn review_gate_none_returns_ok_even_with_findings() {
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_coupling_fixture(dir.path(), now);
+    write(dir.path(), "core/a.rs", "a1\na2\na3\na4\na5\nNEW\n");
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (_, verdict) = run_in_with_verdict(dir.path(), args);
+    assert_eq!(verdict, mokumokuren::Verdict::Ok);
 }
 
 #[test]

@@ -5,7 +5,7 @@ use serde::Serialize;
 
 pub mod file;
 
-pub use file::{BlastRadiusFile, ConfigFile};
+pub use file::{BlastRadiusFile, ConfigFile, CouplingFile};
 
 pub const SECONDS_PER_DAY: i64 = 86_400;
 
@@ -16,6 +16,14 @@ pub const SECONDS_PER_DAY: i64 = 86_400;
 /// threshold = N` in `mokumokuren.toml` or via
 /// `--blast-radius-threshold <FLOAT>` on the CLI.
 pub const DEFAULT_BLAST_RADIUS_THRESHOLD: f64 = 0.10;
+
+/// Default Jaccard threshold for COUPLING findings.
+///
+/// Used by `mmk review` and `mmk pre-edit`. Higher than the exploratory
+/// blast-radius default — the eval data showed sub-0.30 partners are
+/// noise on real JS/TS repos and produce wrong-work demands when an
+/// agent acts on them.
+pub const DEFAULT_COUPLING_THRESHOLD: f64 = 0.30;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct WindowCfg {
@@ -44,11 +52,25 @@ pub struct BlastRadiusCfg {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct CouplingCfg {
+    /// Minimum Jaccard a partner must reach for `mmk review` /
+    /// `mmk pre-edit` to emit a COUPLING finding. Defaults to
+    /// [`DEFAULT_COUPLING_THRESHOLD`].
+    pub threshold: f64,
+    /// Glob patterns of paths that never trigger a COUPLING finding
+    /// as the *missed partner*. Distinct from `ignores`: a workspace's
+    /// `package.json` IS legit history; it just shouldn't be demanded
+    /// when its sibling workspace's `package.json` was edited.
+    pub ignore_partners: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct Config {
     pub window: WindowCfg,
     pub hotspot: HotspotCfg,
     pub bulk: BulkCfg,
     pub blast_radius: BlastRadiusCfg,
+    pub coupling: CouplingCfg,
     /// Rename-similarity threshold (0.0–1.0) passed to the diff engine.
     pub rename_similarity: f32,
     /// Final ignore globs after merging file + CLI sources. The git layer
@@ -88,6 +110,15 @@ impl Default for BlastRadiusCfg {
     }
 }
 
+impl Default for CouplingCfg {
+    fn default() -> Self {
+        Self {
+            threshold: DEFAULT_COUPLING_THRESHOLD,
+            ignore_partners: Vec::new(),
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -95,6 +126,7 @@ impl Default for Config {
             hotspot: HotspotCfg::default(),
             bulk: BulkCfg::default(),
             blast_radius: BlastRadiusCfg::default(),
+            coupling: CouplingCfg::default(),
             rename_similarity: 0.5,
             ignores: Vec::new(),
         }

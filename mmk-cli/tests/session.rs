@@ -96,6 +96,7 @@ fn json_args() -> SessionArgs {
         blast_radius: None,
         blast_radius_threshold: None,
         drift_sessions: 0,
+        gate: mokumokuren::args::Gate::None,
     }
 }
 

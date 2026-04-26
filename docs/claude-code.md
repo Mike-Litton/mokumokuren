@@ -39,15 +39,16 @@ thrashing). The agent edit loop wires to it like this:
 
 **Before editing a file `<PATH>`:**
 
-Run `mmk pre-edit <PATH> --format json`. It returns `findings[]`
-with HOTSPOT (rank if top-N) and COUPLING (historical co-change
+Run `mmk pre-edit <PATH>`. It returns layer-labeled findings:
+HOTSPOT (rank if top-N) and COUPLING (historical co-change
 partners above the threshold). If a partner is not part of your
 plan, either touch it or say why this edit breaks the pattern.
+Add `--format json` if your harness needs structured output.
 
 **After every edit (or batch of edits) before declaring "done":**
 
-Run `mmk review --format json`. It compares the working tree
-against HEAD and emits `findings[]`:
+Run `mmk review`. It compares the working tree against HEAD and
+emits layer-labeled findings:
 
 - `HOTSPOT` — file you edited is in the top-N hotspot list.
   Tighten the review on this change.
@@ -59,11 +60,11 @@ against HEAD and emits `findings[]`:
 
 **At end of feature, before opening a PR:**
 
-Run `mmk session-summary --base main --drift-sessions 5 --format json`.
-Read `findings[]` for DRIFT (paths that climbed across recent
-sessions — a thrashing signal) and BUDGET (session-aggregate cost).
-Read `session.entered_top_n` and `session.churn_of_churn` for the
-"what shifted while I was working?" view.
+Run `mmk session-summary --base main --drift-sessions 5`. The
+output covers DRIFT (paths that climbed across recent sessions — a
+thrashing signal) and BUDGET (session-aggregate cost), plus the
+`entered_top_n` / `churn_of_churn` "what shifted while I was
+working?" view. Add `--format json` if you need structured fields.
 
 If `session.base_resolved_via` is `head_minus_one` or any
 `merge_base_*`, the comparison was synthetic — treat the session
@@ -92,19 +93,19 @@ description: Run mmk to surface Git-history findings about an edit. Use after ed
 
 When invoked:
 
-1. **Right after an Edit tool use** — run `mmk review --format json`.
-   Surface every finding in `findings[]`. Prioritize COUPLING
-   misses: they're the most actionable (partner you didn't touch).
+1. **Right after an Edit tool use** — run `mmk review`. Surface
+   every finding. Prioritize COUPLING misses: they're the most
+   actionable (partner you didn't touch).
 
-2. **About to edit a file `<PATH>`** — run
-   `mmk pre-edit <PATH> --format json` and surface the HOTSPOT and
-   COUPLING findings. The partners in COUPLING are files the agent
-   should re-read before editing `<PATH>`.
+2. **About to edit a file `<PATH>`** — run `mmk pre-edit <PATH>`
+   and surface the HOTSPOT and COUPLING findings. The partners in
+   COUPLING are files the agent should re-read before editing
+   `<PATH>`.
 
 3. **End of feature / wrapping up** — run
-   `mmk session-summary --base main --drift-sessions 5 --format json`.
-   Surface findings, `session.entered_top_n`,
-   `session.churn_of_churn`, and `session.base_resolved_via`.
+   `mmk session-summary --base main --drift-sessions 5`. Surface
+   findings, `entered_top_n`, `churn_of_churn`, and
+   `base_resolved_via`. (Add `--format json` for structured fields.)
 
 4. If `session.base_resolved_via` is anything other than `explicit`
    or `since_commit`, mark the session block as informational only.
@@ -133,7 +134,7 @@ Add to `.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "mmk review --format json 2>/dev/null || true"
+            "command": "mmk review 2>/dev/null || true"
           }
         ]
       }
@@ -144,7 +145,7 @@ Add to `.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "mmk pre-edit \"$CLAUDE_TOOL_INPUT_FILE_PATH\" --format json 2>/dev/null || true"
+            "command": "mmk pre-edit \"$CLAUDE_TOOL_INPUT_FILE_PATH\" 2>/dev/null || true"
           }
         ]
       }
@@ -160,10 +161,33 @@ before its next turn. The `PreToolUse:Edit` hook is optional —
 useful if you want the agent to see the historical-partner list
 *before* committing to the edit.
 
-The exact environment-variable name for the tool input may differ by
-Claude Code version; check `claude --help` for the current name. The
-`|| true` ensures the hook can't fail the tool call if `mmk` isn't
-installed.
+**Why text mode?** `mmk review` text output is ~150 bytes (just the
+layer-prefixed finding lines). The JSON envelope is ~1.5 kB per
+fire. Across a 50-edit session that's ~8 kB vs ~75 kB of injected
+context — measurably better for any context-limited model. Use
+`--format json` only if your harness genuinely consumes structured
+output.
+
+The exact environment-variable name for the tool input may differ
+by Claude Code version; check `claude --help` for the current name.
+The `|| true` ensures the hook can't fail the tool call if `mmk`
+isn't installed.
+
+### CI gating with `--gate`
+
+For CI, the same subcommands accept `--gate {none, warn, error}`:
+
+```shell
+mmk review --range main..HEAD --gate warn
+```
+
+`--gate warn` exits 2 if any warn-severity finding fires, 0 if the
+diff is clean, 1 if mmk itself errors. The exit-2 / exit-1 split
+lets a CI pipeline distinguish "policy failed" from "tool crashed."
+`--gate error` is reserved for future severity tiers and behaves
+like `none` today.
+
+Same flag works on `mmk pre-edit` and `mmk session-summary`.
 
 **Reliability:** deterministic — the command runs every time `Edit`
 fires, output enters the agent's context whether the agent "feels
