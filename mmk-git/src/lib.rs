@@ -509,9 +509,13 @@ pub fn analyze_session(
 
     // Collect ancestor SHAs of the base (including base itself) so
     // commits reachable from base get filtered out of the session
-    // window. This is bounded by the existing `--since` window we
-    // already walked; we only need ancestors *within* that window.
-    let ancestors: ahash::AHashSet<String> = walk_ancestors(&walker, resolution.oid)?;
+    // window. Bounded by the same `since_ts` cutoff as the window
+    // walk: ancestors older than the cutoff cannot match a window
+    // commit's sha, so walking them is wasted work — and on
+    // long-history repos that's the dominant cost of `session-summary`.
+    let head_ts = window.head_timestamp.unwrap_or(0);
+    let since_ts = head_ts.saturating_sub(cfg.window_seconds());
+    let ancestors: ahash::AHashSet<String> = walk_ancestors(&walker, resolution.oid, since_ts)?;
 
     let session_commits: Vec<_> = window
         .commits
@@ -550,11 +554,17 @@ pub fn analyze_session(
 fn walk_ancestors(
     walker: &walker::RepoWalker,
     start: gix::ObjectId,
+    since_ts: i64,
 ) -> Result<ahash::AHashSet<String>> {
     let mut out: ahash::AHashSet<String> = ahash::AHashSet::new();
     let walk = walker
         .repo
         .rev_walk(std::iter::once(start))
+        .sorting(gix::revision::walk::Sorting::ByCommitTimeCutoff {
+            order: gix::traverse::commit::simple::CommitTimeOrder::NewestFirst,
+            seconds: since_ts,
+        })
+        .use_commit_graph(true)
         .all()
         .context("failed to start ancestor walk")?;
     for info in walk {
