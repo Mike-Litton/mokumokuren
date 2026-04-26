@@ -108,6 +108,9 @@ struct SessionReport<'a> {
     /// The ranking computed only over commits since the resolved base.
     session_files: Vec<FileEntry<'a>>,
     session: SessionBlock<'a>,
+    /// DRIFT + BUDGET findings overlaid on the session view. Always
+    /// present (possibly empty) so harnesses see a stable shape.
+    findings: &'a [crate::output::findings::Finding],
     #[serde(skip_serializing_if = "Option::is_none")]
     blast_radius: Option<BlastRadiusBlock<'a>>,
 }
@@ -199,7 +202,8 @@ pub fn write<W: Write>(
 }
 
 /// Write a session report — the window ranking plus the session
-/// ranking and the delta block. Used by `mmk session`.
+/// ranking, delta block, and the DRIFT/BUDGET findings overlay.
+/// Used by `mmk session-summary` (and the `session` alias).
 #[allow(clippy::too_many_arguments)]
 pub fn write_session<W: Write>(
     w: &mut W,
@@ -210,6 +214,7 @@ pub fn write_session<W: Write>(
     duration_ms: u64,
     config: &Config,
     blast: Option<(&std::path::Path, f64, &[NeighborhoodNode])>,
+    findings: &[crate::output::findings::Finding],
 ) -> Result<()> {
     let analysis = &session_out.window;
 
@@ -286,9 +291,296 @@ pub fn write_session<W: Write>(
             base_resolved_via: base_via,
             delta,
         },
+        findings,
         blast_radius: blast_block,
     };
 
+    serde_json::to_writer_pretty(&mut *w, &report)?;
+    writeln!(w)?;
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct ReviewBlock<'a> {
+    /// One of `working_tree`, `staged`, `range`, `commit`. Lets the
+    /// consumer reason about what was compared without re-deriving
+    /// from CLI args.
+    mode: &'static str,
+    diff: ReviewDiffBlock<'a>,
+}
+
+#[derive(Serialize)]
+struct ReviewDiffBlock<'a> {
+    files_changed: u32,
+    lines_added: u64,
+    lines_deleted: u64,
+    files: Vec<ReviewDiffFile<'a>>,
+}
+
+#[derive(Serialize)]
+struct ReviewDiffFile<'a> {
+    path: &'a str,
+    added: u64,
+    deleted: u64,
+}
+
+#[derive(Serialize)]
+struct ReviewReport<'a> {
+    schema_version: &'static str,
+    crate_version: &'static str,
+    repo: RepoBlock<'a>,
+    config: &'a Config,
+    analysis: AnalysisBlock,
+    review: ReviewBlock<'a>,
+    findings: &'a [crate::output::findings::Finding],
+}
+
+#[derive(Serialize)]
+struct ReviewEmptyReport {
+    schema_version: &'static str,
+    crate_version: &'static str,
+    review: ReviewEmptyBlock,
+    findings: Vec<()>,
+}
+
+#[derive(Serialize)]
+struct ReviewEmptyBlock {
+    mode: &'static str,
+    diff: ReviewEmptyDiff,
+}
+
+#[derive(Serialize)]
+struct ReviewEmptyDiff {
+    files_changed: u32,
+    lines_added: u64,
+    lines_deleted: u64,
+    files: Vec<()>,
+}
+
+/// Write a `mmk review` JSON envelope: standard `repo`/`config`/
+/// `analysis` blocks plus a `review` block (mode + per-file diff
+/// numstat) and the `findings` array. Used when there are changes to
+/// review; clean-tree calls go through [`write_review_empty`].
+pub(crate) fn write_review<W: Write>(
+    w: &mut W,
+    mode: crate::commands::review::ReviewMode,
+    changed: &[crate::commands::review::ChangedFile],
+    findings: &[crate::output::findings::Finding],
+    analysis: &AnalyzeOutput,
+    duration_ms: u64,
+    config: &Config,
+) -> Result<()> {
+    let path_strs: Vec<String> = changed
+        .iter()
+        .map(|c| c.path.to_string_lossy().into_owned())
+        .collect();
+    let files: Vec<ReviewDiffFile<'_>> = changed
+        .iter()
+        .zip(path_strs.iter())
+        .map(|(c, s)| ReviewDiffFile {
+            path: s.as_str(),
+            added: c.added,
+            deleted: c.deleted,
+        })
+        .collect();
+    let lines_added: u64 = changed.iter().map(|c| c.added).sum();
+    let lines_deleted: u64 = changed.iter().map(|c| c.deleted).sum();
+
+    let report = ReviewReport {
+        schema_version: crate::output::schema::SCHEMA_VERSION,
+        crate_version: env!("CARGO_PKG_VERSION"),
+        repo: RepoBlock {
+            head_sha: analysis.head_sha.as_deref(),
+            head_timestamp: analysis.head_timestamp.and_then(rfc3339),
+            is_shallow: analysis.is_shallow,
+            warnings: &analysis.warnings,
+        },
+        config,
+        analysis: AnalysisBlock {
+            commits_seen: analysis.counts.commits_seen,
+            commits_analyzed: analysis.counts.commits_analyzed,
+            commits_filtered: CommitsFilteredBlock {
+                bulk: analysis.counts.commits_filtered_bulk,
+            },
+            files_ignored: FilesIgnoredBlock {
+                deleted_from_head: analysis.counts.non_head_events,
+                head_paths_ignored: analysis.counts.head_paths_ignored,
+            },
+            duration_ms,
+        },
+        review: ReviewBlock {
+            mode: mode.as_str(),
+            diff: ReviewDiffBlock {
+                files_changed: u32::try_from(changed.len()).unwrap_or(u32::MAX),
+                lines_added,
+                lines_deleted,
+                files,
+            },
+        },
+        findings,
+    };
+
+    serde_json::to_writer_pretty(&mut *w, &report)?;
+    writeln!(w)?;
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct PreEditBlock<'a> {
+    path: &'a str,
+}
+
+#[derive(Serialize)]
+struct PreEditReport<'a> {
+    schema_version: &'static str,
+    crate_version: &'static str,
+    repo: RepoBlock<'a>,
+    config: &'a Config,
+    analysis: AnalysisBlock,
+    pre_edit: PreEditBlock<'a>,
+    findings: &'a [crate::output::findings::Finding],
+}
+
+/// Write a `mmk pre-edit` JSON envelope: the standard `repo` /
+/// `config` / `analysis` blocks plus a `pre_edit.path` echo and the
+/// `findings` array.
+pub(crate) fn write_pre_edit<W: Write>(
+    w: &mut W,
+    target: &std::path::Path,
+    findings: &[crate::output::findings::Finding],
+    analysis: &AnalyzeOutput,
+    duration_ms: u64,
+    config: &Config,
+) -> Result<()> {
+    let path = target.to_string_lossy();
+    let report = PreEditReport {
+        schema_version: crate::output::schema::SCHEMA_VERSION,
+        crate_version: env!("CARGO_PKG_VERSION"),
+        repo: RepoBlock {
+            head_sha: analysis.head_sha.as_deref(),
+            head_timestamp: analysis.head_timestamp.and_then(rfc3339),
+            is_shallow: analysis.is_shallow,
+            warnings: &analysis.warnings,
+        },
+        config,
+        analysis: AnalysisBlock {
+            commits_seen: analysis.counts.commits_seen,
+            commits_analyzed: analysis.counts.commits_analyzed,
+            commits_filtered: CommitsFilteredBlock {
+                bulk: analysis.counts.commits_filtered_bulk,
+            },
+            files_ignored: FilesIgnoredBlock {
+                deleted_from_head: analysis.counts.non_head_events,
+                head_paths_ignored: analysis.counts.head_paths_ignored,
+            },
+            duration_ms,
+        },
+        pre_edit: PreEditBlock { path: &path },
+        findings,
+    };
+
+    serde_json::to_writer_pretty(&mut *w, &report)?;
+    writeln!(w)?;
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct DriftReport<'a> {
+    schema_version: &'static str,
+    crate_version: &'static str,
+    drift: DriftBlock<'a>,
+    findings: Vec<DriftFindingDto<'a>>,
+    duration_ms: u64,
+}
+
+#[derive(Serialize)]
+struct DriftBlock<'a> {
+    /// Echoed from `--base` for diagnostics; the boundary walk
+    /// always anchors on HEAD in v0.3.
+    base: Option<&'a str>,
+    sessions: usize,
+    /// One label per snapshot (currently the commit OID at the
+    /// session boundary). Surfacing labels rather than full
+    /// rankings keeps the JSON small; consumers wanting per-snapshot
+    /// rankings can re-run analyze at each label.
+    snapshot_labels: Vec<&'a str>,
+}
+
+#[derive(Serialize)]
+struct DriftFindingDto<'a> {
+    layer: &'static str,
+    severity: &'static str,
+    path: &'a str,
+    climb_transitions: u32,
+    total_transitions: u32,
+    latest_rank: u32,
+}
+
+pub(crate) fn write_drift<W: Write>(
+    w: &mut W,
+    base: Option<&str>,
+    sessions: usize,
+    snapshots: &[mmk_core::drift::Snapshot],
+    findings: &[mmk_core::drift::DriftFinding],
+    duration_ms: u64,
+) -> Result<()> {
+    let labels: Vec<&str> = snapshots.iter().map(|s| s.label.as_str()).collect();
+    let path_strs: Vec<String> = findings
+        .iter()
+        .map(|f| f.path.to_string_lossy().into_owned())
+        .collect();
+    let dtos: Vec<DriftFindingDto<'_>> = findings
+        .iter()
+        .zip(path_strs.iter())
+        .map(|(f, p)| DriftFindingDto {
+            layer: "drift",
+            severity: "warn",
+            path: p.as_str(),
+            climb_transitions: f.climb_transitions,
+            total_transitions: f.total_transitions,
+            latest_rank: f.latest_rank,
+        })
+        .collect();
+
+    let report = DriftReport {
+        schema_version: crate::output::schema::SCHEMA_VERSION,
+        crate_version: env!("CARGO_PKG_VERSION"),
+        drift: DriftBlock {
+            base,
+            sessions,
+            snapshot_labels: labels,
+        },
+        findings: dtos,
+        duration_ms,
+    };
+    serde_json::to_writer_pretty(&mut *w, &report)?;
+    writeln!(w)?;
+    Ok(())
+}
+
+/// Minimal `mmk review` envelope for the clean-tree / no-op-range
+/// case: skips `repo`/`config`/`analysis` (we didn't run analyze)
+/// and emits `findings: []`. Lets a hook see the same top-level
+/// `findings` key on every invocation without paying the analyze
+/// cost when there's nothing to review.
+pub(crate) fn write_review_empty<W: Write>(
+    w: &mut W,
+    mode: crate::commands::review::ReviewMode,
+) -> Result<()> {
+    let report = ReviewEmptyReport {
+        schema_version: crate::output::schema::SCHEMA_VERSION,
+        crate_version: env!("CARGO_PKG_VERSION"),
+        review: ReviewEmptyBlock {
+            mode: mode.as_str(),
+            diff: ReviewEmptyDiff {
+                files_changed: 0,
+                lines_added: 0,
+                lines_deleted: 0,
+                files: Vec::new(),
+            },
+        },
+        findings: Vec::new(),
+    };
     serde_json::to_writer_pretty(&mut *w, &report)?;
     writeln!(w)?;
     Ok(())

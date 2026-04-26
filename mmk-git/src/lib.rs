@@ -14,7 +14,7 @@ pub mod diff;
 pub mod loc;
 pub mod walker;
 
-pub use walker::{BaseResolution, BaseResolvedVia};
+pub use walker::{BaseResolution, BaseResolvedVia, RepoWalker};
 
 /// Discover the work-tree root of the Git repo containing `start`, or
 /// `None` if `start` is not inside a Git repo. Re-exports gix's
@@ -62,6 +62,25 @@ pub struct AnalyzeOutput {
 }
 
 pub fn analyze(path: &Path, cfg: &Config) -> Result<AnalyzeOutput> {
+    analyze_inner(path, cfg, None)
+}
+
+/// Run the analyze pipeline anchored at `anchor_oid` instead of HEAD.
+///
+/// Used by `mmk drift` to take K snapshots at K historical commits
+/// without needing a checkout per snapshot. The recency epoch (the
+/// `now` for `weighted_churn` decay) becomes the anchor commit's
+/// time, not wall-clock now — so each snapshot's churn is weighted
+/// against its own historical "present."
+pub fn analyze_at(path: &Path, cfg: &Config, anchor_oid: gix::ObjectId) -> Result<AnalyzeOutput> {
+    analyze_inner(path, cfg, Some(anchor_oid))
+}
+
+fn analyze_inner(
+    path: &Path,
+    cfg: &Config,
+    anchor_oid: Option<gix::ObjectId>,
+) -> Result<AnalyzeOutput> {
     // Phase timing: set MMK_TRACE=1 to print per-phase wall times to
     // stderr. Useful for perf investigation; off by default.
     let trace = std::env::var_os("MMK_TRACE").is_some();
@@ -80,10 +99,20 @@ pub fn analyze(path: &Path, cfg: &Config) -> Result<AnalyzeOutput> {
 
     let ignores = build_globset(&cfg.ignores)?;
 
-    let head = walker.head_sha_and_time()?;
-    let (head_sha, head_ts) = match head {
-        Some((sha, ts)) => (Some(sha), Some(ts)),
-        None => (None, None),
+    let (head_sha, head_ts, start_oid) = if let Some(oid) = anchor_oid {
+        let commit = walker
+            .repo
+            .find_commit(oid)
+            .with_context(|| format!("anchor commit {oid} not found"))?;
+        let ts = commit
+            .time()
+            .context("failed to decode anchor commit time")?
+            .seconds;
+        (Some(oid.to_string()), Some(ts), Some(oid))
+    } else {
+        let head = walker.head_sha_and_time()?;
+        let (sha, ts) = head.map_or((None, None), |(sha, ts)| (Some(sha), Some(ts)));
+        (sha, ts, None)
     };
 
     let now_ts = head_ts.unwrap_or(0);
@@ -91,7 +120,11 @@ pub fn analyze(path: &Path, cfg: &Config) -> Result<AnalyzeOutput> {
     phase("open+head", t);
 
     let t = std::time::Instant::now();
-    let commit_infos = walker.walk_commits_since(since_ts)?;
+    let commit_infos = if let Some(oid) = start_oid {
+        walker.walk_commits_from(oid, since_ts)?
+    } else {
+        walker.walk_commits_since(since_ts)?
+    };
     phase("revwalk", t);
 
     let mut counts = AnalysisCounts {
@@ -116,7 +149,10 @@ pub fn analyze(path: &Path, cfg: &Config) -> Result<AnalyzeOutput> {
     // rare and the failure mode is a silent undercount, not incorrect
     // ranking on the typical input.
     let t = std::time::Instant::now();
-    let (head_entries, head_paths_ignored) = loc::head_entries(&walker.repo, &ignores)?;
+    let (head_entries, head_paths_ignored) = match start_oid {
+        Some(oid) => loc::tree_entries(&walker.repo, oid, &ignores)?,
+        None => loc::head_entries(&walker.repo, &ignores)?,
+    };
     counts.head_paths_ignored = head_paths_ignored;
     let head_paths: diff::HeadPathBytes = head_entries
         .iter()

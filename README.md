@@ -35,8 +35,8 @@ test doesn't know that touching `packfile.c` historically also touches
 metric generator that guards against a specific class of LLM slop**
 the other three miss — hotspot blindness, hallucinated coupling,
 unexpected cascade, and thrashing. It reads Git history (the one
-durable record of what came before) and emits structured signal a
-harness or CI gate can act on. It is not a substitute for typing,
+durable record of what came before) and emits structured findings
+a harness or CI gate can act on. It is not a substitute for typing,
 linting, or tests; it complements them by supplying the historical
 context the other three pillars assume the coder already has.
 
@@ -44,31 +44,45 @@ mmk is not the only possible source of historical signal — PR
 reviews, incident logs, and benchmark drift are also history the
 agent lacks. mmk's slice is the git-derived one.
 
-For mmk to function as a *self-acting* fourth pillar — running
-when the agent edits, without the user typing the commands each
-turn — wire it into the agent's harness once. For Claude Code,
-see [`docs/claude-code.md`](docs/claude-code.md): a `CLAUDE.md`
-snippet (advisory, simplest), a skill (auto-invokes by description),
-and a hooks config (deterministic). Pick the strictness that fits.
+## What mmk does in the agent edit loop
 
-## Two ways to use it
+The agent's actual work happens in the **working tree**, not in
+committed history. v0.3 exposes one subcommand per phase of that
+loop, each emitting line-by-line, layer-labeled findings:
 
-`mmk` is a **deterministic, sub-second sensor** in two contexts:
+| Loop phase                 | Subcommand                  | Sees                                                |
+| -------------------------- | --------------------------- | --------------------------------------------------- |
+| Before editing `<PATH>`    | `mmk pre-edit <PATH>`       | History only — rank, expected partners, optional drift. |
+| After every edit           | `mmk review`                | Uncommitted working-tree diff vs history.           |
+| Before staging             | `mmk review --staged`       | Staged index vs HEAD.                               |
+| Reviewing a committed range| `mmk review --range A..B`   | Committed diff vs history (PR-style review).        |
+| End of feature / PR        | `mmk session-summary`       | Committed session vs base + DRIFT/BUDGET overlay.   |
+| Across recent sessions     | `mmk drift --sessions K`    | Climb signal across K boundaries (slow path).       |
 
-- **LLM agent inner loop.** The agent runs `mmk analyze --format json`
-  before deciding what to edit, or `mmk session --base main` to ask
-  "what shifted while I was working?" The output is structured JSON
-  with a stable schema (`schema_version`) the agent's harness pins
-  against.
-- **CI/CD pipeline + human review.** A pipeline step runs `mmk session`
-  on each PR and a human reviewer reads the report. The synthetic-base
-  warning (`fallback`/`synthetic` in `repo.warnings`) is greppable so
-  CI can flag "this run wasn't comparing against a real base" for the
-  reviewer.
+The `mmk review` hot path is the agent's real edit loop:
+`PostToolUse:Edit` → `mmk review` → findings about what just
+happened, before the next turn. For a quick view of what it
+prints on a typical uncommitted-diff scenario:
 
-The same binary, the same numbers, two consumers.
+```shell
+mmk review
+```
 
-## What you see
+```
+HOTSPOT:
+  ⚠ core/a.rs ranks #1 (top-20 hotspot)
+COUPLING:
+  ⚠ core/a.rs edited; expected partner core/b.rs not touched (jaccard 0.75)
+```
+
+JSON output (`--format json`) is the same data with a stable
+schema for harness consumers. See [`docs/claude-code.md`](docs/claude-code.md)
+for the wiring (CLAUDE.md / skill / hooks).
+
+The original `mmk analyze` table — ranked top-N hotspots over a
+window — is still here too, used in CI gates and one-shot triage:
+
+## `mmk analyze`: the ranked hotspot table
 
 ```shell
 mmk analyze --top 10
@@ -121,13 +135,13 @@ bugs disproportionately. If a file's been near the top for a while,
 it's a refactoring candidate.
 
 **PR touches a top-N hotspot? Tighten review.** A change to a known
-hotspot deserves more eyes than a change to a quiet file.
+hotspot deserves more eyes than a change to a quiet file. `mmk
+review --range main..HEAD` makes this a one-shot.
 
 **Same file on top across multiple agent sessions? Agent is thrashing.**
 If you're using an LLM agent and the same file dominates the ranking
 across runs, the agent is rewriting one corner instead of making
-forward progress. Either review the changes carefully or reset the
-agent's context.
+forward progress. `mmk drift --sessions 5` puts a number on it.
 
 ## Quickstart
 
@@ -182,14 +196,33 @@ threshold = 0.10
 The effective threshold is echoed in the JSON output (`blast_radius.threshold`)
 so consumers can see what filter produced the listed nodes.
 
-## Sessions: what shifted since I started
+## `mmk pre-edit`: context before editing a file
 
-`mmk session` ranks twice — once over the full `--since` window, once
-over commits since a resolved base ref — and reports the delta:
+Before committing to an edit on `<PATH>`, ask what the history says
+about it. Returns `findings[]` with HOTSPOT (rank if top-N) and
+COUPLING (historical co-change partners above the threshold):
 
 ```shell
-mmk session --base main
-mmk session --base main --top 10
+mmk pre-edit a.rs
+mmk pre-edit a.rs --format json
+```
+
+Pre-edit is *informational* — the agent hasn't acted yet, so
+COUPLING fires as Info ("you should probably re-read these too"),
+not Warn. Add `--drift-sessions 5` to overlay DRIFT findings for
+the queried path (slower path, K × analyze cost).
+
+## `mmk session-summary`: end-of-feature review
+
+Renamed from `mmk session` in v0.3 (the old name remains as an
+alias). Ranks twice — once over the full `--since` window, once
+over commits since a resolved base ref — reports the delta, and
+overlays DRIFT (with `--drift-sessions K`) and BUDGET findings:
+
+```shell
+mmk session-summary --base main
+mmk session-summary --base main --top 10
+mmk session-summary --base main --drift-sessions 5
 ```
 
 The base resolution cascade is `--base` / `--since-commit` →
@@ -213,18 +246,48 @@ relative to its size at session start" — a file truncated post-session
 doesn't get an inflated ratio. See [`docs/schema.md`](docs/schema.md)
 for the full epoch contract and field reference.
 
+The `findings[]` overlay surfaces:
+
+- `BUDGET` — any session-window commit was bulk-filtered (>
+  `bulk.max_files` or `bulk.max_lines`), or the surviving session
+  aggregate exceeds `2 × max_lines × commits`.
+- `DRIFT` (with `--drift-sessions K`) — files climbing in a
+  majority of K-1 transitions.
+
+## `mmk drift`: climb signal across recent sessions
+
+Re-runs `analyze` at K historical session-boundary commits (PR-style
+merges by default; linear-chunk fallback when there aren't enough
+merges) and surfaces files climbing in a majority of K-1 transitions.
+Pure function of git state — no persistence:
+
+```shell
+mmk drift --sessions 5
+mmk drift --sessions 5 --format json
+```
+
+Slow path (K × analyze). Intended for end-of-session / PR review,
+not the per-edit hook.
+
 ## JSON output and schema stability
 
 `--format json` emits a stable schema. The top-level `schema_version`
-field tracks the `mmk` minor release; consumers (LLM harnesses, CI
-parsers) pin against it. `crate_version` is reported separately and
-is diagnostic only.
+field tracks the `mmk` minor release (`"0.3.0"` in this build);
+consumers (LLM harnesses, CI parsers) pin against it. `crate_version`
+is reported separately and is diagnostic only.
 
 ```shell
 mmk analyze --format json
+mmk review --format json
+mmk pre-edit a.rs --format json
 ```
 
-The contract is documented in [`docs/schema.md`](docs/schema.md):
+`mmk review`, `mmk pre-edit`, and `mmk session-summary` all carry a
+top-level `findings[]` array with the same `{layer, severity,
+message}` shape. Layers in v0.3 are `hotspot`, `coupling`, `drift`,
+`budget`; `health` and `anchor` are reserved for v0.4.
+
+The full contract is documented in [`docs/schema.md`](docs/schema.md):
 additive changes (new optional fields, new top-level blocks) do not
 bump `schema_version`; renames, removals, type changes, and semantic
 changes do.

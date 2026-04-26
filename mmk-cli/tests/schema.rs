@@ -5,10 +5,13 @@
 
 mod common;
 
-use common::{build_canonical_fixture, build_session_fixture, CWD_LOCK};
-use mokumokuren::args::{AnalyzeArgs, Format, SessionArgs};
+use common::{
+    build_canonical_fixture, build_coupling_fixture, build_session_fixture, write, CWD_LOCK,
+};
+use mokumokuren::args::{AnalyzeArgs, DriftArgs, Format, PreEditArgs, ReviewArgs, SessionArgs};
 use serde_json::Value;
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 use tempfile::TempDir;
 
 fn run_in(repo: &std::path::Path, args: AnalyzeArgs) -> Vec<u8> {
@@ -49,7 +52,7 @@ fn schema_version_present_and_pinned() {
     let stdout = run_in(dir.path(), json_args());
     let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
     assert_eq!(
-        v["schema_version"], "0.2.0",
+        v["schema_version"], "0.3.0",
         "schema_version should be pinned to the mmk minor release"
     );
 }
@@ -268,6 +271,7 @@ fn session_args() -> SessionArgs {
         verbose: false,
         blast_radius: None,
         blast_radius_threshold: None,
+        drift_sessions: 0,
     }
 }
 
@@ -305,8 +309,14 @@ fn schema_session_shape_matches_docs_contract() {
             "files",
             "session_files",
             "session",
+            "findings",
         ],
-        "top-level session output",
+        "top-level session-summary output",
+    );
+    assert!(
+        v["findings"].is_array(),
+        "session-summary findings must be an array (possibly empty), got {:?}",
+        v["findings"]
     );
     assert!(
         v.get("blast_radius").is_none(),
@@ -362,5 +372,239 @@ fn schema_session_shape_matches_docs_contract() {
         for (i, entry) in arr.as_array().unwrap().iter().enumerate() {
             expect_required_keys(entry, &ranking_entry_keys(), &format!("{label}[{i}]"));
         }
+    }
+}
+
+// --- v0.3 surface: review / pre-edit / drift envelope locks. ---
+
+fn run_review_in(repo: &std::path::Path, args: ReviewArgs) -> Vec<u8> {
+    let _g = CWD_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let orig = std::env::current_dir().unwrap();
+    std::env::set_current_dir(repo).unwrap();
+    let mut stdout: Vec<u8> = Vec::new();
+    let mut stderr: Vec<u8> = Vec::new();
+    let res = mokumokuren::commands::review::run(&args, &mut stdout, &mut stderr);
+    std::env::set_current_dir(orig).unwrap();
+    res.expect("review should succeed on fixture");
+    stdout
+}
+
+fn run_pre_edit_in(repo: &std::path::Path, args: PreEditArgs) -> Vec<u8> {
+    let _g = CWD_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let orig = std::env::current_dir().unwrap();
+    std::env::set_current_dir(repo).unwrap();
+    let mut stdout: Vec<u8> = Vec::new();
+    let mut stderr: Vec<u8> = Vec::new();
+    let res = mokumokuren::commands::pre_edit::run(&args, &mut stdout, &mut stderr);
+    std::env::set_current_dir(orig).unwrap();
+    res.expect("pre-edit should succeed on fixture");
+    stdout
+}
+
+fn run_drift_in(repo: &std::path::Path, args: DriftArgs) -> Vec<u8> {
+    let _g = CWD_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let orig = std::env::current_dir().unwrap();
+    std::env::set_current_dir(repo).unwrap();
+    let mut stdout: Vec<u8> = Vec::new();
+    let mut stderr: Vec<u8> = Vec::new();
+    let res = mokumokuren::commands::drift::run(&args, &mut stdout, &mut stderr);
+    std::env::set_current_dir(orig).unwrap();
+    res.expect("drift should succeed on fixture");
+    stdout
+}
+
+fn finding_keys() -> Vec<&'static str> {
+    vec!["layer", "severity", "message"]
+}
+
+#[test]
+fn schema_review_shape_with_changes() {
+    // Build the coupling fixture, then dirty the working tree so
+    // review takes the with-changes (full envelope) code path.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_coupling_fixture(dir.path(), now);
+    write(dir.path(), "core/a.rs", "a1\na2\na3\na4\na5\nNEW\n");
+
+    let args = ReviewArgs {
+        staged: false,
+        range: None,
+        commit: None,
+        since: "60days".into(),
+        top: 20,
+        format: Format::Json,
+        ignores: Vec::new(),
+        config: None,
+        verbose: false,
+        blast_radius_threshold: None,
+    };
+    let stdout = run_review_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    expect_required_keys(
+        &v,
+        &[
+            "schema_version",
+            "crate_version",
+            "repo",
+            "config",
+            "analysis",
+            "review",
+            "findings",
+        ],
+        "top-level review (with-changes)",
+    );
+    expect_required_keys(&v["review"], &["mode", "diff"], "review");
+    expect_required_keys(
+        &v["review"]["diff"],
+        &["files_changed", "lines_added", "lines_deleted", "files"],
+        "review.diff",
+    );
+    let files = v["review"]["diff"]["files"]
+        .as_array()
+        .expect("review.diff.files array");
+    for (i, f) in files.iter().enumerate() {
+        expect_required_keys(
+            f,
+            &["path", "added", "deleted"],
+            &format!("review.diff.files[{i}]"),
+        );
+    }
+    let findings = v["findings"].as_array().expect("findings array");
+    for (i, f) in findings.iter().enumerate() {
+        expect_required_keys(f, &finding_keys(), &format!("findings[{i}]"));
+    }
+}
+
+#[test]
+fn schema_review_clean_tree_minimal_envelope() {
+    // Clean working tree → review skips analyze and emits the
+    // minimal envelope. The contract: schema_version, crate_version,
+    // review (mode + empty diff), and an empty findings array.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_coupling_fixture(dir.path(), now);
+
+    let args = ReviewArgs {
+        staged: false,
+        range: None,
+        commit: None,
+        since: "60days".into(),
+        top: 20,
+        format: Format::Json,
+        ignores: Vec::new(),
+        config: None,
+        verbose: false,
+        blast_radius_threshold: None,
+    };
+    let stdout = run_review_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    expect_required_keys(
+        &v,
+        &["schema_version", "crate_version", "review", "findings"],
+        "top-level review (clean tree)",
+    );
+    assert!(
+        v["findings"].as_array().unwrap().is_empty(),
+        "clean tree must emit empty findings"
+    );
+}
+
+#[test]
+fn schema_pre_edit_shape() {
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_coupling_fixture(dir.path(), now);
+
+    let args = PreEditArgs {
+        path: PathBuf::from("core/a.rs"),
+        since: "60days".into(),
+        top: 20,
+        format: Format::Json,
+        ignores: Vec::new(),
+        config: None,
+        verbose: false,
+        blast_radius_threshold: None,
+        drift_sessions: 0,
+    };
+    let stdout = run_pre_edit_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    expect_required_keys(
+        &v,
+        &[
+            "schema_version",
+            "crate_version",
+            "repo",
+            "config",
+            "analysis",
+            "pre_edit",
+            "findings",
+        ],
+        "top-level pre-edit",
+    );
+    expect_required_keys(&v["pre_edit"], &["path"], "pre_edit");
+    let findings = v["findings"].as_array().expect("findings array");
+    for (i, f) in findings.iter().enumerate() {
+        expect_required_keys(f, &finding_keys(), &format!("findings[{i}]"));
+    }
+}
+
+#[test]
+fn schema_drift_shape() {
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_session_fixture(dir.path(), now);
+
+    let args = DriftArgs {
+        sessions: 3,
+        base: Some("HEAD".into()),
+        since: "180days".into(),
+        top: 5,
+        format: Format::Json,
+        ignores: Vec::new(),
+        config: None,
+        verbose: false,
+    };
+    let stdout = run_drift_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    expect_required_keys(
+        &v,
+        &[
+            "schema_version",
+            "crate_version",
+            "drift",
+            "findings",
+            "duration_ms",
+        ],
+        "top-level drift",
+    );
+    expect_required_keys(
+        &v["drift"],
+        &["base", "sessions", "snapshot_labels"],
+        "drift",
+    );
+    let findings = v["findings"].as_array().expect("findings array");
+    for (i, f) in findings.iter().enumerate() {
+        expect_required_keys(
+            f,
+            &[
+                "layer",
+                "severity",
+                "path",
+                "climb_transitions",
+                "total_transitions",
+                "latest_rank",
+            ],
+            &format!("drift.findings[{i}]"),
+        );
     }
 }

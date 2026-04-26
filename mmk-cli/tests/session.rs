@@ -13,6 +13,60 @@ use serde_json::Value;
 use std::path::Path;
 use tempfile::TempDir;
 
+#[test]
+fn session_summary_includes_window_and_session_blocks() {
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_session_fixture(dir.path(), now);
+
+    let (stdout, _) = run_session(dir.path(), json_args());
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    assert!(v["files"].is_array(), "window ranking present");
+    assert!(v["session_files"].is_array(), "session ranking present");
+    assert!(v["session"].is_object(), "session delta block present");
+    assert!(
+        v["findings"].is_array(),
+        "findings array present (possibly empty); got {:?}",
+        v["findings"]
+    );
+}
+
+#[test]
+fn session_summary_diff_budget_finding_fires_on_oversize_session() {
+    use std::fmt::Write as _;
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    write(dir.path(), "seed.rs", "x\n");
+    commit_all(dir.path(), "seed", now - 30 * DAY);
+    git(dir.path(), &["checkout", "-q", "-b", "feature"]);
+    // One commit on the feature branch with line count well above
+    // bulk.max_lines (1000) × 1 commit = 1000 budget.
+    let mut huge = String::new();
+    for n in 0..3000 {
+        writeln!(huge, "line{n}").unwrap();
+    }
+    write(dir.path(), "seed.rs", &huge);
+    commit_all(dir.path(), "blast", now - DAY);
+
+    let mut args = json_args();
+    args.base = Some("main".into());
+    let (stdout, _) = run_session(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let any_budget = v["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .any(|f| f["layer"] == "budget");
+    assert!(
+        any_budget,
+        "session aggregate exceeding bulk.max_lines × commits must emit BUDGET; got: {}",
+        v["findings"]
+    );
+}
+
 fn run_session(repo: &Path, args: SessionArgs) -> (Vec<u8>, Vec<u8>) {
     let _g = CWD_LOCK
         .lock()
@@ -41,6 +95,7 @@ fn json_args() -> SessionArgs {
         verbose: false,
         blast_radius: None,
         blast_radius_threshold: None,
+        drift_sessions: 0,
     }
 }
 

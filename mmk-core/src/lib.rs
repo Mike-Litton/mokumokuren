@@ -1,8 +1,10 @@
 //! Pure metrics engine for Mokumokuren. No I/O, no git — consumes a
 //! `Vec<Commit>` produced by `mmk-git` and returns ranked hotspots.
 
+pub mod budget;
 pub mod churn;
 pub mod coupling;
+pub mod drift;
 pub mod hotspot;
 pub mod session;
 pub mod types;

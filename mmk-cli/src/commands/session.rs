@@ -2,14 +2,24 @@ use ahash::AHashSet;
 use anyhow::{Context, Result};
 use mmk_config::{Config, ConfigFile};
 use mmk_core::coupling;
+use mmk_core::drift::{compute_drift, Snapshot};
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::args::{Format, SessionArgs};
 use crate::commands::analyze::COUPLES_PER_FILE;
+use crate::output::findings::{Finding, Layer, Severity};
 
 pub fn run<O: Write, E: Write>(args: &SessionArgs, stdout: &mut O, stderr: &mut E) -> Result<()> {
+    run_session_summary(args, stdout, stderr)
+}
+
+fn run_session_summary<O: Write, E: Write>(
+    args: &SessionArgs,
+    stdout: &mut O,
+    stderr: &mut E,
+) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine current directory")?;
 
     let window = humantime::parse_duration(&args.since)
@@ -131,6 +141,101 @@ pub fn run<O: Write, E: Write>(args: &SessionArgs, stdout: &mut O, stderr: &mut 
         .as_ref()
         .map(|(p, n)| (p.as_path(), blast_threshold, n.as_slice()));
 
+    // BUDGET. Two trigger paths, since the per-commit bulk filter
+    // drops oversize commits *before* aggregation, making a strict
+    // "aggregate > max_lines × N" threshold unreachable in practice:
+    //
+    // 1. Any session-window commit was bulk-filtered → the session
+    //    contained a sweep / merge / generated-code commit.
+    // 2. Surviving session aggregate exceeds 2× max_lines per
+    //    commit on average → many borderline-big commits.
+    //
+    // Either is meaningful "this session is large enough to slow a
+    // careful reviewer."
+    let mut findings: Vec<Finding> = Vec::new();
+    let session_n = u32::try_from(session_out.session_commits.len()).unwrap_or(u32::MAX);
+    if session_out.window.counts.commits_filtered_bulk > 0 {
+        findings.push(Finding::new(
+            Layer::Budget,
+            Severity::Warn,
+            format!(
+                "{} commit(s) in window dropped by bulk filter (>{} files or >{} lines)",
+                session_out.window.counts.commits_filtered_bulk,
+                cfg.bulk.max_files,
+                cfg.bulk.max_lines
+            ),
+        ));
+    }
+    if session_n > 0 {
+        let session_lines: u64 = session_out
+            .session_commits
+            .iter()
+            .flat_map(|c| c.deltas.iter())
+            .map(|d| u64::from(d.added) + u64::from(d.deleted))
+            .sum();
+        if let Some(budget) =
+            mmk_core::budget::check_session_aggregate(session_lines, session_n, &cfg.bulk)
+        {
+            findings.push(Finding::new(
+                Layer::Budget,
+                Severity::Warn,
+                format!(
+                    "session is {session_lines} lines across {session_n} commits; \
+                     exceeds 2× bulk.max_lines × commits ({budget})"
+                ),
+            ));
+        }
+    }
+
+    // DRIFT: opt-in. K snapshots at session boundaries, climb
+    // detection across K-1 transitions.
+    if args.drift_sessions > 0 {
+        let walker = mmk_git::RepoWalker::open(&cwd)?;
+        let boundaries = walker.find_session_boundaries(args.drift_sessions)?;
+        let snapshots: Vec<Snapshot> = boundaries
+            .iter()
+            .map(|oid| -> Result<Snapshot> {
+                let snap_analysis = mmk_git::analyze_at(&cwd, &cfg, *oid)?;
+                let snap_now = snap_analysis.head_timestamp.unwrap_or(0);
+                let w = mmk_core::churn::weighted_churn(
+                    &snap_analysis.commits,
+                    snap_now,
+                    cfg.tau_seconds(),
+                );
+                let r = mmk_core::churn::relative_churn(&w, &snap_analysis.loc);
+                let ct = mmk_core::churn::commits_touching(&snap_analysis.commits);
+                let lm = mmk_core::last_modified(&snap_analysis.commits);
+                let ranking = mmk_core::hotspot::rank(
+                    mmk_core::hotspot::RankInputs {
+                        weighted: &w,
+                        relative: &r,
+                        loc: &snap_analysis.loc,
+                        commits_touching: &ct,
+                        last_modified: &lm,
+                    },
+                    cfg.hotspot.top_n,
+                );
+                Ok(Snapshot {
+                    label: oid.to_string(),
+                    ranking,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for d in compute_drift(&snapshots) {
+            findings.push(Finding::new(
+                Layer::Drift,
+                Severity::Warn,
+                format!(
+                    "{} climbed in {}/{} sessions; latest rank #{}",
+                    d.path.display(),
+                    d.climb_transitions,
+                    d.total_transitions,
+                    d.latest_rank
+                ),
+            ));
+        }
+    }
+
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
     match args.format {
@@ -152,7 +257,11 @@ pub fn run<O: Write, E: Write>(args: &SessionArgs, stdout: &mut O, stderr: &mut 
             duration_ms,
             &cfg,
             blast_ref,
+            &findings,
         )?,
+    }
+    if matches!(args.format, Format::Text) && !findings.is_empty() {
+        crate::output::findings::render_text(stdout, &findings)?;
     }
     Ok(())
 }

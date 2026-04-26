@@ -21,7 +21,10 @@ pub fn run() -> ExitCode {
 
     let result = match cli.command {
         args::Command::Analyze(a) => commands::analyze::run(&a, &mut out, &mut err),
-        args::Command::Session(a) => commands::session::run(&a, &mut out, &mut err),
+        args::Command::SessionSummary(a) => commands::session::run(&a, &mut out, &mut err),
+        args::Command::Review(a) => commands::review::run(&a, &mut out, &mut err),
+        args::Command::PreEdit(a) => commands::pre_edit::run(&a, &mut out, &mut err),
+        args::Command::Drift(a) => commands::drift::run(&a, &mut out, &mut err),
         args::Command::Init(a) => commands::init::run(&a, &mut out, &mut err),
         args::Command::Cache(a) => commands::cache::run(&a, &mut out, &mut err),
     };

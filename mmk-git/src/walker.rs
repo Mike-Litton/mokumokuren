@@ -168,10 +168,21 @@ impl RepoWalker {
         let Ok(head_id) = self.repo.head_id() else {
             return Ok(Vec::new());
         };
+        self.walk_commits_from(head_id.detach(), since_ts)
+    }
 
+    /// Walk commits reachable from `start` with committer time
+    /// `>= since_ts`. Generalized form of [`walk_commits_since`] used
+    /// by `analyze_at` to anchor on an arbitrary commit (drift
+    /// snapshots).
+    pub fn walk_commits_from(
+        &self,
+        start: gix::ObjectId,
+        since_ts: i64,
+    ) -> Result<Vec<CommitInfo>> {
         let walk = self
             .repo
-            .rev_walk(std::iter::once(head_id.detach()))
+            .rev_walk(std::iter::once(start))
             .sorting(gix::revision::walk::Sorting::ByCommitTimeCutoff {
                 order: gix::traverse::commit::simple::CommitTimeOrder::NewestFirst,
                 seconds: since_ts,
@@ -202,5 +213,69 @@ impl RepoWalker {
             });
         }
         Ok(out)
+    }
+
+    /// Find K session boundaries on the current HEAD's history.
+    ///
+    /// Default heuristic: walk back from HEAD, take the most recent
+    /// K merge commits (any commit with > 1 parent — corresponds to
+    /// a PR-style merge into the base ref). Fallback: if fewer than
+    /// K merges exist, split the linear walk into K equal chunks
+    /// and return the boundary commit at each chunk start.
+    ///
+    /// Returns oldest-first so callers can iterate `analyze_at` in
+    /// chronological order to feed `mmk_core::drift::compute_drift`.
+    pub fn find_session_boundaries(&self, k: usize) -> Result<Vec<gix::ObjectId>> {
+        if k == 0 {
+            return Ok(Vec::new());
+        }
+        let Ok(head_id) = self.repo.head_id() else {
+            return Ok(Vec::new());
+        };
+
+        let walk = self
+            .repo
+            .rev_walk(std::iter::once(head_id.detach()))
+            .use_commit_graph(true)
+            .all()
+            .context("failed to start boundary walk")?;
+
+        let mut all: Vec<gix::ObjectId> = Vec::new();
+        let mut merges: Vec<gix::ObjectId> = Vec::new();
+        for info in walk {
+            let info = info.context("boundary walk error")?;
+            let commit = info.object().context("failed to load boundary commit")?;
+            let oid = info.id;
+            all.push(oid);
+            if commit.parent_ids().count() > 1 {
+                merges.push(oid);
+            }
+        }
+
+        let chosen: Vec<gix::ObjectId> = if merges.len() >= k {
+            // Newest-first iteration produced merges in newest-first
+            // order; take the K most recent then reverse to oldest-first.
+            merges.into_iter().take(k).rev().collect()
+        } else if all.is_empty() {
+            Vec::new()
+        } else {
+            // Linear-chunk fallback: split the walk into K equal
+            // segments, return the boundary commit at each segment
+            // start. `all` is newest-first; segment[0] = HEAD,
+            // segment[K-1] = oldest. Reverse to oldest-first for the
+            // caller.
+            let n = all.len();
+            let mut picks: Vec<gix::ObjectId> = (0..k)
+                .map(|i| {
+                    let idx = (i * (n.saturating_sub(1))) / k.max(1);
+                    all[idx]
+                })
+                .collect();
+            picks.reverse();
+            picks.dedup();
+            picks
+        };
+
+        Ok(chosen)
     }
 }

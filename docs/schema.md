@@ -1,15 +1,25 @@
 # `mmk` JSON schema
 
-`mmk analyze --format json` and `mmk session --format json` emit a
-single JSON object whose shape is documented here. The
+Every `mmk` subcommand that takes `--format json` emits a single
+JSON object whose shape is documented here. The
 **`schema_version`** field is the only contract consumers should pin
 against; `crate_version` is the Cargo version of the producing build
 and is diagnostic only.
 
+Subcommands at v0.3.0:
+
+- `mmk analyze` — ranked hotspots over a window.
+- `mmk session-summary` (alias: `mmk session`) — window + session
+  ranking, delta block, plus a `findings[]` overlay (DRIFT, BUDGET).
+- `mmk review` — the v0.3 headline. Diff against history (working
+  tree by default; `--staged`, `--range A..B`, `--commit <SHA>`).
+- `mmk pre-edit <PATH>` — historical context for a path before edit.
+- `mmk drift --sessions K` — climb signal across K session boundaries.
+
 ## Stability contract
 
-`schema_version` tracks the `mmk` minor release: every `0.2.x` build
-emits `0.2.0`, every `0.3.x` build emits `0.3.0`.
+`schema_version` tracks the `mmk` minor release: every `0.3.x` build
+emits `0.3.0`.
 
 | Change kind                                             | Schema bump? |
 | ------------------------------------------------------- | :----------: |
@@ -27,7 +37,7 @@ and ignore them rather than fail.
 
 | Field            | Type    | Notes                                                                                |
 | ---------------- | ------- | ------------------------------------------------------------------------------------ |
-| `schema_version` | string  | Pinned to the `mmk` minor (`"0.2.0"`).                                               |
+| `schema_version` | string  | Pinned to the `mmk` minor (`"0.3.0"`).                                               |
 | `crate_version`  | string  | `CARGO_PKG_VERSION` of the producing build. Diagnostic only — do not pin against.    |
 | `repo`           | object  | HEAD metadata + repo-level warnings.                                                 |
 | `config`         | object  | Effective `Config` after merging file + CLI sources.                                 |
@@ -113,6 +123,75 @@ ranking answers "what shifted while the agent was working?"
 | Field       | Type     | Notes                                                       |
 | ----------- | -------- | ----------------------------------------------------------- |
 | `root`      | string   | Echo of the `--blast-radius` path.                          |
-| `hops`      | uint     | Always `1` in v0.2.0.                                       |
+| `hops`      | uint     | Always `1` in v0.3.0.                                       |
 | `threshold` | float    | Effective Jaccard threshold applied. Resolved as `--blast-radius-threshold` → `[blast_radius] threshold` in `mokumokuren.toml` → built-in default `0.10`. Echoed so consumers can see what filter produced the listed nodes. |
 | `nodes`     | array    | `[{ "path": string, "jaccard": float, "co_change_count": uint, "hops": uint }]` sorted desc by jaccard. |
+
+## v0.3 envelopes
+
+### `mmk review`
+
+The v0.3 headline. Compares a diff against the historical baseline
+and emits findings before any commit lands.
+
+| Field            | Type    | Notes                                                                                  |
+| ---------------- | ------- | -------------------------------------------------------------------------------------- |
+| `schema_version` | string  | `"0.3.0"`.                                                                             |
+| `crate_version`  | string  |                                                                                        |
+| `repo`           | object  | Same as analyze. Present only when there are changes (clean tree skips analyze).       |
+| `config`         | object  | Same as analyze. Present only when there are changes.                                  |
+| `analysis`       | object  | Same as analyze. Present only when there are changes.                                  |
+| `review`         | object  | `mode` + per-file diff numstat. Always present.                                        |
+| `findings`       | array   | Layer-labeled findings (HOTSPOT, COUPLING, BUDGET). Always present (possibly empty).   |
+
+#### `review`
+
+| Field                  | Type   | Notes                                                                          |
+| ---------------------- | ------ | ------------------------------------------------------------------------------ |
+| `mode`                 | string | One of `"working_tree"`, `"staged"`, `"range"`, `"commit"`.                    |
+| `diff.files_changed`   | uint   |                                                                                |
+| `diff.lines_added`     | uint   |                                                                                |
+| `diff.lines_deleted`   | uint   |                                                                                |
+| `diff.files[]`         | array  | `[{ "path": string, "added": uint, "deleted": uint }]`. Binary files omitted. |
+
+### `mmk pre-edit`
+
+Pre-edit context: rank, expected partners, optional drift for the
+queried path.
+
+| Field            | Type    | Notes                                                                                  |
+| ---------------- | ------- | -------------------------------------------------------------------------------------- |
+| `schema_version` | string  | `"0.3.0"`.                                                                             |
+| `crate_version`  | string  |                                                                                        |
+| `repo`           | object  |                                                                                        |
+| `config`         | object  |                                                                                        |
+| `analysis`       | object  |                                                                                        |
+| `pre_edit.path`  | string  | Echo of the queried path.                                                              |
+| `findings`       | array   | HOTSPOT (Warn), COUPLING (Info), DRIFT (Warn, when `--drift-sessions K > 0`).          |
+
+### `mmk drift`
+
+K snapshot labels + the climb-majority findings.
+
+| Field                       | Type     | Notes                                                                          |
+| --------------------------- | -------- | ------------------------------------------------------------------------------ |
+| `schema_version`            | string   | `"0.3.0"`.                                                                     |
+| `crate_version`             | string   |                                                                                |
+| `drift.base`                | string?  | Echo of `--base`.                                                              |
+| `drift.sessions`            | uint     | Echo of `--sessions K`.                                                        |
+| `drift.snapshot_labels`     | string[] | One commit OID per snapshot, oldest-first.                                     |
+| `findings`                  | array    | DRIFT findings. Each has `layer`, `severity`, `path`, `climb_transitions`, `total_transitions`, `latest_rank`. |
+| `duration_ms`               | uint     | Wall time for the K analyze runs + drift compute.                              |
+
+### `findings[]` (unified, used by review / pre-edit / session-summary)
+
+| Field      | Type   | Notes                                                                                                |
+| ---------- | ------ | ---------------------------------------------------------------------------------------------------- |
+| `layer`    | string | One of `"hotspot"`, `"coupling"`, `"drift"`, `"budget"`. Reserved for v0.4: `"health"`, `"anchor"`.  |
+| `severity` | string | `"warn"`, `"info"`, `"ok"`.                                                                          |
+| `message`  | string | Human-readable, terse, one-line. The structured detail lives in `layer` / `severity`.                |
+
+The `mmk drift` envelope inlines per-finding bookkeeping fields
+(`path`, `climb_transitions`, etc.) directly into each finding object;
+review / pre-edit / session-summary keep `findings[]` to the unified
+shape above.

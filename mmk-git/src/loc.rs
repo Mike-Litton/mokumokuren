@@ -32,12 +32,26 @@ pub fn head_entries(repo: &gix::Repository, ignores: &GlobSet) -> Result<(Vec<He
     let Ok(commit) = repo.head_commit() else {
         return Ok((Vec::new(), 0));
     };
-    let tree = commit.tree().context("load HEAD tree")?;
+    tree_entries(repo, commit.id, ignores)
+}
+
+/// Same shape as [`head_entries`], but anchored on an arbitrary
+/// commit. Used by `analyze_at` to enumerate the file set at a
+/// historical commit (drift snapshots).
+pub fn tree_entries(
+    repo: &gix::Repository,
+    commit_oid: gix::ObjectId,
+    ignores: &GlobSet,
+) -> Result<(Vec<HeadEntry>, u64)> {
+    let commit = repo
+        .find_commit(commit_oid)
+        .with_context(|| format!("anchor commit {commit_oid} not found"))?;
+    let tree = commit.tree().context("load anchor tree")?;
     let entries = tree
         .traverse()
         .breadthfirst
         .files()
-        .context("traverse HEAD tree")?;
+        .context("traverse anchor tree")?;
 
     let mut out = Vec::with_capacity(entries.len());
     let mut head_paths_ignored: u64 = 0;

@@ -104,7 +104,12 @@ fn run_cmd_against_fixture(cmd: &[String]) -> Result<(), String> {
     let mut stderr: Vec<u8> = Vec::new();
     let result = match cli.command {
         Command::Analyze(a) => mokumokuren::commands::analyze::run(&a, &mut stdout, &mut stderr),
-        Command::Session(a) => mokumokuren::commands::session::run(&a, &mut stdout, &mut stderr),
+        Command::SessionSummary(a) => {
+            mokumokuren::commands::session::run(&a, &mut stdout, &mut stderr)
+        }
+        Command::Review(a) => mokumokuren::commands::review::run(&a, &mut stdout, &mut stderr),
+        Command::PreEdit(a) => mokumokuren::commands::pre_edit::run(&a, &mut stdout, &mut stderr),
+        Command::Drift(a) => mokumokuren::commands::drift::run(&a, &mut stdout, &mut stderr),
         Command::Init(_) | Command::Cache(_) => unreachable!("filtered by SKIP_TOKENS"),
     };
 

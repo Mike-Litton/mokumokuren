@@ -1743,6 +1743,7 @@ dependencies = [
  "ahash",
  "anyhow",
  "criterion",
+ "mmk-config",
  "serde",
 ]
 
