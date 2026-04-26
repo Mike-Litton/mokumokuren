@@ -334,6 +334,40 @@ fn pre_edit_health_block_absent_when_disabled() {
 }
 
 #[test]
+fn pre_edit_says_new_file_for_untracked_subject() {
+    // Pre-edit on a file that has never appeared in history must
+    // distinguish "new file (no history)" from "no signal (N
+    // commits…)" — the former is structural, the latter
+    // statistical, and conflating them misleads agents working in
+    // greenfield slices.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    write(dir.path(), "seed.rs", "x\n");
+    commit_all(dir.path(), "seed", now - 5 * DAY);
+
+    // brand-new.rs has never been committed.
+    let stdout = run_in(dir.path(), pre_edit_args("brand-new.rs"));
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let findings = v["findings"].as_array().expect("findings array");
+    assert_eq!(
+        findings.len(),
+        1,
+        "untracked subject must surface exactly one OK finding; got: {findings:?}"
+    );
+    let msg = findings[0]["message"].as_str().unwrap_or("");
+    assert!(
+        msg.contains("new file (no history)"),
+        "untracked subject's wording must say 'new file (no history)'; got: {msg}"
+    );
+    assert!(
+        !msg.contains("no signal"),
+        "untracked subject must not be reported as 'no signal'; got: {msg}"
+    );
+}
+
+#[test]
 fn pre_edit_json_envelope_has_path_and_findings() {
     let dir = TempDir::new().unwrap();
     let now = 1_700_000_000_i64;

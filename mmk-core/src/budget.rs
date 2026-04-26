@@ -8,7 +8,9 @@
 //! at a different granularity (the live edit / the session window)
 //! without changing what the analyzer ranks.
 
+use ahash::AHashMap;
 use mmk_config::BulkCfg;
+use std::path::{Path, PathBuf};
 
 /// What an edit / session looked like, for budget evaluation.
 #[derive(Debug, Clone, Copy)]
@@ -44,6 +46,44 @@ pub fn check_diff_budget(check: &BudgetCheck, cfg: &BulkCfg) -> Vec<BudgetTrigge
         });
     }
     triggers
+}
+
+/// Fraction of `changed` paths that have no entry in `commits_touching`.
+///
+/// I.e., paths the historical analyzer has never seen. The "new"
+/// definition is *absence from the map*; an explicit zero-count entry
+/// means the file was visible to the walk but didn't churn, which is
+/// structurally different from a brand-new file.
+///
+/// Returns a value in `[0.0, 1.0]`. An empty diff returns `0.0`.
+#[must_use]
+pub fn new_file_fraction(changed: &[PathBuf], commits_touching: &AHashMap<PathBuf, u32>) -> f64 {
+    if changed.is_empty() {
+        return 0.0;
+    }
+    let new = changed
+        .iter()
+        .filter(|p| !commits_touching.contains_key(p.as_path()))
+        .count();
+    new as f64 / changed.len() as f64
+}
+
+/// Slice-of-`&Path` form of [`new_file_fraction`] for callers that
+/// already have references handy and don't want to allocate
+/// `PathBuf`s.
+#[must_use]
+pub fn new_file_fraction_paths(
+    changed: &[&Path],
+    commits_touching: &AHashMap<PathBuf, u32>,
+) -> f64 {
+    if changed.is_empty() {
+        return 0.0;
+    }
+    let new = changed
+        .iter()
+        .filter(|p| !commits_touching.contains_key(**p))
+        .count();
+    new as f64 / changed.len() as f64
 }
 
 /// Session-aggregate trigger.

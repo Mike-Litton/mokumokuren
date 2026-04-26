@@ -734,6 +734,114 @@ fn review_skips_binary_untracked() {
 }
 
 #[test]
+fn review_signals_greenfield_when_diff_is_mostly_new() {
+    // When most of the diff is paths the analyzer hasn't seen, the
+    // history-based layers (HOTSPOT/COUPLING/DRIFT) are silent. The
+    // greenfield short-circuit must surface a single Info finding so
+    // the agent reads the silence as expected — not as "mmk decided
+    // to be quiet."
+    use std::fmt::Write as _;
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    // A loud unrelated hotspot dominates rank, so the file we touch
+    // (quiet.rs) doesn't make top-1.
+    write(dir.path(), "noisy.rs", "n\n");
+    commit_all(dir.path(), "seed noisy", now - 30 * DAY);
+    for i in 0..10_i64 {
+        let mut body = String::new();
+        for n in 0..(20 + i) {
+            writeln!(body, "line{n}-r{i}").unwrap();
+        }
+        write(dir.path(), "noisy.rs", &body);
+        commit_all(dir.path(), &format!("noisy r{i}"), now - (28 - i) * DAY);
+    }
+    write(dir.path(), "quiet.rs", "q\n");
+    commit_all(dir.path(), "seed quiet", now - DAY);
+
+    // One modified-with-history (quiet.rs, not in top-1) plus
+    // several untracked-new files → new-file fraction above 0.5.
+    write(dir.path(), "quiet.rs", "q\nnew\n");
+    write(dir.path(), "new1.rs", "n1\n");
+    write(dir.path(), "new2.rs", "n2\n");
+    write(dir.path(), "new3.rs", "n3\n");
+    write(dir.path(), "new4.rs", "n4\n");
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    args.top = 1;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let frac = v["review"]["diff"]["new_file_fraction"]
+        .as_f64()
+        .expect("new_file_fraction must be present on a greenfield diff");
+    assert!(
+        frac > 0.5,
+        "new-file fraction must exceed 0.5 on this fixture; got {frac}"
+    );
+
+    let greenfield: Vec<&Value> = v["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .filter(|f| {
+            f["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("new files; history priors don't apply")
+        })
+        .collect();
+    assert_eq!(
+        greenfield.len(),
+        1,
+        "exactly one greenfield Info finding expected; got: {:?}",
+        v["findings"]
+    );
+    assert_eq!(greenfield[0]["severity"], "info");
+}
+
+#[test]
+fn review_no_greenfield_signal_when_history_layer_fired() {
+    // The greenfield finding is a fall-through, not an addition.
+    // When HOTSPOT/COUPLING/DRIFT fired, the agent already has
+    // history-based signal — no need to add the "priors don't apply"
+    // line. Mirrors pre-edit's no-OK-when-other-layers-fired rule.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_coupling_fixture(dir.path(), now);
+
+    // Edit core/a.rs (HOTSPOT + COUPLING fire) and add several new
+    // untracked files (which would push new_file_fraction above 0.5
+    // and might tempt the short-circuit).
+    write(dir.path(), "core/a.rs", "a1\na2\na3\na4\na5\nNEW\n");
+    write(dir.path(), "feat/x.rs", "x\n");
+    write(dir.path(), "feat/y.rs", "y\n");
+    write(dir.path(), "feat/z.rs", "z\n");
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let greenfield: Vec<&Value> = v["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .filter(|f| {
+            f["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("history priors don't apply")
+        })
+        .collect();
+    assert!(
+        greenfield.is_empty(),
+        "greenfield signal must not co-fire with HOTSPOT/COUPLING/DRIFT; got: {greenfield:?}"
+    );
+}
+
+#[test]
 fn review_emits_budget_when_diff_exceeds() {
     let dir = TempDir::new().unwrap();
     let now = 1_700_000_000_i64;

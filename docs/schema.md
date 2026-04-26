@@ -179,7 +179,8 @@ and emits findings before any commit lands.
 | `diff.files_changed`   | uint   |                                                                                |
 | `diff.lines_added`     | uint   |                                                                                |
 | `diff.lines_deleted`   | uint   |                                                                                |
-| `diff.files[]`         | array  | `[{ "path": string, "added": uint, "deleted": uint }]`. Binary files omitted. |
+| `diff.files[]`         | array  | `[{ "path": string, "added": uint, "deleted": uint }]`. Binary files omitted. Working-tree mode includes untracked-but-not-ignored files (added = line count, deleted = 0). |
+| `diff.new_file_fraction` | float? | (v0.4) Fraction of changed paths the historical analyzer hasn't seen. Optional: present on the with-changes envelope, omitted on bulk-self / clean-tree envelopes. Lets a consumer reason about why HOTSPOT/COUPLING/DRIFT are silent on greenfield diffs. |
 
 #### `mmk review` bulk-self-filter envelope
 

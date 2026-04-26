@@ -112,6 +112,11 @@ pub fn run<O: Write, E: Write>(
     if let Some(file_h) = file_cfg.health.as_ref() {
         apply_health_file(&mut cfg.health.ts, file_h);
     }
+    if let Some(file_b) = file_cfg.bulk.as_ref() {
+        if let Some(t) = file_b.greenfield_threshold {
+            cfg.bulk.greenfield_threshold = t;
+        }
+    }
     // Explicit --coupling-threshold wins; fall back to the
     // (deprecated) --blast-radius-threshold so existing CLI
     // invocations keep working until users migrate. Both are routed
@@ -196,6 +201,34 @@ pub fn run<O: Write, E: Write>(
         }
     }
 
+    // GREENFIELD signal: when most of the diff is paths the historical
+    // analyzer hasn't seen, the HOTSPOT/COUPLING/DRIFT layers
+    // structurally have nothing to say. Emit one Info finding so the
+    // agent reads silence as expected, not as "mmk decided to be
+    // quiet." HEALTH is structural and may still fire — that's signal,
+    // not noise.
+    let changed_paths: Vec<PathBuf> = changed.iter().map(|c| c.path.clone()).collect();
+    let new_frac = mmk_core::budget::new_file_fraction(&changed_paths, &commits_touching);
+    if new_frac > cfg.bulk.greenfield_threshold {
+        let history_layer_fired = findings.iter().any(|f| {
+            matches!(
+                f.layer,
+                Layer::Hotspot | Layer::Coupling | Layer::Drift | Layer::Budget
+            )
+        });
+        if !history_layer_fired {
+            let new_count = changed_paths
+                .iter()
+                .filter(|p| !commits_touching.contains_key(p.as_path()))
+                .count();
+            findings.push(Finding::new(
+                Layer::Coupling,
+                Severity::Info,
+                messages::greenfield_signal(new_count, changed_paths.len()),
+            ));
+        }
+    }
+
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
     match args.format {
@@ -210,6 +243,7 @@ pub fn run<O: Write, E: Write>(
             &cfg,
             &health_matches,
             &health_patterns,
+            Some(new_frac),
         )?,
     }
     Ok(verdict_for(args.gate, &findings))

@@ -30,6 +30,12 @@ pub struct ConfigFile {
     /// The `js-ts` profile flips it on with all three patterns.
     #[serde(default)]
     pub health: Option<HealthFile>,
+    /// Optional `[bulk]` block. Absent → in-code defaults
+    /// ([`crate::DEFAULT_GREENFIELD_THRESHOLD`]). Today exposes only
+    /// the greenfield trigger; max_files / max_lines stay on the
+    /// in-code defaults.
+    #[serde(default)]
+    pub bulk: Option<BulkFile>,
 }
 
 /// `[blast_radius]` block in `mokumokuren.toml`.
@@ -37,6 +43,16 @@ pub struct ConfigFile {
 #[serde(deny_unknown_fields)]
 pub struct BlastRadiusFile {
     pub threshold: f64,
+}
+
+/// `[bulk]` block in `mokumokuren.toml`. Currently exposes only
+/// `greenfield_threshold`; the per-commit `max_files` / `max_lines`
+/// stay on the in-code defaults to keep the surface stable.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BulkFile {
+    #[serde(default)]
+    pub greenfield_threshold: Option<f64>,
 }
 
 /// `[coupling]` block in `mokumokuren.toml`.

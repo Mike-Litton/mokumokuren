@@ -315,6 +315,13 @@ struct ReviewDiffBlock<'a> {
     lines_added: u64,
     lines_deleted: u64,
     files: Vec<ReviewDiffFile<'a>>,
+    /// Fraction of changed paths the historical analyzer has never
+    /// seen. Optional: omitted when not computed (e.g. bulk-self
+    /// path) or zero. Lets a consumer reason about why
+    /// HOTSPOT/COUPLING/DRIFT are silent without re-deriving from
+    /// the diff.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    new_file_fraction: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -375,6 +382,7 @@ pub(crate) fn write_review<W: Write>(
     config: &Config,
     health_matches: &[mmk_health::HealthFinding],
     health_patterns: &[mmk_health::HealthPattern],
+    new_file_fraction: Option<f64>,
 ) -> Result<()> {
     let path_strs: Vec<String> = changed
         .iter()
@@ -421,6 +429,7 @@ pub(crate) fn write_review<W: Write>(
                 lines_added,
                 lines_deleted,
                 files,
+                new_file_fraction,
             },
         },
         findings,
@@ -660,6 +669,7 @@ pub(crate) fn write_review_bulk<W: Write>(
                 lines_added,
                 lines_deleted,
                 files,
+                new_file_fraction: None,
             },
         },
         findings,

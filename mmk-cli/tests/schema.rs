@@ -534,7 +534,13 @@ fn schema_review_shape_with_changes() {
     expect_required_keys(&v["review"], &["mode", "diff"], "review");
     expect_required_keys(
         &v["review"]["diff"],
-        &["files_changed", "lines_added", "lines_deleted", "files"],
+        &[
+            "files_changed",
+            "lines_added",
+            "lines_deleted",
+            "files",
+            "new_file_fraction",
+        ],
         "review.diff",
     );
     let files = v["review"]["diff"]["files"]

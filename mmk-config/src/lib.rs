@@ -5,7 +5,7 @@ use serde::Serialize;
 
 pub mod file;
 
-pub use file::{BlastRadiusFile, ConfigFile, CouplingFile, HealthFile, HealthTsFile};
+pub use file::{BlastRadiusFile, BulkFile, ConfigFile, CouplingFile, HealthFile, HealthTsFile};
 
 pub const SECONDS_PER_DAY: i64 = 86_400;
 
@@ -33,6 +33,15 @@ pub const DEFAULT_COUPLING_THRESHOLD: f64 = 0.30;
 /// hot files (54 / 203 ≈ 0.27) and quiet files (1 / 1 = 1.0) are
 /// scored on the same scale.
 pub const DEFAULT_COUPLING_CONFIDENCE_THRESHOLD: f64 = 0.20;
+
+/// Default `[bulk] greenfield_threshold`.
+///
+/// When more than this fraction of `mmk review`'s diff is files the
+/// historical analyzer has never seen, the review emits an explicit
+/// "history priors don't apply" finding instead of letting the agent
+/// guess why HOTSPOT/COUPLING are silent. 0.5 reads as "more new than
+/// modified."
+pub const DEFAULT_GREENFIELD_THRESHOLD: f64 = 0.5;
 
 /// Minimum `commits_touching(target)` required before COUPLING fires.
 ///
@@ -62,6 +71,11 @@ pub struct HotspotCfg {
 pub struct BulkCfg {
     pub max_files: u32,
     pub max_lines: u32,
+    /// Fraction in `[0.0, 1.0]`. When the working-tree diff's
+    /// new-file fraction exceeds this, `mmk review` emits a single
+    /// explicit greenfield acknowledgement so the agent doesn't have
+    /// to guess why history-based layers are silent.
+    pub greenfield_threshold: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -159,6 +173,7 @@ impl Default for BulkCfg {
         Self {
             max_files: 15,
             max_lines: 1000,
+            greenfield_threshold: DEFAULT_GREENFIELD_THRESHOLD,
         }
     }
 }

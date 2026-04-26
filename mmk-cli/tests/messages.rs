@@ -27,6 +27,7 @@ const FORBIDDEN: &[&str] = &[
     "pre-edit consulted",
     "historical co-edit",
     "historically co-changes",
+    "greenfield_threshold",
 ];
 
 fn assert_no_forbidden(message: &str, context: &str) {
@@ -247,12 +248,61 @@ fn quiet_file_with_rank_appends_rank_clause() {
 }
 
 #[test]
+fn quiet_file_zero_commits_says_new_file() {
+    // The fall-through must distinguish "untouched in window" from
+    // "doesn't exist in history at all". Zero commits → new file.
+    let s = msg::quiet_file(Path::new("brand-new.rs"), 0, 60, None);
+    assert_eq!(s, "brand-new.rs: new file (no history)");
+}
+
+#[test]
+fn quiet_file_zero_commits_with_rank_drops_rank_clause() {
+    // A new file can't have a hotspot rank — guard against
+    // mis-rendering by callers that wire `rank` through anyway.
+    let s = msg::quiet_file(Path::new("brand-new.rs"), 0, 60, Some(7));
+    assert_eq!(s, "brand-new.rs: new file (no history)");
+}
+
+#[test]
+fn quiet_file_zero_commits_no_no_signal_token() {
+    // The whole point: "no signal" is misleading wording for a path
+    // that doesn't exist in history. Lock the negative oracle.
+    let s = msg::quiet_file(Path::new("brand-new.rs"), 0, 60, None);
+    assert!(
+        !s.contains("no signal"),
+        "structurally-new path must not be reported as 'no signal'; got: {s}"
+    );
+}
+
+#[test]
 fn quiet_file_no_forbidden_tokens_across_inputs() {
     for rank in [None, Some(1), Some(7), Some(50)] {
         let s = msg::quiet_file(Path::new("q.rs"), 0, 30, rank);
         assert_no_forbidden(&s, &format!("quiet_file rank={rank:?}"));
         let s = msg::quiet_file(Path::new("q.rs"), 99, 90, rank);
         assert_no_forbidden(&s, &format!("quiet_file 99 rank={rank:?}"));
+    }
+}
+
+// ---- greenfield_signal ----------------------------------------------------
+
+#[test]
+fn greenfield_signal_pins_factual_wording() {
+    let s = msg::greenfield_signal(10, 15);
+    assert_eq!(s, "diff is 10 of 15 new files; history priors don't apply");
+}
+
+#[test]
+fn greenfield_signal_handles_full_greenfield() {
+    let s = msg::greenfield_signal(7, 7);
+    assert_eq!(s, "diff is 7 of 7 new files; history priors don't apply");
+}
+
+#[test]
+fn greenfield_signal_no_forbidden_tokens_across_inputs() {
+    for (k, n) in [(1usize, 2usize), (4, 5), (10, 15), (100, 200)] {
+        let s = msg::greenfield_signal(k, n);
+        assert_no_forbidden(&s, &format!("greenfield_signal k={k} n={n}"));
     }
 }
 

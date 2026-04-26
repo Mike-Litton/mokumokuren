@@ -120,18 +120,37 @@ pub fn health_test_pair<P: AsRef<Path>>(subject: &Path, related: &[P]) -> String
     )
 }
 
-/// `<path>: no signal (N commits in W-day window[, rank #R])`
+/// `<path>: no signal (N commits in W-day window[, rank #R])` —
+/// or `<path>: new file (no history)` when `n_commits == 0`.
 ///
 /// The pre-edit fall-through when no other layer fires. Lets the
 /// agent distinguish "mmk was consulted but had nothing to say" from
-/// "mmk wasn't run."
+/// "mmk wasn't run." The zero-commit branch distinguishes
+/// "untouched in window" (which has history elsewhere) from "doesn't
+/// exist in history at all" — wording that conflates the two
+/// misleads agents working in greenfield slices.
 #[must_use]
 pub fn quiet_file(path: &Path, n_commits: u32, window_days: u32, rank: Option<u32>) -> String {
+    if n_commits == 0 {
+        return format!("{}: new file (no history)", path.display());
+    }
     let rank_clause = rank.map_or_else(String::new, |r| format!(", rank #{r}"));
     format!(
         "{}: no signal ({n_commits} commits in {window_days}-day window{rank_clause})",
         path.display(),
     )
+}
+
+/// `diff is K of N new files; history priors don't apply`
+///
+/// Emitted when the working-tree diff is mostly greenfield — the
+/// HOTSPOT/COUPLING/DRIFT layers structurally have nothing to say
+/// about paths the historical analyzer hasn't seen. Acknowledging
+/// the silence as positive information beats letting the agent
+/// guess whether mmk just decided to be quiet.
+#[must_use]
+pub fn greenfield_signal(new_count: usize, total: usize) -> String {
+    format!("diff is {new_count} of {total} new files; history priors don't apply")
 }
 
 /// `K of N commits dropped (>F files or >L lines)` — session budget.
