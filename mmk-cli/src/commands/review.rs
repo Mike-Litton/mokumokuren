@@ -186,7 +186,7 @@ fn emit_bulk<O: Write>(
     match args.format {
         Format::Text => render_text(stdout, findings)?,
         Format::Json => {
-            crate::output::json::write_review_bulk(stdout, mode, changed, findings, duration_ms)?
+            crate::output::json::write_review_bulk(stdout, mode, changed, findings, duration_ms)?;
         }
     }
     Ok(verdict_for(args.gate, findings))
