@@ -97,11 +97,10 @@ fn pre_edit_emits_coupling_for_partners_above_threshold() {
 }
 
 #[test]
-fn pre_edit_emits_ok_finding_for_quiet_file() {
-    // When a file's commit count is below coupling.min_sample_size
-    // and no other layer fires, pre-edit emits a single Severity::Ok
-    // finding so the agent can tell "mmk had nothing to say" from
-    // "mmk wasn't consulted."
+fn pre_edit_emits_ok_finding_when_no_signal_fires() {
+    // When no layer (HOTSPOT/COUPLING/HEALTH/DRIFT) fires, pre-edit
+    // emits a single Severity::Ok finding so the agent can tell
+    // "mmk had nothing to say" from "mmk wasn't consulted."
     let dir = TempDir::new().unwrap();
     let now = 1_700_000_000_i64;
     init_repo(dir.path());
@@ -129,16 +128,16 @@ fn pre_edit_emits_ok_finding_for_quiet_file() {
     assert_eq!(
         findings.len(),
         1,
-        "quiet file must surface exactly one OK finding; got: {findings:?}"
+        "no-signal file must surface exactly one OK finding; got: {findings:?}"
     );
     let f = &findings[0];
     assert_eq!(
         f["severity"], "ok",
-        "the quiet-file fall-through has severity ok; got: {f}"
+        "the no-signal fall-through has severity ok; got: {f}"
     );
     assert_eq!(
         f["layer"], "coupling",
-        "absence-of-coupling signal lives under the coupling layer; got: {f}"
+        "absence-of-signal lives under the coupling layer; got: {f}"
     );
     let msg = f["message"].as_str().unwrap_or("");
     assert!(
@@ -146,8 +145,8 @@ fn pre_edit_emits_ok_finding_for_quiet_file() {
         "OK finding must name the queried path; got: {msg}"
     );
     assert!(
-        msg.contains("insufficient history"),
-        "message should call out insufficient history; got: {msg}"
+        msg.contains("no coupling"),
+        "message should call out the absence of signal; got: {msg}"
     );
 }
 
@@ -172,11 +171,10 @@ fn pre_edit_no_ok_finding_when_coupling_already_fires() {
 }
 
 #[test]
-fn pre_edit_no_ok_finding_when_file_has_enough_history_but_no_partners() {
-    // Edge case: a file with ≥ min_sample_size commits but no
-    // qualifying partners. The gate is "n < min_sample_size", not
-    // "no partners", so this case must stay silent — emitting OK
-    // here would mislead the agent that history was insufficient.
+fn pre_edit_emits_ok_finding_for_lone_file_with_no_partners() {
+    // A file with history but no co-edited partners and no other
+    // signal also gets the OK fall-through — the agent should know
+    // mmk ran and found nothing rather than infer "no output = pass."
     let dir = TempDir::new().unwrap();
     let now = 1_700_000_000_i64;
     init_repo(dir.path());
@@ -185,24 +183,30 @@ fn pre_edit_no_ok_finding_when_file_has_enough_history_but_no_partners() {
         write(dir.path(), "lonely.rs", &format!("l{i}\n"));
         commit_all(dir.path(), &format!("lonely {i}"), now - (30 - i) * DAY);
     }
+    // Heavy unrelated churn on noisy.rs so lonely.rs falls below
+    // the top-1 hotspot bar — we want the no-partners path, not
+    // the hotspot-rank path.
+    write(dir.path(), "noisy.rs", "n\n");
+    commit_all(dir.path(), "seed noisy", now - 25 * DAY);
+    for i in 0..20 {
+        write(dir.path(), "noisy.rs", &format!("n{i}\nx{i}\ny{i}\nz{i}\n"));
+        commit_all(dir.path(), &format!("noisy {i}"), now - (24 - i) * DAY);
+    }
 
-    // top=20 keeps the lone file from auto-firing HOTSPOT — we
-    // want the no-partners-but-enough-history path, not the
-    // hotspot-rank path.
-    let stdout = run_in(dir.path(), pre_edit_args("lonely.rs"));
+    let mut args = pre_edit_args("lonely.rs");
+    args.top = 1;
+    let stdout = run_in(dir.path(), args);
     let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
 
     let findings = v["findings"].as_array().expect("findings array");
-    let any_ok = findings.iter().any(|f| f["severity"] == "ok");
-    assert!(
-        !any_ok,
-        "n=7 ≥ min_sample_size=5; quiet-file fall-through must stay silent. got: {findings:?}"
+    assert_eq!(
+        findings.len(),
+        1,
+        "lonely file must surface exactly one OK finding; got: {findings:?}"
     );
-    let any_coupling = findings.iter().any(|f| f["layer"] == "coupling");
-    assert!(
-        !any_coupling,
-        "no co-changes → no COUPLING finding either. got: {findings:?}"
-    );
+    let f = &findings[0];
+    assert_eq!(f["severity"], "ok");
+    assert_eq!(f["layer"], "coupling");
 }
 
 #[test]

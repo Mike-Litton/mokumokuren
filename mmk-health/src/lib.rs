@@ -26,8 +26,8 @@ use std::path::PathBuf;
 #[serde(rename_all = "snake_case")]
 pub enum HealthPattern {
     /// Pattern A: file matches the action / contribution registration
-    /// shape (e.g. vscode `*.contribution.ts`). Surfaces nearby
-    /// peer files as architectural precedent.
+    /// shape (e.g. monorepo-style `*.contribution.ts`). Surfaces
+    /// nearby peer files as architectural precedent.
     Registration,
     /// Pattern B: file declares an `interface IFoo` plus
     /// `registerSingleton(IFoo, FooImpl)`. Surfaces top consumers

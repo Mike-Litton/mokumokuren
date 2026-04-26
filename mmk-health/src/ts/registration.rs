@@ -3,8 +3,8 @@
 //! Detection signal: the file imports
 //! `vs/platform/actions/common/actions`, contains a class extending
 //! `Action2`, OR contains a top-level call to `registerAction2(...)`.
-//! Any one trigger fires; together they cover the vscode contrib
-//! convention without insisting on all three.
+//! Any one trigger fires; together they cover the monorepo
+//! `contrib/` convention without insisting on all three.
 //!
 //! Once a subject is identified as a registration file, the detector
 //! returns up to [`MAX_PEERS`] sibling registration files in the
@@ -120,7 +120,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registration_triggers_match_vscode_convention() {
+    fn registration_triggers_match_contrib_convention() {
         let body = r"
             import { registerAction2, Action2 } from 'vs/platform/actions/common/actions';
             class FooContrib extends Action2 { run() {} }

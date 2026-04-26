@@ -289,11 +289,11 @@ fn conditional_probability_and_wilson_lower_populate() {
     );
 }
 
-/// Hot-file regression mirroring vscode's
-/// `runInTerminalTool.ts` ↔ `runInTerminalTool.test.ts` pair: 54
-/// co-changes inside 203 commits touching A. P(B|A)=0.266; Wilson
-/// 95 % lower ≈ 0.211 — clears the default 0.20 confidence floor.
-/// The headline calibration target for the Wilson rule.
+/// Hot-file regression mirroring an impl/test pair from a large
+/// monorepo: 54 co-changes inside 203 commits touching A.
+/// P(B|A)=0.266; Wilson 95 % lower ≈ 0.211 — clears the default
+/// 0.20 confidence floor. The headline calibration target for
+/// the Wilson rule.
 #[test]
 fn hot_file_real_partner_clears_default_confidence_threshold() {
     let mut commits = Vec::new();
@@ -353,13 +353,12 @@ fn quiet_file_high_proportion_low_count_keeps_high_wilson_but_low_n() {
     assert_eq!(b.co_change_count, 3, "co_change_count carries n_k");
 }
 
-/// Wilson discriminating-power lock: vscode's `chatWidget.ts` →
-/// `chatInputPart.ts` pair (27 co-changes inside 133 commits, Wilson
-/// 95 % lower ≈ 0.14) sits *below* the default
-/// `confidence_threshold = 0.20`. The Wilson rule's value is its
-/// discrimination — surfacing real partners on hot files (54/203)
-/// while *not* over-firing on borderline ones. This test pins the
-/// suppression alongside the firing test to lock both sides.
+/// Wilson discriminating-power lock: a borderline pair (27 co-changes
+/// inside 133 commits, Wilson 95 % lower ≈ 0.14) sits *below* the
+/// default `confidence_threshold = 0.20`. The Wilson rule's value
+/// is its discrimination — surfacing real partners on hot files
+/// (54/203) while *not* over-firing on borderline ones. This test
+/// pins the suppression alongside the firing test to lock both sides.
 #[test]
 fn chatwidget_borderline_partner_does_not_clear_default_confidence_threshold() {
     let mut commits = Vec::new();

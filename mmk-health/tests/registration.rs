@@ -1,4 +1,5 @@
-//! Pattern A — vscode-style registration files.
+//! Pattern A — monorepo-style registration files
+//! (`*.contribution.ts` paired with `registerAction2` / `Action2`).
 
 use mmk_health::ts::analyze_ts;
 use mmk_health::HealthPattern;
@@ -41,7 +42,7 @@ fn registration_surfaces_nearby_contribution_peers() {
     let names: Vec<&str> = f.related.iter().map(|p| p.to_str().unwrap_or("")).collect();
     assert!(
         names.contains(&"src/contrib/preferences/preferences.contribution.ts"),
-        "related must include preferences.contribution.ts (the precedent referenced in #312538); got {names:?}"
+        "related must include the sibling contribution file as architectural precedent; got {names:?}"
     );
     assert!(
         !names.iter().any(|n| n.ends_with("util.ts")),

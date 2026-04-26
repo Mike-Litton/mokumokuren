@@ -164,33 +164,29 @@ pub fn run<O: Write, E: Write>(
         }
     }
 
-    // Quiet-file fall-through: if every layer was silent and the
-    // file's history is below the inference floor, emit one OK
-    // finding so the agent can distinguish "mmk was consulted but
+    // No-signal fall-through: when no other layer fires, emit one
+    // OK finding so the agent can distinguish "mmk was consulted but
     // had nothing to say" from "mmk wasn't run." Sits under
-    // Layer::Coupling because the absence-of-coupling signal is
-    // what triggers it; Severity::Ok is reserved for exactly this.
+    // Layer::Coupling + Severity::Ok because the absence-of-coupling
+    // signal is the typical trigger.
     if findings.is_empty() {
         let n = commits_touching.get(&args.path).copied().unwrap_or(0);
-        if n < cfg.coupling.min_sample_size {
-            let rank = ranked
-                .iter()
-                .find(|e| e.path == args.path)
-                .map(|e| e.hotspot_rank);
-            findings.push(Finding::new(
-                Layer::Coupling,
-                Severity::Ok,
-                format!(
-                    "{} has insufficient history for coupling inference \
-                     ({} commits in {}-day window{}); pre-edit consulted \
-                     but no signal",
-                    args.path.display(),
-                    n,
-                    cfg.window.days,
-                    rank.map(|r| format!(", rank #{r}")).unwrap_or_default(),
-                ),
-            ));
-        }
+        let rank = ranked
+            .iter()
+            .find(|e| e.path == args.path)
+            .map(|e| e.hotspot_rank);
+        findings.push(Finding::new(
+            Layer::Coupling,
+            Severity::Ok,
+            format!(
+                "{} has no coupling, hotspot, or structural signal \
+                 ({} commits in {}-day window{}); pre-edit consulted",
+                args.path.display(),
+                n,
+                cfg.window.days,
+                rank.map(|r| format!(", rank #{r}")).unwrap_or_default(),
+            ),
+        ));
     }
 
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);

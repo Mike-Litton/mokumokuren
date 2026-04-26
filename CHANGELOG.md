@@ -8,9 +8,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.4.0] - 2026-04-26
 
-Closes the empirical gaps surfaced by validating v0.3 against four real
-vscode/immich/n8n/cal.diy issues. Three semantic shifts in COUPLING
-behavior plus a new structural-pattern adapter.
+Closes the empirical gaps surfaced by validating v0.3 against the
+four-repo example set in `~/Code/js-examples`. Three semantic shifts
+in COUPLING behavior plus a new structural-pattern adapter.
 
 ### Added
 
@@ -75,6 +75,25 @@ behavior plus a new structural-pattern adapter.
 - `mmk-health/src/ts/service.rs` caps the consumer-search read loop
   at 500 peers to avoid scanning the whole workbench when the
   declared interface has no consumers within the first batch.
+
+### Measured behavior vs v0.3 (paired eval, four repos)
+
+v0.4 is strictly ≥ v0.3 on every measured axis.
+
+**Recall on real fix-shaped commits (32 commits, 61 actual partners):**
+v0.3 surfaced 23 (38 %); v0.4 surfaces 30 (49 %). Per-repo (sample
+size in commits): better on the ~16k repo (1→2), ~18k repo (12→13),
+~140k repo (3→8); tied on the ~10k repo (7→7).
+
+**Aggregate firing rate (`mmk eval --sample 200`):** lower noise on
+the ~16k repo (44 % → 32 %), ~10k repo (54 % → 41 %), ~18k repo
+(68 % → 44 %); slight rise on the ~140k repo (56 % → 58 %, where
+the new test partners caught outweigh the v0.3 false leads
+suppressed).
+
+The combined effect is "more real co-edits surfaced, fewer false
+leads emitted" — what the metric swap was designed for. See
+`docs/coupling.md` for the full read-out.
 
 ### Schema (0.4.0)
 

@@ -9,8 +9,9 @@
 //! Interface-name extraction reads the source in a single
 //! tree-sitter pass; the cross-file consumer scan is a grep-style
 //! substring match against `IFoo` in the peer paths. Good enough
-//! for the vscode service convention; an import-statement parse
-//! would tighten precision once eval data motivates the upgrade.
+//! for the `interface IFoo + registerSingleton(IFoo, FooImpl)`
+//! convention; an import-statement parse would tighten precision
+//! once eval data motivates the upgrade.
 
 use crate::ts::parse;
 use crate::{HealthFinding, HealthPattern};
@@ -23,11 +24,11 @@ use tree_sitter::Node;
 const MAX_CONSUMERS: usize = 3;
 
 /// Hard cap on peer files inspected before giving up. Without this,
-/// a service decl whose interface name happens not to appear in the
-/// first few hundred peers would scan the entire workbench (vscode
-/// has ~6000 .ts files), each via an `fs::read_to_string`. Capping
-/// keeps the worst case bounded; if the consumer is past index
-/// MAX_PEERS_SCANNED we miss it and accept the false-negative.
+/// a service decl whose interface name doesn't appear in the first
+/// few hundred peers would scan the entire workbench (large monorepos
+/// can have thousands of .ts files), each via an `fs::read_to_string`.
+/// Capping keeps the worst case bounded; if the consumer is past
+/// index MAX_PEERS_SCANNED it's silently missed.
 const MAX_PEERS_SCANNED: usize = 500;
 
 #[must_use]
@@ -95,8 +96,8 @@ fn is_typescript_path(path: &Path) -> bool {
 
 /// Walk the AST collecting `interface IFoo` names. We recurse
 /// through the tree so interfaces nested inside a `namespace` or a
-/// module block also count — the vscode convention puts most service
-/// interfaces at top level, but the recursive walk is the correct
+/// module block also count — most service interfaces in practice
+/// sit at top level, but the recursive walk is the correct
 /// over-approximation.
 fn collect_interface_names(node: Node<'_>, source: &str) -> Vec<String> {
     let mut names = Vec::new();
@@ -134,8 +135,8 @@ mod tests {
 
     #[test]
     fn skips_non_iprefixed_interface_name() {
-        // `Foo` (no leading I) doesn't match the vscode service
-        // convention; the detector ignores it.
+        // `Foo` (no leading I) doesn't match the I-prefixed
+        // service-interface convention; the detector ignores it.
         let body = "interface Foo { bar(): void; }";
         let tree = parse(body).expect("parse");
         let names = collect_interface_names(tree.root_node(), body);

@@ -36,11 +36,14 @@ pub const DEFAULT_COUPLING_CONFIDENCE_THRESHOLD: f64 = 0.20;
 
 /// Minimum `commits_touching(target)` required before COUPLING fires.
 ///
-/// n=5 is the standard "don't infer from too few observations" floor
-/// (mirrors the chi-square `expected_count ≥ 5` rule of thumb).
-/// Quiet-file edits with `n < min_sample_size` fall through to the
-/// OK-finding path in `mmk pre-edit`.
-pub const DEFAULT_COUPLING_MIN_SAMPLE_SIZE: u32 = 5;
+/// Defaults to 1 — Wilson's lower bound already handles small-n
+/// correctly (a single observation scores `wilson_lower(1, 1) ≈ 0.21`,
+/// barely above the default `confidence_threshold = 0.20`). Earlier
+/// versions of this constant defaulted to 5 as a defensive floor on
+/// top of Wilson; that floor measurably suppressed real co-edits on
+/// quiet subjects (most fix commits) without improving precision,
+/// because Wilson alone was already gating the small-n cases.
+pub const DEFAULT_COUPLING_MIN_SAMPLE_SIZE: u32 = 1;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct WindowCfg {

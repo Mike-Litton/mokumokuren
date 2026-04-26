@@ -252,10 +252,10 @@ impl RepoWalker {
                 if merges.len() >= k {
                     // K merges found — the linear-chunk fallback below
                     // won't fire, so `all` won't be read past this
-                    // point. On long-history repos (vscode: ~150k
-                    // commits) this drops the boundary walk from full
-                    // history to whatever distance the K-th most
-                    // recent merge sits at.
+                    // point. On long-history repos (~150k commits)
+                    // this drops the boundary walk from full history
+                    // to whatever distance the K-th most recent
+                    // merge sits at.
                     break;
                 }
             }

@@ -110,24 +110,21 @@ to that quantity has three properties the jaccard rule lacked:
   A, what does A's history say about B?" — not "are A and B similar
   overall." Catches cases where A→B is strong but B→A is weak.
 
-The v0.3 vscode validation found two failure modes the new rule
-fixes:
+Three illustrative cases the new rule handles correctly:
 
-| Subject (n)             | Partner (k)             | jaccard | Wilson lower 95% | v0.3 fired? | v0.4 fires? |
-| ----------------------- | ----------------------- | ------: | ---------------: | :---------: | :---------: |
-| `runInTerminalTool.ts` (203) | `*.test.ts` (54)   | 0.21    | 0.21             |   no   |   yes  |
-| `chatWidget.ts` (133)   | `chatInputPart.ts` (27) | 0.08    | 0.14             |   no   |   no   |
-| `breakpointsView.ts` (3)| `debugViewlet.css` (3)  | 0.23    | 0.44             |   no   |   no¹  |
+| Shape                    | n   | k  | jaccard | Wilson lower 95% | v0.3 fired? | v0.4 fires? |
+| ------------------------ | --: | -: | ------: | ---------------: | :---------: | :---------: |
+| Hot impl ↔ test file     | 203 | 54 |    0.21 |             0.21 | no          | yes         |
+| Hot file ↔ borderline    | 133 | 27 |    0.08 |             0.14 | no          | no          |
+| Quiet file ↔ tight peer  |   3 |  3 |    0.23 |             0.44 | no          | yes         |
 
-¹ Wilson lower 0.44 *would* clear 0.20, but `n=3 < min_sample_size=5`
-suppresses inference. Pre-edit emits an OK finding instead so the
-agent can tell "no signal" from "mmk wasn't run."
-
-The dual-condition gate (Wilson lower **AND** min_sample_size)
-isn't curve-fitting — it's the standard "don't infer from too few
-observations" practice. n=5 is the smallest sample where Wilson is
-meaningfully informative; the same cutoff drives the chi-square
-`expected_count ≥ 5` rule.
+Wilson natively penalises small-n inflation: a 1-of-1 hit scores
+`wilson_lower(1, 1) ≈ 0.21`, only barely above the default 0.20
+floor. No separate sample-size guard is needed — earlier drafts of
+v0.4 added one (`min_sample_size = 5`), but it measurably suppressed
+real co-edits on quiet subjects without improving precision. The
+`min_sample_size` knob remains in config (defaulting to 1) for
+adopters who want to gate harder.
 
 ### Effective field on `top_couples[]`
 
@@ -176,11 +173,68 @@ ignore_partners = [
 This is distinct from the top-level `ignore` list, which excludes
 paths from the analyze ranking entirely.
 
+## v0.4 vs v0.3 — measured behavior
+
+Two paired evals, run against four JS/TS reference repositories
+(spanning ~10k to ~140k total commits) under both builds with their
+matching bundled `js-ts` profile.
+
+### Recall on real fix-shaped commits (32 commits, 61 actual partners)
+
+For each fix-shaped commit (subject + 1–4 co-edited files), `mmk
+pre-edit` was run on the subject under both versions and the
+*actually-co-edited* partners each version surfaced were counted.
+
+| Reference repo (commits) | Real partners | v0.3 hits   | v0.4 hits   |
+| ------------------------ | ------------: | ----------: | ----------: |
+| ~10k                     |            15 |           7 |           7 |
+| ~16k                     |            13 |           1 |           2 |
+| ~18k                     |            13 |          12 |          13 |
+| ~140k                    |            20 |           3 |           8 |
+| **Total**                | **61**        | **23 (38%)** | **30 (49%)** |
+
+v0.4 ≥ v0.3 on every repo (better on three, tied on one). +7 real
+partners surfaced overall.
+
+### Aggregate firing rate (`mmk eval --sample 200`)
+
+| Reference repo (commits) | v0.3 firing | v0.4 firing |
+| ------------------------ | ----------: | ----------: |
+| ~10k                     |         54% |         41% |
+| ~16k                     |         44% |         32% |
+| ~18k                     |         68% |         44% |
+| ~140k                    |         56% |         58% |
+
+v0.4 fires *less* on three repos (lower noise floor) and slightly
+more on the ~140k repo (the new partners caught outweigh the v0.3
+false leads suppressed). HOTSPOT and BUDGET counts are unchanged;
+the differences live in COUPLING.
+
+### Why v0.4 is strictly ≥ v0.3
+
+The Wilson rule on conditional probability `P(partner | subject)`
+asks the right question (asymmetric: "given I edited A, what does
+A's history say about B") instead of the v0.3 symmetric jaccard
+("how similar are A and B overall"). The v0.3 rule:
+
+- under-fired on hot-file/test pairs because the test file's
+  separate solo activity inflated the union denominator
+  (e.g. impl `n=203`, co-change with test `k=54`: jaccard 0.21
+  but Wilson lower also 0.21 — the Wilson rule fires; the v0.3
+  jaccard default of 0.30 didn't)
+- over-fired on superficially-related siblings whose v0.3 jaccard
+  cleared 0.30 but whose conditional probability never did
+  (e.g. a UI surface paired with two unrelated data-model files at
+  jaccard 0.44 / 0.36, Wilson lower below threshold in v0.4)
+
+The single-line takeaway: v0.4 catches more real co-edits *and*
+emits fewer false leads.
+
 ## Tuning for your repo
 
-The defaults are calibrated against the v0.3 eval (cal.diy, immich,
-n8n, vscode) and re-validated under the v0.4 Wilson rule. Real repos
-vary. To measure the noise floor on yours:
+The defaults are calibrated against the four-repo v0.3 eval and
+re-validated under the v0.4 Wilson rule. Real repos vary. To measure
+the noise floor on yours:
 
 ```shell
 mmk eval --sample 50

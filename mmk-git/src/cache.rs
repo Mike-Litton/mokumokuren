@@ -10,7 +10,7 @@
 //! - `revwalk.bincode.v<N>` — revwalk results keyed by
 //!   `(anchor_sha, since_ts)`. The set of commits reachable from a
 //!   given anchor with committer-time ≥ a fixed cutoff is immutable
-//!   once those commits exist. Saves ~210 ms warm vscode.
+//!   once those commits exist. Saves ~210 ms warm on a ~140k-commit repo.
 //! - `head_tree.bincode.v<N>` — HEAD/anchor tree enumeration keyed by
 //!   `(commit_sha, ignores_hash)`. The set of blob entries in a tree
 //!   is immutable once the tree exists; ignore globs filter

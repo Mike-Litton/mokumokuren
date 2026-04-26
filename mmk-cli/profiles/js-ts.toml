@@ -1,8 +1,8 @@
 # mokumokuren.toml — JS/TS profile.
 #
-# Derived from the v0.3 eval (cal.diy, immich, n8n, vscode). Catches
-# the documented noise patterns: workspace-package.json constellation,
-# lockfile bulk rewrites, generated artifacts, build/release config.
+# Derived from the v0.3 four-repo eval. Catches the documented noise
+# patterns: workspace-package.json constellation, lockfile bulk
+# rewrites, generated artifacts, build/release config.
 
 ignore = [
     "**/node_modules/**",
@@ -19,7 +19,7 @@ ignore = [
 
 [coupling]
 confidence_threshold = 0.20
-min_sample_size = 5
+min_sample_size = 1
 ignore_partners = [
     "**/package.json",
     "**/*-lock.json",

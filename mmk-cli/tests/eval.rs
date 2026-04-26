@@ -64,7 +64,7 @@ fn eval_aggregates_findings_across_sampled_commits() {
     );
 }
 
-/// Fixture mirroring the immich `archived-versions.json` shape:
+/// Fixture mirroring the lockstep-version-bump noise pattern:
 /// three unrelated subject files (`svc-a/svc-b/svc-c`), each with
 /// enough history to fire COUPLING. A common partner (`CHANGELOG.md`)
 /// gets touched alongside each subject often, plus dozens of

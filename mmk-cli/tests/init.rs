@@ -148,7 +148,7 @@ fn init_with_js_ts_profile_writes_expected_keys() {
         "**/Fastfile",
         "[coupling]",
         "confidence_threshold = 0.20",
-        "min_sample_size = 5",
+        "min_sample_size = 1",
         "[health.ts]",
         "test_pair",
     ] {
