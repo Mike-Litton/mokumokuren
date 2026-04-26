@@ -3,7 +3,7 @@ resolver = "2"
 members = ["mmk-core", "mmk-git", "mmk-config", "mmk-cli"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["Mike Litton"]
 license = "MIT OR Apache-2.0"
@@ -60,6 +60,9 @@ too_many_lines = "allow"
 lto = "thin"
 codegen-units = 1
 debug = "line-tables-only"
+# mmk has no `catch_unwind` anywhere; aborting on panic is safe and
+# slightly shrinks the binary while removing landing-pad codegen.
+panic = "abort"
 
 [profile.bench]
 inherits = "release"
@@ -67,5 +70,8 @@ inherits = "release"
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"
-lto = "thin"
+# Shipped binary only — fat LTO adds 30-60 s to the dist build but
+# unlocks cross-crate inlining beyond what `thin` reaches. Dev's
+# `cargo build --release` keeps `thin` for fast iteration.
+lto = "fat"
 strip = "symbols"

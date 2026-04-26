@@ -119,11 +119,41 @@ fn analyze_inner(
     let since_ts = now_ts.saturating_sub(cfg.window_seconds());
     phase("open+head", t);
 
+    // Revwalk cache: the set of commits reachable from a fixed anchor
+    // with committer-time >= since_ts is determined by the immutable
+    // commit graph. Same key = same output, modulo new commits being
+    // fetched after caching. New commits change HEAD's sha, which
+    // makes a new key — the cached entry stays correct, just unused.
+    let revwalk_cache_path = cache::revwalk_cache_path(walker.repo.git_dir())?;
+    let mut revwalk_cache = cache::RevwalkCache::load(&revwalk_cache_path).unwrap_or_else(|err| {
+        if trace {
+            eprintln!("[mmk] revwalk cache load failed: {err:#}; starting empty");
+        }
+        cache::RevwalkCache::empty()
+    });
+    let revwalk_key = head_sha.as_ref().map(|sha| cache::RevwalkKey {
+        anchor_sha: sha.clone(),
+        since_ts,
+    });
+    let mut revwalk_dirty = false;
+
     let t = std::time::Instant::now();
-    let commit_infos = if let Some(oid) = start_oid {
-        walker.walk_commits_from(oid, since_ts)?
+    let commit_infos: Vec<mmk_core::types::CommitInfo> = if let Some(commits) = revwalk_key
+        .as_ref()
+        .and_then(|k| revwalk_cache.entries.get(k).map(|e| e.commits.clone()))
+    {
+        commits
     } else {
-        walker.walk_commits_since(since_ts)?
+        let computed = if let Some(oid) = start_oid {
+            walker.walk_commits_from(oid, since_ts)?
+        } else {
+            walker.walk_commits_since(since_ts)?
+        };
+        if let Some(key) = revwalk_key {
+            revwalk_cache.insert(key, computed.clone());
+            revwalk_dirty = true;
+        }
+        computed
     };
     phase("revwalk", t);
 
@@ -148,10 +178,60 @@ fn analyze_inner(
     // this: real Git repositories with non-UTF-8 paths are vanishingly
     // rare and the failure mode is a silent undercount, not incorrect
     // ranking on the typical input.
+    //
+    // Head-tree cache: keyed by `(commit_sha, ignores_hash)`. A tree's
+    // blob list is immutable once the tree exists; the ignore-glob
+    // hash partitions distinct ignore configs into separate entries.
+    let head_tree_cache_path = cache::head_tree_cache_path(walker.repo.git_dir())?;
+    let mut head_tree_cache =
+        cache::HeadTreeCache::load(&head_tree_cache_path).unwrap_or_else(|err| {
+            if trace {
+                eprintln!("[mmk] head-tree cache load failed: {err:#}; starting empty");
+            }
+            cache::HeadTreeCache::empty()
+        });
+    let ignores_hash = cache::ignores_hash(&cfg.ignores);
+    let head_tree_key = head_sha.as_ref().map(|sha| cache::HeadTreeKey {
+        commit_sha: sha.clone(),
+        ignores_hash,
+    });
+    let mut head_tree_dirty = false;
+
     let t = std::time::Instant::now();
-    let (head_entries, head_paths_ignored) = match start_oid {
-        Some(oid) => loc::tree_entries(&walker.repo, oid, &ignores)?,
-        None => loc::head_entries(&walker.repo, &ignores)?,
+    let (head_entries, head_paths_ignored) = if let Some(cached) = head_tree_key
+        .as_ref()
+        .and_then(|k| head_tree_cache.entries.get(k))
+    {
+        let entries = cached
+            .entries
+            .iter()
+            .map(|e| -> Result<loc::HeadEntry> {
+                let oid = gix::ObjectId::from_hex(e.oid_hex.as_bytes())
+                    .with_context(|| format!("invalid cached oid hex: {}", e.oid_hex))?;
+                Ok(loc::HeadEntry {
+                    path: e.path.clone(),
+                    oid,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        (entries, cached.head_paths_ignored)
+    } else {
+        let (entries, ignored_count) = match start_oid {
+            Some(oid) => loc::tree_entries(&walker.repo, oid, &ignores)?,
+            None => loc::head_entries(&walker.repo, &ignores)?,
+        };
+        if let Some(key) = head_tree_key {
+            let cached_entries = entries
+                .iter()
+                .map(|e| cache::CachedTreeEntry {
+                    path: e.path.clone(),
+                    oid_hex: e.oid.to_string(),
+                })
+                .collect();
+            head_tree_cache.insert(key, cached_entries, ignored_count);
+            head_tree_dirty = true;
+        }
+        (entries, ignored_count)
     };
     counts.head_paths_ignored = head_paths_ignored;
     let head_paths: diff::HeadPathBytes = head_entries
@@ -253,6 +333,24 @@ fn analyze_inner(
             }
         }
         phase("cache save", t);
+    }
+    if revwalk_dirty {
+        let t = std::time::Instant::now();
+        if let Err(err) = revwalk_cache.save(&revwalk_cache_path) {
+            if trace {
+                eprintln!("[mmk] revwalk cache save failed: {err:#}; continuing");
+            }
+        }
+        phase("revwalk cache save", t);
+    }
+    if head_tree_dirty {
+        let t = std::time::Instant::now();
+        if let Err(err) = head_tree_cache.save(&head_tree_cache_path) {
+            if trace {
+                eprintln!("[mmk] head-tree cache save failed: {err:#}; continuing");
+            }
+        }
+        phase("head-tree cache save", t);
     }
 
     // Materialize the full result: cached entries → freshly-built

@@ -310,8 +310,29 @@ pub struct CacheArgs {
 #[derive(Debug, Subcommand)]
 pub enum CacheCommand {
     /// Print the cache location, entry count, and on-disk size for the
-    /// current repository.
+    /// current repository (covers per-commit deltas, revwalk, and
+    /// head-tree caches).
     Info,
-    /// Delete the cache for the current repository. Next `analyze` rebuilds.
-    Clear,
+    /// Delete cache files for the current repository. By default
+    /// removes all three caches; pass `--scope` to target one.
+    Clear(CacheClearArgs),
+}
+
+#[derive(Debug, Parser)]
+pub struct CacheClearArgs {
+    /// Which cache(s) to clear.
+    #[arg(long, value_enum, default_value_t = CacheScope::All)]
+    pub scope: CacheScope,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum CacheScope {
+    /// All caches: per-commit deltas, revwalk, head-tree.
+    All,
+    /// Per-commit `(added, deleted)` deltas.
+    Deltas,
+    /// Cached revwalk results, keyed by `(anchor_sha, since_ts)`.
+    Revwalk,
+    /// Cached HEAD/anchor tree enumeration, keyed by `(commit_sha, ignores_hash)`.
+    Loc,
 }
