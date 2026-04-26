@@ -514,6 +514,7 @@ fn schema_review_shape_with_changes() {
         coupling_threshold: None,
         blast_radius_threshold: None,
         gate: mokumokuren::args::Gate::None,
+        no_dedup: true,
     };
     let stdout = run_review_in(dir.path(), args);
     let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
@@ -581,6 +582,7 @@ fn schema_review_clean_tree_minimal_envelope() {
         coupling_threshold: None,
         blast_radius_threshold: None,
         gate: mokumokuren::args::Gate::None,
+        no_dedup: true,
     };
     let stdout = run_review_in(dir.path(), args);
     let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
@@ -614,6 +616,7 @@ fn schema_pre_edit_shape() {
         blast_radius_threshold: None,
         drift_sessions: 0,
         gate: mokumokuren::args::Gate::None,
+        no_dedup: true,
     };
     let stdout = run_pre_edit_in(dir.path(), args);
     let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");

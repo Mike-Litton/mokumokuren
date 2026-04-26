@@ -7,6 +7,7 @@ use std::process::ExitCode;
 
 pub mod args;
 pub mod commands;
+pub mod dedup;
 pub mod output;
 
 /// Parse `std::env::args` and dispatch. Prints any error to stderr and

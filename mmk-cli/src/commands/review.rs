@@ -231,6 +231,18 @@ pub fn run<O: Write, E: Write>(
 
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
+    // DEDUP: suppress emission iff (same findings hash) AND (same
+    // HEAD SHA) AND (within TTL of the prior emission). All three
+    // boundaries match the agent's mental model — if the picture
+    // changed since last time, show me. Hook-shape only: analyze /
+    // eval / session-summary / drift are user-invoked and stay
+    // verbose.
+    if !args.no_dedup {
+        if let Some(verdict) = maybe_suppress_review(&cwd, &findings, &analysis, args.gate) {
+            return Ok(verdict);
+        }
+    }
+
     match args.format {
         Format::Text => render_text(stdout, &findings)?,
         Format::Json => crate::output::json::write_review(
@@ -247,6 +259,43 @@ pub fn run<O: Write, E: Write>(
         )?,
     }
     Ok(verdict_for(args.gate, &findings))
+}
+
+/// Side-effecting dedup gate. Returns `Some(verdict)` if the current
+/// fire matches the prior recorded emission and should be silently
+/// dropped; `None` if the caller should proceed to emit. On a `None`
+/// return, the new emission is recorded as the latest baseline.
+fn maybe_suppress_review(
+    cwd: &Path,
+    findings: &[Finding],
+    analysis: &mmk_git::AnalyzeOutput,
+    gate: Gate,
+) -> Option<Verdict> {
+    // No HEAD = unborn repo; nothing to dedup against.
+    let head_sha = analysis.head_sha.as_deref()?;
+    // discover_work_dir returns the worktree; the dedup file sits
+    // under the .git dir to share keys across worktrees.
+    let git_dir = mmk_git::discover_work_dir(cwd).and_then(|wd| {
+        let git = wd.join(".git");
+        git.exists().then_some(git)
+    })?;
+    let path = crate::dedup::dedup_path(&git_dir)?;
+    let hash = crate::dedup::hash_findings(findings);
+    let prior = crate::dedup::load_record(&path);
+    let now = crate::dedup::now_unix();
+    let ttl = crate::dedup::ttl_seconds();
+    if crate::dedup::should_suppress(hash, head_sha, prior.as_ref(), now, ttl) {
+        return Some(verdict_for(gate, findings));
+    }
+    crate::dedup::record_emission(
+        &path,
+        &crate::dedup::DedupRecord {
+            findings_hash: hash,
+            head_sha: head_sha.to_string(),
+            emitted_at: now,
+        },
+    );
+    None
 }
 
 fn emit_empty<O: Write>(args: &ReviewArgs, mode: ReviewMode, stdout: &mut O) -> Result<()> {

@@ -229,6 +229,13 @@ pub struct ReviewArgs {
     /// fires; `error` exits 1 if any error-severity finding fires.
     #[arg(long, value_enum, default_value_t = Gate::None)]
     pub gate: Gate,
+
+    /// Bypass per-fire dedup. The default behaviour is to suppress
+    /// the second emission when the same findings would re-fire
+    /// against the same HEAD within `MMK_DEDUP_TTL_SECONDS` (default
+    /// 1800). Pass this for debugging or to force-emit.
+    #[arg(long = "no-dedup")]
+    pub no_dedup: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -291,6 +298,10 @@ pub struct PreEditArgs {
     /// Exit-code policy (see `mmk review --help`).
     #[arg(long, value_enum, default_value_t = Gate::None)]
     pub gate: Gate,
+
+    /// Bypass per-fire dedup. See `mmk review --help`.
+    #[arg(long = "no-dedup")]
+    pub no_dedup: bool,
 }
 
 #[derive(Debug, Parser)]

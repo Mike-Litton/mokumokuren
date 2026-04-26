@@ -29,6 +29,7 @@ mmk-config = { path = "../mmk-config" }
 mmk-health = { path = "../mmk-health" }
 ahash = { workspace = true }
 anyhow = { workspace = true }
+bincode = { workspace = true }
 clap = { workspace = true }
 globset = { workspace = true }
 humantime = { workspace = true }

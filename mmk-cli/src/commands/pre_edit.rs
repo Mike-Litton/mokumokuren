@@ -184,6 +184,15 @@ pub fn run<O: Write, E: Write>(
 
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
+    // DEDUP: same shape as `mmk review`. Same baseline + same
+    // findings + within TTL → silent. Any of the three changing
+    // re-emits the full output.
+    if !args.no_dedup {
+        if let Some(verdict) = maybe_suppress_pre_edit(&cwd, &findings, &analysis, args.gate) {
+            return Ok(verdict);
+        }
+    }
+
     match args.format {
         Format::Text => render_text(stdout, &findings)?,
         Format::Json => crate::output::json::write_pre_edit(
@@ -198,6 +207,36 @@ pub fn run<O: Write, E: Write>(
         )?,
     }
     Ok(verdict_for(args.gate, &findings))
+}
+
+fn maybe_suppress_pre_edit(
+    cwd: &Path,
+    findings: &[Finding],
+    analysis: &mmk_git::AnalyzeOutput,
+    gate: crate::args::Gate,
+) -> Option<Verdict> {
+    let head_sha = analysis.head_sha.as_deref()?;
+    let git_dir = mmk_git::discover_work_dir(cwd).and_then(|wd| {
+        let git = wd.join(".git");
+        git.exists().then_some(git)
+    })?;
+    let path = crate::dedup::dedup_path(&git_dir)?;
+    let hash = crate::dedup::hash_findings(findings);
+    let prior = crate::dedup::load_record(&path);
+    let now = crate::dedup::now_unix();
+    let ttl = crate::dedup::ttl_seconds();
+    if crate::dedup::should_suppress(hash, head_sha, prior.as_ref(), now, ttl) {
+        return Some(verdict_for(gate, findings));
+    }
+    crate::dedup::record_emission(
+        &path,
+        &crate::dedup::DedupRecord {
+            findings_hash: hash,
+            head_sha: head_sha.to_string(),
+            emitted_at: now,
+        },
+    );
+    None
 }
 
 fn compute_findings(

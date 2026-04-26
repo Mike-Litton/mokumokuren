@@ -176,6 +176,7 @@ fn commit_diff(cwd: &Path, sha: &str) -> Result<Vec<ChangedFile>> {
         coupling_threshold: None,
         blast_radius_threshold: None,
         gate: crate::args::Gate::None,
+        no_dedup: true,
     };
     collect_diff(cwd, ReviewMode::Commit, &args, &[])
 }

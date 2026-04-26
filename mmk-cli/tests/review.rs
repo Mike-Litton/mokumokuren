@@ -27,6 +27,11 @@ fn review_args() -> ReviewArgs {
         coupling_threshold: None,
         blast_radius_threshold: None,
         gate: Gate::None,
+        // Tests in this file run pairs of invocations against the
+        // same fixture; without dedup off they'd silently shadow
+        // each other. The dedup integration tests live in
+        // mmk-cli/tests/dedup.rs.
+        no_dedup: true,
     }
 }
 

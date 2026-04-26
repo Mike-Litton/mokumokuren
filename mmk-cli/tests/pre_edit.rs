@@ -25,6 +25,9 @@ fn pre_edit_args(path: &str) -> PreEditArgs {
         blast_radius_threshold: None,
         drift_sessions: 0,
         gate: Gate::None,
+        // See review.rs::review_args for why dedup is disabled in
+        // these tests.
+        no_dedup: true,
     }
 }
 
