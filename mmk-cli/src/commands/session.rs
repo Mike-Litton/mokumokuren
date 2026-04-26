@@ -11,6 +11,7 @@ use crate::args::{Format, SessionArgs};
 use crate::commands::analyze::COUPLES_PER_FILE;
 use crate::commands::review::verdict_for;
 use crate::output::findings::{Finding, Layer, Severity};
+use crate::output::messages;
 use crate::Verdict;
 
 pub fn run<O: Write, E: Write>(
@@ -164,11 +165,11 @@ fn run_session_summary<O: Write, E: Write>(
         findings.push(Finding::new(
             Layer::Budget,
             Severity::Warn,
-            format!(
-                "{} commit(s) in window dropped by bulk filter (>{} files or >{} lines)",
+            messages::session_budget(
                 session_out.window.counts.commits_filtered_bulk,
+                session_out.window.counts.commits_seen,
                 cfg.bulk.max_files,
-                cfg.bulk.max_lines
+                cfg.bulk.max_lines,
             ),
         ));
     }
@@ -185,10 +186,7 @@ fn run_session_summary<O: Write, E: Write>(
             findings.push(Finding::new(
                 Layer::Budget,
                 Severity::Warn,
-                format!(
-                    "session is {session_lines} lines across {session_n} commits; \
-                     exceeds 2× bulk.max_lines × commits ({budget})"
-                ),
+                messages::session_overrun(session_lines, session_n, budget),
             ));
         }
     }
@@ -231,12 +229,11 @@ fn run_session_summary<O: Write, E: Write>(
             findings.push(Finding::new(
                 Layer::Drift,
                 Severity::Warn,
-                format!(
-                    "{} climbed in {}/{} sessions; latest rank #{}",
-                    d.path.display(),
+                messages::drift(
+                    &d.path,
                     d.climb_transitions,
                     d.total_transitions,
-                    d.latest_rank
+                    d.latest_rank,
                 ),
             ));
         }

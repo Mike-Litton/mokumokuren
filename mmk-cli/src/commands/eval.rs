@@ -241,7 +241,8 @@ impl AggregateReport {
                 if let (Some(p), Some(s)) = (partner, subject) {
                     self.partner_subjects.entry(p).or_default().insert(s);
                 }
-                if let Some(w) = parse_wilson_lower(&f.message) {
+                if let Some((k, n)) = parse_k_of_n(&f.message) {
+                    let w = mmk_core::coupling::wilson_lower_95(k, n);
                     *self
                         .wilson_lower_buckets
                         .entry(wilson_lower_bucket(w))
@@ -264,15 +265,15 @@ const fn layer_label(l: Layer) -> &'static str {
 }
 
 /// COUPLING messages come in two shapes:
-///   review:    `<file> edited; expected partner <X> not touched (...)`
-///   pre-edit:  `<file> historically co-changes with <X> (...)`
-/// Pull `<X>` between "partner " / "with " and the next sentinel
-/// (" not touched" for review, " (" for pre-edit).
+///   review:    `<file> edited; <X> co-edited K of N prior commits, not in diff`
+///   pre-edit:  `<file> co-edited with <X> in K of N prior commits`
+/// Pull `<X>` between the "edited; " / "with " keyword and the
+/// next sentinel (" co-edited" for review, " in " for pre-edit).
 fn parse_partner(msg: &str) -> Option<String> {
-    let (after_keyword, end_sentinel) = if let Some(idx) = msg.find("partner ") {
-        (idx + "partner ".len(), " not touched")
-    } else if let Some(idx) = msg.find("with ") {
-        (idx + "with ".len(), " (")
+    let (after_keyword, end_sentinel) = if let Some(idx) = msg.find("edited; ") {
+        (idx + "edited; ".len(), " co-edited")
+    } else if let Some(idx) = msg.find("co-edited with ") {
+        (idx + "co-edited with ".len(), " in ")
     } else {
         return None;
     };
@@ -283,9 +284,9 @@ fn parse_partner(msg: &str) -> Option<String> {
 
 /// Extract the subject (the file the user edited / queried) from a
 /// COUPLING message. The subject is the leading path before either
-/// " edited;" (review) or " historically " (pre-edit).
+/// " edited;" (review) or " co-edited with" (pre-edit).
 fn parse_subject(msg: &str) -> Option<String> {
-    for sentinel in [" edited;", " historically "] {
+    for sentinel in [" edited;", " co-edited with "] {
         if let Some(end) = msg.find(sentinel) {
             return Some(msg[..end].trim().to_owned());
         }
@@ -293,15 +294,18 @@ fn parse_subject(msg: &str) -> Option<String> {
     None
 }
 
-/// Extract the Wilson 95 % lower bound from a COUPLING message.
-/// The `"Wilson 95% lower X.YZ"` suffix is appended by both the
-/// review and pre-edit emitters.
-fn parse_wilson_lower(msg: &str) -> Option<f64> {
-    let key = "Wilson 95% lower ";
-    let idx = msg.find(key)? + key.len();
-    let rest = &msg[idx..];
-    let end = rest.find(')').unwrap_or(rest.len());
-    rest[..end].trim().parse().ok()
+/// Extract `(K, N)` from the `"K of N prior commits"` fragment shared
+/// by both COUPLING shapes. The Wilson lower bound is computed from
+/// `(K, N)` rather than parsed out of the message — the human surface
+/// no longer carries the algorithm name.
+fn parse_k_of_n(msg: &str) -> Option<(u32, u32)> {
+    let tail = " prior commits";
+    let end = msg.find(tail)?;
+    let head = &msg[..end];
+    let of_idx = head.rfind(" of ")?;
+    let k_str = head[..of_idx].split_whitespace().last()?;
+    let n_str = head[of_idx + " of ".len()..].trim();
+    Some((k_str.parse().ok()?, n_str.parse().ok()?))
 }
 
 /// Bucket a Wilson 95 % lower bound into a coarse band. Boundaries
@@ -501,23 +505,21 @@ fn write_json<W: Write>(w: &mut W, r: &AggregateReport) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_partner, parse_subject, parse_wilson_lower, wilson_lower_bucket};
+    use super::{parse_k_of_n, parse_partner, parse_subject, wilson_lower_bucket};
 
     #[test]
     fn parse_partner_extracts_review_partner_without_trailing_text() {
-        // Regression: an earlier version sliced from "partner " all
-        // the way to the next paren, swallowing " not touched" into
-        // the captured partner — which made `noisy_partners` keys
-        // like "Cargo.toml not touched" instead of "Cargo.toml".
-        let msg = "core/a.rs edited; expected partner core/b.rs not touched \
-                   (54/203 = 27% historical co-edit, Wilson 95% lower 0.21)";
+        // Regression: an earlier version sliced too greedily and
+        // swallowed trailing text into the partner — making
+        // `noisy_partners` keys carry "Cargo.toml co-edited..." instead
+        // of "Cargo.toml". The " co-edited" sentinel anchors the end.
+        let msg = "core/a.rs edited; core/b.rs co-edited 54 of 203 prior commits, not in diff";
         assert_eq!(parse_partner(msg).as_deref(), Some("core/b.rs"));
     }
 
     #[test]
     fn parse_partner_extracts_pre_edit_partner() {
-        let msg = "core/a.rs historically co-changes with core/b.rs \
-                   (3/4 = 75% historical co-edit, Wilson 95% lower 0.30)";
+        let msg = "core/a.rs co-edited with core/b.rs in 3 of 4 prior commits";
         assert_eq!(parse_partner(msg).as_deref(), Some("core/b.rs"));
     }
 
@@ -527,23 +529,26 @@ mod tests {
     }
 
     #[test]
-    fn parse_wilson_lower_pulls_float_from_message() {
-        let msg = "core/a.rs edited; expected partner core/b.rs not touched \
-                   (54/203 = 27% historical co-edit, Wilson 95% lower 0.21)";
-        assert!((parse_wilson_lower(msg).unwrap() - 0.21).abs() < 1e-6);
+    fn parse_k_of_n_extracts_counts_from_review_message() {
+        let msg = "core/a.rs edited; core/b.rs co-edited 54 of 203 prior commits, not in diff";
+        assert_eq!(parse_k_of_n(msg), Some((54, 203)));
+    }
+
+    #[test]
+    fn parse_k_of_n_extracts_counts_from_pre_edit_message() {
+        let msg = "core/a.rs co-edited with core/b.rs in 3 of 5 prior commits";
+        assert_eq!(parse_k_of_n(msg), Some((3, 5)));
     }
 
     #[test]
     fn parse_subject_extracts_review_subject() {
-        let msg = "core/a.rs edited; expected partner core/b.rs not touched \
-                   (54/203 = 27% historical co-edit, Wilson 95% lower 0.21)";
+        let msg = "core/a.rs edited; core/b.rs co-edited 54 of 203 prior commits, not in diff";
         assert_eq!(parse_subject(msg).as_deref(), Some("core/a.rs"));
     }
 
     #[test]
     fn parse_subject_extracts_pre_edit_subject() {
-        let msg = "core/a.rs historically co-changes with core/b.rs \
-                   (3/4 = 75% historical co-edit, Wilson 95% lower 0.30)";
+        let msg = "core/a.rs co-edited with core/b.rs in 3 of 4 prior commits";
         assert_eq!(parse_subject(msg).as_deref(), Some("core/a.rs"));
     }
 

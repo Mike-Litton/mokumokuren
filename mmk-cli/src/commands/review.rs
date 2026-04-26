@@ -28,6 +28,7 @@ use crate::commands::common::{
     CouplingEmission, CouplingProse,
 };
 use crate::output::findings::{render_text, Finding, Layer, Severity};
+use crate::output::messages;
 use crate::Verdict;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -250,18 +251,10 @@ pub(crate) fn bulk_self_findings(files_n: u32, lines_n: u64, cfg: &Config) -> Ve
     for t in triggers {
         let msg = match t {
             mmk_core::budget::BudgetTrigger::FilesExceeded { actual, max } => {
-                format!(
-                    "diff touches {actual} files; bulk.max_files = {max} \
-                     — likely a sweep / vendored snapshot, hotspot + coupling \
-                     analysis suppressed"
-                )
+                messages::budget_files(actual, max, true)
             }
             mmk_core::budget::BudgetTrigger::LinesExceeded { actual, max } => {
-                format!(
-                    "diff is {actual} lines; bulk.max_lines = {max} \
-                     — likely a sweep / vendored snapshot, hotspot + coupling \
-                     analysis suppressed"
-                )
+                messages::budget_lines(actual, max, true)
             }
         };
         findings.push(Finding::new(Layer::Budget, Severity::Warn, msg));
@@ -362,12 +355,7 @@ pub(crate) fn compute_findings(
                 findings.push(Finding::new(
                     Layer::Hotspot,
                     Severity::Warn,
-                    format!(
-                        "{} ranks #{} (top-{} hotspot)",
-                        c.path.display(),
-                        entry.hotspot_rank,
-                        top
-                    ),
+                    messages::hotspot(&c.path, entry.hotspot_rank, top),
                 ));
             }
         }
@@ -412,10 +400,10 @@ pub(crate) fn compute_findings(
     for t in triggers {
         let msg = match t {
             mmk_core::budget::BudgetTrigger::FilesExceeded { actual, max } => {
-                format!("diff touches {actual} files; bulk.max_files = {max}")
+                messages::budget_files(actual, max, false)
             }
             mmk_core::budget::BudgetTrigger::LinesExceeded { actual, max } => {
-                format!("diff is {actual} lines; bulk.max_lines = {max}")
+                messages::budget_lines(actual, max, false)
             }
         };
         findings.push(Finding::new(Layer::Budget, Severity::Warn, msg));

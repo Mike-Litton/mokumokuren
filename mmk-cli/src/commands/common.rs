@@ -16,6 +16,7 @@ use mmk_health::{HealthFinding, HealthPattern};
 use std::path::{Path, PathBuf};
 
 use crate::output::findings::{Finding, Layer, Severity};
+use crate::output::messages;
 
 /// Locate and parse `mokumokuren.toml`.
 ///
@@ -109,15 +110,14 @@ pub fn apply_coupling_file(
 
 /// Prose variant for a COUPLING finding.
 ///
-/// Review and pre-edit answer related-but-different questions ("you
-/// edited A but missed B" vs "you're about to edit A; B has
-/// historically come along"), so the wording differs. Capturing the
-/// choice as an enum keeps the vocabulary in one place.
+/// Review and pre-edit answer related-but-different questions, so the
+/// wording differs (review names a partner not in the diff; pre-edit
+/// states the historical co-edit fact). Capturing the choice as an
+/// enum keeps the vocabulary in one place — see
+/// [`crate::output::messages`] for the actual format strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CouplingProse {
-    /// `<subject> edited; expected partner <X> not touched (...)`.
     ReviewMissed,
-    /// `<subject> historically co-changes with <X> (...)`.
     PreEditExpected,
 }
 
@@ -167,24 +167,16 @@ pub fn coupling_findings(input: CouplingEmission<'_>) -> Vec<Finding> {
         if input.ignore_set.is_some_and(|set| set.is_match(&p.partner)) {
             continue;
         }
-        let body = format!(
-            "{}/{} = {:.0}% historical co-edit, Wilson 95% lower {:.2}",
-            p.co_change_count,
-            input.n,
-            p.conditional_probability * 100.0,
-            p.wilson_lower_95,
-        );
         let message = match input.prose {
-            CouplingProse::ReviewMissed => format!(
-                "{} edited; expected partner {} not touched ({body})",
-                input.subject.display(),
-                p.partner.display(),
+            CouplingProse::ReviewMissed => messages::coupling_review_missed(
+                input.subject,
+                &p.partner,
+                p.co_change_count,
+                input.n,
             ),
-            CouplingProse::PreEditExpected => format!(
-                "{} historically co-changes with {} ({body})",
-                input.subject.display(),
-                p.partner.display(),
-            ),
+            CouplingProse::PreEditExpected => {
+                messages::coupling_pre_edit(input.subject, &p.partner, p.co_change_count, input.n)
+            }
         };
         out.push(Finding::new(Layer::Coupling, input.severity, message));
     }
@@ -230,15 +222,11 @@ pub fn resolve_patterns(tokens: &[String]) -> Vec<HealthPattern> {
 ///   without demanding edits.
 #[must_use]
 pub fn health_to_finding(h: &HealthFinding, severity: Severity) -> Finding {
-    let label = match h.pattern {
-        HealthPattern::Registration => {
-            "matches the action-registration pattern; nearby precedents:"
-        }
-        HealthPattern::Service => "matches the service-decl pattern; consumers:",
-        HealthPattern::TestPair => "has a test partner not touched in this diff:",
+    let message = match h.pattern {
+        HealthPattern::Registration => messages::health_registration(&h.subject, &h.related),
+        HealthPattern::Service => messages::health_service(&h.subject, &h.related),
+        HealthPattern::TestPair => messages::health_test_pair(&h.subject, &h.related),
     };
-    let related: Vec<String> = h.related.iter().map(|p| p.display().to_string()).collect();
-    let message = format!("{} {label} {}", h.subject.display(), related.join(", "));
     Finding::new(Layer::Health, severity, message)
 }
 

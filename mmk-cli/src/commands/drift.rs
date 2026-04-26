@@ -16,6 +16,7 @@ use std::time::Instant;
 
 use crate::args::{DriftArgs, Format};
 use crate::output::findings::{render_text, Finding, Layer, Severity};
+use crate::output::messages;
 
 pub fn run<O: Write, E: Write>(args: &DriftArgs, stdout: &mut O, stderr: &mut E) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine current directory")?;
@@ -95,12 +96,11 @@ fn drift_to_finding(d: &DriftFinding) -> Finding {
     Finding::new(
         Layer::Drift,
         Severity::Warn,
-        format!(
-            "{} climbed in {}/{} sessions; latest rank #{}",
-            d.path.display(),
+        messages::drift(
+            &d.path,
             d.climb_transitions,
             d.total_transitions,
-            d.latest_rank
+            d.latest_rank,
         ),
     )
 }

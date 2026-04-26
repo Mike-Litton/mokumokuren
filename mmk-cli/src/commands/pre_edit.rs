@@ -23,6 +23,7 @@ use crate::commands::common::{
 };
 use crate::commands::review::{build_partner_globset, verdict_for};
 use crate::output::findings::{render_text, Finding, Layer, Severity};
+use crate::output::messages;
 use crate::Verdict;
 
 pub fn run<O: Write, E: Write>(
@@ -152,12 +153,11 @@ pub fn run<O: Write, E: Write>(
                 findings.push(Finding::new(
                     Layer::Drift,
                     Severity::Warn,
-                    format!(
-                        "{} climbed in {}/{} sessions; latest rank #{}",
-                        d.path.display(),
+                    messages::drift(
+                        &d.path,
                         d.climb_transitions,
                         d.total_transitions,
-                        d.latest_rank
+                        d.latest_rank,
                     ),
                 ));
             }
@@ -178,14 +178,7 @@ pub fn run<O: Write, E: Write>(
         findings.push(Finding::new(
             Layer::Coupling,
             Severity::Ok,
-            format!(
-                "{} has no coupling, hotspot, or structural signal \
-                 ({} commits in {}-day window{}); pre-edit consulted",
-                args.path.display(),
-                n,
-                cfg.window.days,
-                rank.map(|r| format!(", rank #{r}")).unwrap_or_default(),
-            ),
+            messages::quiet_file(&args.path, n, cfg.window.days, rank),
         ));
     }
 
@@ -224,12 +217,7 @@ fn compute_findings(
             findings.push(Finding::new(
                 Layer::Hotspot,
                 Severity::Warn,
-                format!(
-                    "{} ranks #{} (top-{} hotspot)",
-                    target.display(),
-                    entry.hotspot_rank,
-                    top
-                ),
+                messages::hotspot(target, entry.hotspot_rank, top),
             ));
         }
     }
