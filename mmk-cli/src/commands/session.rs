@@ -161,6 +161,20 @@ fn run_session_summary<O: Write, E: Write>(
     // careful reviewer."
     let mut findings: Vec<Finding> = Vec::new();
     let session_n = u32::try_from(session_out.session_commits.len()).unwrap_or(u32::MAX);
+
+    // Empty-session nudge: when the resolved base equals HEAD (or
+    // there are simply no commits since base), session-summary has
+    // nothing to compute and the user almost certainly wanted
+    // working-tree review of uncommitted work. Surfacing this as
+    // silence ("0 files in session") is a known confusion pattern.
+    if session_n == 0 {
+        findings.push(Finding::new(
+            Layer::Anchor,
+            Severity::Info,
+            messages::session_empty_nudge(),
+        ));
+    }
+
     if session_out.window.counts.commits_filtered_bulk > 0 {
         findings.push(Finding::new(
             Layer::Budget,

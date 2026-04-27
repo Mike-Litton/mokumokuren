@@ -58,6 +58,7 @@ pub fn run<O: Write, E: Write>(args: &EvalArgs, stdout: &mut O, stderr: &mut E) 
         apply_sensor_file(
             &mut cfg.sensor.structure,
             &mut cfg.sensor.complexity,
+            &mut cfg.sensor.budget_ramp,
             file_s,
         );
     }
@@ -132,6 +133,9 @@ pub fn run<O: Write, E: Write>(args: &EvalArgs, stdout: &mut O, stderr: &mut E) 
         if args.learn {
             report.absorb_sensor_stats(&cwd, &changed, &cfg);
         }
+        if args.replay {
+            report.absorb_replay(&findings, &changed);
+        }
     }
 
     if args.learn {
@@ -141,6 +145,9 @@ pub fn run<O: Write, E: Write>(args: &EvalArgs, stdout: &mut O, stderr: &mut E) 
             &analysis.commits,
         );
         report.finalize_sensor_percentiles();
+    }
+    if args.replay {
+        report.finalize_replay_histogram(report.commits_sampled);
     }
 
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -225,6 +232,23 @@ struct AggregateReport {
     /// set; emit-skipped otherwise so default eval JSON stays terse.
     #[serde(skip_serializing_if = "Option::is_none")]
     learn_sensor_stats: Option<LearnSensorStats>,
+    /// `--replay` per-layer histogram. Populated only when `--replay`
+    /// is set. Designed for cross-repo aggregation: each repo's eval
+    /// JSON pivots on `replay_histogram.<layer>` to answer "what
+    /// fires here, on how many commits, on how many paths."
+    #[serde(skip_serializing_if = "Option::is_none")]
+    replay_histogram: Option<ReplayHistogram>,
+    /// Internal accumulator: distinct paths surfaced per layer. Lifted
+    /// out of the JSON because the user-facing field is the count
+    /// inside `ReplayHistogram::layers[].distinct_paths`.
+    #[serde(skip)]
+    replay_paths_per_layer: BTreeMap<&'static str, BTreeSet<String>>,
+    /// Internal accumulator: commits with ≥1 finding for each layer.
+    #[serde(skip)]
+    replay_commits_per_layer: BTreeMap<&'static str, usize>,
+    /// Internal accumulator: severity mix per layer.
+    #[serde(skip)]
+    replay_severities_per_layer: BTreeMap<&'static str, SeverityMix>,
     /// Internal accumulator: distinct (dir, shape) pairs seen
     /// across the sampled-commit diffs. Skipped from JSON — the
     /// summary number `learn_sensor_stats.structure_dir_shapes_seen`
@@ -266,6 +290,43 @@ pub struct LearnSensorStats {
     pub complexity_loc_median: u32,
     pub complexity_loc_p90: u32,
     pub complexity_loc_p99: u32,
+}
+
+/// Replay histogram aggregated across `--replay`'s sampled commits.
+///
+/// Per-layer fire rate, distinct paths, and severity mix. The layers
+/// list is flattened (one entry per layer) instead of a per-layer
+/// object so consumers can pivot on `replay_histogram.layers[]` from
+/// any tooling without having to enumerate layer names.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct ReplayHistogram {
+    pub commits_sampled: usize,
+    pub layers: Vec<ReplayLayerStats>,
+}
+
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct ReplayLayerStats {
+    pub layer: &'static str,
+    /// Sampled commits where this layer fired at least once.
+    pub commits_with_fire: usize,
+    /// `commits_with_fire / commits_sampled` as a fraction in
+    /// [0.0, 1.0]. Pre-computed so a downstream pivot doesn't have to
+    /// re-derive the divisor.
+    pub fire_rate: f64,
+    /// Distinct paths this layer surfaced across the sample. Useful
+    /// for "did COUPLING fire on a thousand different files (broad
+    /// signal) or always the same handful (concentrated signal)?".
+    pub distinct_paths: usize,
+    /// Total finding count for this layer across the sample.
+    pub total_findings: usize,
+    pub severity: SeverityMix,
+}
+
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct SeverityMix {
+    pub ok: usize,
+    pub info: usize,
+    pub warn: usize,
 }
 
 /// One adoption suggestion from `--learn`. Includes the supporting
@@ -427,6 +488,95 @@ impl AggregateReport {
                 }
             }
         }
+    }
+
+    /// Per-commit absorb for `--replay`: tally per-layer fire counts,
+    /// distinct paths, and severity mix. Distinct from `absorb` because
+    /// it tracks "did this layer fire on this commit" once per commit
+    /// rather than once per finding (a single COUPLING-heavy commit
+    /// shouldn't claim a fire-rate of N).
+    fn absorb_replay(&mut self, findings: &[Finding], changed: &[ChangedFile]) {
+        let mut layers_this_commit: BTreeSet<&'static str> = BTreeSet::new();
+        for f in findings {
+            let layer = layer_label(f.layer);
+            layers_this_commit.insert(layer);
+            let mix = self.replay_severities_per_layer.entry(layer).or_default();
+            match f.severity {
+                crate::output::findings::Severity::Ok => mix.ok += 1,
+                crate::output::findings::Severity::Info => mix.info += 1,
+                crate::output::findings::Severity::Warn => mix.warn += 1,
+            }
+            // BUDGET messages don't carry a path; the "distinct path"
+            // count is per-file layers (HOTSPOT/COUPLING/STRUCTURE/
+            // COMPLEXITY/HEALTH). Use the changed-file set as a coarse
+            // attribution for these layers since each finding covers
+            // a particular file in the diff.
+            if !matches!(f.layer, Layer::Budget) {
+                for c in changed {
+                    if f.message.contains(&c.path.display().to_string()) {
+                        self.replay_paths_per_layer
+                            .entry(layer)
+                            .or_default()
+                            .insert(c.path.display().to_string());
+                    }
+                }
+            }
+        }
+        for layer in layers_this_commit {
+            *self.replay_commits_per_layer.entry(layer).or_default() += 1;
+        }
+    }
+
+    fn finalize_replay_histogram(&mut self, commits_sampled: usize) {
+        let mut layers: Vec<ReplayLayerStats> = Vec::new();
+        // Iterate the union of every accumulator's keys so a layer
+        // that fired only Ok (no entries in distinct_paths) still
+        // appears.
+        let mut all: BTreeSet<&'static str> = BTreeSet::new();
+        all.extend(self.replay_commits_per_layer.keys().copied());
+        all.extend(self.replay_paths_per_layer.keys().copied());
+        all.extend(self.replay_severities_per_layer.keys().copied());
+        all.extend(self.by_layer.keys().copied());
+        for layer in all {
+            let commits_with_fire = self
+                .replay_commits_per_layer
+                .get(layer)
+                .copied()
+                .unwrap_or(0);
+            let fire_rate = if commits_sampled == 0 {
+                0.0
+            } else {
+                commits_with_fire as f64 / commits_sampled as f64
+            };
+            let distinct_paths = self
+                .replay_paths_per_layer
+                .get(layer)
+                .map_or(0, BTreeSet::len);
+            let total_findings = self.by_layer.get(layer).copied().unwrap_or(0);
+            let severity = self
+                .replay_severities_per_layer
+                .get(layer)
+                .cloned()
+                .unwrap_or_default();
+            layers.push(ReplayLayerStats {
+                layer,
+                commits_with_fire,
+                fire_rate,
+                distinct_paths,
+                total_findings,
+                severity,
+            });
+        }
+        // Stable order: by total_findings desc, layer asc.
+        layers.sort_by(|a, b| {
+            b.total_findings
+                .cmp(&a.total_findings)
+                .then_with(|| a.layer.cmp(b.layer))
+        });
+        self.replay_histogram = Some(ReplayHistogram {
+            commits_sampled,
+            layers,
+        });
     }
 }
 
@@ -683,6 +833,31 @@ fn write_text<W: Write>(w: &mut W, r: &AggregateReport) -> Result<()> {
             )?;
         }
         writeln!(w, "  ]")?;
+        writeln!(w)?;
+    }
+
+    if let Some(hist) = r.replay_histogram.as_ref() {
+        writeln!(w, "replay histogram (per-layer fire rate over sample):")?;
+        writeln!(w)?;
+        writeln!(
+            w,
+            "  {:<11}  {:>10}  {:>9}  {:>14}  severity",
+            "layer", "fire_rate", "commits", "distinct_paths"
+        )?;
+        for layer in &hist.layers {
+            writeln!(
+                w,
+                "  {:<11}  {:>9.0}%  {:>3} of {:>3}  {:>14}  ok={} info={} warn={}",
+                layer.layer,
+                100.0 * layer.fire_rate,
+                layer.commits_with_fire,
+                hist.commits_sampled,
+                layer.distinct_paths,
+                layer.severity.ok,
+                layer.severity.info,
+                layer.severity.warn,
+            )?;
+        }
         writeln!(w)?;
     }
 

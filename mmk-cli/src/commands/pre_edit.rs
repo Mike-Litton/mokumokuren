@@ -34,6 +34,15 @@ pub fn run<O: Write, E: Write>(
 ) -> Result<Verdict> {
     let cwd = std::env::current_dir().context("failed to determine current directory")?;
 
+    // Hook integrations (Claude Code's PreToolUse) pass
+    // `tool_input.file_path` as an absolute path. The analyzer keys
+    // its lookup tables on repo-relative paths, so an absolute path
+    // misses every layer and falls through to the OK "new file (no
+    // history)" — silently degrading the hook output. Normalize
+    // here so manual relative-path invocations and hook
+    // absolute-path invocations produce identical signal.
+    let path = normalize_repo_relative(&cwd, &args.path);
+
     let window = humantime::parse_duration(&args.since)
         .with_context(|| format!("invalid --since value: {}", args.since))?;
     let window_days = u32::try_from(window.as_secs() / 86_400)
@@ -65,6 +74,7 @@ pub fn run<O: Write, E: Write>(
         apply_sensor_file(
             &mut cfg.sensor.structure,
             &mut cfg.sensor.complexity,
+            &mut cfg.sensor.budget_ramp,
             file_s,
         );
     }
@@ -100,7 +110,7 @@ pub fn run<O: Write, E: Write>(
     );
 
     let mut findings = compute_findings(
-        &args.path,
+        &path,
         &ranked,
         &analysis.commits,
         &commits_touching,
@@ -114,7 +124,7 @@ pub fn run<O: Write, E: Write>(
     let health_patterns = resolve_patterns(&cfg.health.ts.patterns);
     let health_matches: Vec<mmk_health::HealthFinding> = if cfg.health.ts.enabled {
         let peer_paths: Vec<PathBuf> = analysis.loc.keys().cloned().collect();
-        analyze_health_for_subject(&cwd, &args.path, &peer_paths, &health_patterns)
+        analyze_health_for_subject(&cwd, &path, &peer_paths, &health_patterns)
     } else {
         Vec::new()
     };
@@ -122,50 +132,52 @@ pub fn run<O: Write, E: Write>(
         findings.push(health_to_finding(h, Severity::Info));
     }
 
-    // BUDGET (continuous-feedback ramp): read the working-tree
-    // diff state and surface a one-line meter so the agent sees
-    // the cap climbing *before* the next edit, not just after.
-    // Same wording / tiers as review's ramp — single source of
-    // truth in messages::budget_ramp.
-    if let Ok(working_changed) = collect_working_tree_diff(&cwd, &cfg.ignores) {
-        let files_n = u32::try_from(working_changed.len()).unwrap_or(u32::MAX);
-        let lines_n: u64 = working_changed.iter().map(|c| c.added + c.deleted).sum();
-        let check = mmk_core::budget::BudgetCheck {
-            files_changed: files_n,
-            lines_changed: lines_n,
-        };
-        let progress = mmk_core::budget::budget_progress(&check, &cfg.bulk);
-        match mmk_core::budget::budget_tier(&progress) {
-            mmk_core::budget::BudgetTier::Approaching => {
-                findings.push(Finding::new(
-                    Layer::Budget,
-                    Severity::Info,
-                    messages::budget_ramp(
-                        progress.files.0,
-                        progress.files.1,
-                        progress.lines.0,
-                        progress.lines.1,
-                        false,
-                    ),
-                ));
+    // BUDGET (continuous-feedback ramp): under-cap meter so the
+    // agent sees the cap climbing *before* the next edit. Opt-in
+    // via [sensor.budget_ramp] enabled = true — see review.rs for
+    // why this didn't ship default-on. Same wording / tiers as
+    // review's ramp; single source of truth in messages::budget_ramp.
+    if cfg.sensor.budget_ramp.enabled {
+        if let Ok(working_changed) = collect_working_tree_diff(&cwd, &cfg.ignores) {
+            let files_n = u32::try_from(working_changed.len()).unwrap_or(u32::MAX);
+            let lines_n: u64 = working_changed.iter().map(|c| c.added + c.deleted).sum();
+            let check = mmk_core::budget::BudgetCheck {
+                files_changed: files_n,
+                lines_changed: lines_n,
+            };
+            let progress = mmk_core::budget::budget_progress(&check, &cfg.bulk);
+            match mmk_core::budget::budget_tier(&progress) {
+                mmk_core::budget::BudgetTier::Approaching => {
+                    findings.push(Finding::new(
+                        Layer::Budget,
+                        Severity::Info,
+                        messages::budget_ramp(
+                            progress.files.0,
+                            progress.files.1,
+                            progress.lines.0,
+                            progress.lines.1,
+                            false,
+                        ),
+                    ));
+                }
+                mmk_core::budget::BudgetTier::Near => {
+                    findings.push(Finding::new(
+                        Layer::Budget,
+                        Severity::Warn,
+                        messages::budget_ramp(
+                            progress.files.0,
+                            progress.files.1,
+                            progress.lines.0,
+                            progress.lines.1,
+                            true,
+                        ),
+                    ));
+                }
+                // Over and Quiet: no pre-edit ramp surface. Over is
+                // handled by review's existing over-cap message; Quiet
+                // is the noise floor.
+                mmk_core::budget::BudgetTier::Quiet | mmk_core::budget::BudgetTier::Over => {}
             }
-            mmk_core::budget::BudgetTier::Near => {
-                findings.push(Finding::new(
-                    Layer::Budget,
-                    Severity::Warn,
-                    messages::budget_ramp(
-                        progress.files.0,
-                        progress.files.1,
-                        progress.lines.0,
-                        progress.lines.1,
-                        true,
-                    ),
-                ));
-            }
-            // Over and Quiet: no pre-edit ramp surface. Over is
-            // handled by review's existing over-cap message; Quiet
-            // is the noise floor.
-            mmk_core::budget::BudgetTier::Quiet | mmk_core::budget::BudgetTier::Over => {}
         }
     }
 
@@ -175,16 +187,16 @@ pub fn run<O: Write, E: Write>(
     // surface the new-file wording; if it does, the existing-file
     // wording — both surface the same convention.
     if cfg.sensor.structure.enabled {
-        let abs = cwd.join(&args.path);
+        let abs = cwd.join(&path);
         let mode = if abs.exists() {
             mmk_core::sensors::StructureMode::PreEditExisting
         } else {
             mmk_core::sensors::StructureMode::PreEditNew
         };
-        let siblings = list_directory_siblings(&cwd, &args.path);
+        let siblings = list_directory_siblings(&cwd, &path);
         let bodies = load_bodies(&cwd, &siblings);
         let input = mmk_core::sensors::StructureInput {
-            path: &args.path,
+            path: &path,
             siblings: &siblings,
             bodies: &bodies,
             subject_body: None,
@@ -233,7 +245,7 @@ pub fn run<O: Write, E: Write>(
             })
             .collect::<Result<Vec<_>>>()?;
         for d in compute_drift(&snapshots) {
-            if d.path == args.path {
+            if d.path == path {
                 findings.push(Finding::new(
                     Layer::Drift,
                     Severity::Warn,
@@ -254,15 +266,15 @@ pub fn run<O: Write, E: Write>(
     // Layer::Coupling + Severity::Ok because the absence-of-coupling
     // signal is the typical trigger.
     if findings.is_empty() {
-        let n = commits_touching.get(&args.path).copied().unwrap_or(0);
+        let n = commits_touching.get(&path).copied().unwrap_or(0);
         let rank = ranked
             .iter()
-            .find(|e| e.path == args.path)
+            .find(|e| e.path == path)
             .map(|e| e.hotspot_rank);
         findings.push(Finding::new(
             Layer::Coupling,
             Severity::Ok,
-            messages::quiet_file(&args.path, n, cfg.window.days, rank),
+            messages::quiet_file(&path, n, cfg.window.days, rank),
         ));
     }
 
@@ -281,7 +293,7 @@ pub fn run<O: Write, E: Write>(
         Format::Text => render_text(stdout, &findings)?,
         Format::Json => crate::output::json::write_pre_edit(
             stdout,
-            &args.path,
+            &path,
             &findings,
             &analysis,
             duration_ms,
@@ -321,6 +333,26 @@ fn maybe_suppress_pre_edit(
         },
     );
     None
+}
+
+/// Resolve `input` to a repo-relative path so it matches the
+/// analyzer's keying.
+///
+/// Hook integrations pass absolute paths (Claude Code's
+/// `tool_input.file_path`); manual invocations pass relative paths.
+/// Both must produce the same downstream lookup key — anything else
+/// silently degrades hook output to the OK fall-through.
+fn normalize_repo_relative(cwd: &Path, input: &Path) -> PathBuf {
+    let abs = if input.is_absolute() {
+        input.to_path_buf()
+    } else {
+        cwd.join(input)
+    };
+    let Some(repo_root) = mmk_git::discover_work_dir(cwd) else {
+        return input.to_path_buf();
+    };
+    abs.strip_prefix(&repo_root)
+        .map_or_else(|_| input.to_path_buf(), Path::to_path_buf)
 }
 
 fn compute_findings(

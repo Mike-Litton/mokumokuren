@@ -117,6 +117,7 @@ pub fn run<O: Write, E: Write>(
         apply_sensor_file(
             &mut cfg.sensor.structure,
             &mut cfg.sensor.complexity,
+            &mut cfg.sensor.budget_ramp,
             file_s,
         );
     }
@@ -136,15 +137,24 @@ pub fn run<O: Write, E: Write>(
 
     let started = Instant::now();
 
+    // STRUCTURE + COMPLEXITY are per-file: their cost scales with the
+    // changed-file count, which the bulk-self-filter already caps.
+    // Compute them once here so they're visible in BOTH the bulk path
+    // (where the analyzer-based layers are suppressed) and the
+    // normal path. The expensive-history layers (HOTSPOT/COUPLING) and
+    // the analyzer-driven greenfield signal still gate on bulk below.
+    let sensor_findings = compute_sensor_findings(&cwd, &changed, &cfg);
+
     // §1c bulk self-filter: if the input diff itself trips the bulk
-    // thresholds, this is a sweep / vendored snapshot — emit one
-    // BUDGET finding and skip the (expensive, noisy) HOTSPOT/COUPLING
-    // analysis. Mirrors how the analyzer drops bulk commits from
-    // history.
+    // thresholds, this is a sweep / vendored snapshot — emit BUDGET
+    // and the per-file sensor findings, then skip the (expensive,
+    // noisy) HOTSPOT/COUPLING analysis. Mirrors how the analyzer
+    // drops bulk commits from history.
     let files_n = u32::try_from(changed.len()).unwrap_or(u32::MAX);
     let lines_n: u64 = changed.iter().map(|c| c.added + c.deleted).sum();
     if files_n > cfg.bulk.max_files || lines_n > u64::from(cfg.bulk.max_lines) {
-        let findings = bulk_self_findings(files_n, lines_n, &cfg);
+        let mut findings = bulk_self_findings(files_n, lines_n, &cfg);
+        findings.extend(sensor_findings);
         return emit_bulk(args, mode, &changed, &findings, started, stdout);
     }
 
@@ -209,55 +219,9 @@ pub fn run<O: Write, E: Write>(
         }
     }
 
-    // STRUCTURE + COMPLEXITY: directory-aggregated and per-function
-    // sensors. Both run on the diff's changed paths; STRUCTURE
-    // surfaces convention divergence (or conformance, when
-    // `report_conformance` is on); COMPLEXITY fires per-function
-    // when nesting / LOC clear the absolute or relative threshold.
-    if cfg.sensor.structure.enabled || cfg.sensor.complexity.enabled {
-        let cap = cfg.sensor.structure.top_imports_to_show;
-        let pct = (cfg.sensor.structure.import_majority * 100.0).round() as u32;
-        for c in &changed {
-            // One filesystem walk per changed file's parent dir.
-            // Caching across paths in the same directory would only
-            // matter on absurd diffs (hundreds of files in one dir);
-            // the redundant work is bounded by the bulk-self filter.
-            let siblings = list_directory_siblings(&cwd, &c.path);
-            // Subject's body is part of the bodies map (it's a
-            // sibling of itself for COMPLEXITY's purposes).
-            let mut all_paths = siblings.clone();
-            if !all_paths.iter().any(|p| p == &c.path) {
-                all_paths.push(c.path.clone());
-            }
-            let bodies = load_bodies(&cwd, &all_paths);
-
-            if cfg.sensor.structure.enabled {
-                let subject_body = bodies.get(&c.path).map(String::as_str);
-                let input = mmk_core::sensors::StructureInput {
-                    path: &c.path,
-                    siblings: &siblings,
-                    bodies: &bodies,
-                    subject_body,
-                    mode: mmk_core::sensors::StructureMode::Review,
-                    cfg: &cfg.sensor.structure,
-                };
-                if let Some(sf) = mmk_core::sensors::compute_structure_finding(&input) {
-                    findings.push(structure_to_finding(&sf, cap, pct));
-                }
-            }
-            if cfg.sensor.complexity.enabled {
-                let input = mmk_core::sensors::ComplexityInput {
-                    path: &c.path,
-                    siblings: &siblings,
-                    bodies: &bodies,
-                    cfg: &cfg.sensor.complexity,
-                };
-                for cf in mmk_core::sensors::compute_complexity_findings(&input) {
-                    findings.push(complexity_to_finding(&cf));
-                }
-            }
-        }
-    }
+    // STRUCTURE + COMPLEXITY were computed before the bulk-self-filter
+    // so they're visible in both paths; reuse them here.
+    findings.extend(sensor_findings);
 
     // GREENFIELD signal: when most of the diff is paths the historical
     // analyzer hasn't seen, the HOTSPOT/COUPLING/DRIFT layers
@@ -379,6 +343,57 @@ fn emit_bulk<O: Write>(
         }
     }
     Ok(verdict_for(args.gate, findings))
+}
+
+/// Compute STRUCTURE + COMPLEXITY findings for the diff's changed paths.
+///
+/// Both sensors are per-file and don't depend on the historical
+/// `analyze` pass — their cost scales with `changed.len()`, which the
+/// bulk-self-filter already caps. Pulled out of the main `run` so the
+/// bulk path can also surface them: structural / per-function signal
+/// is at least as relevant on a sweep as on a normal review.
+fn compute_sensor_findings(cwd: &Path, changed: &[ChangedFile], cfg: &Config) -> Vec<Finding> {
+    let mut out = Vec::new();
+    if !(cfg.sensor.structure.enabled || cfg.sensor.complexity.enabled) {
+        return out;
+    }
+    let cap = cfg.sensor.structure.top_imports_to_show;
+    let pct = (cfg.sensor.structure.import_majority * 100.0).round() as u32;
+    for c in changed {
+        let siblings = list_directory_siblings(cwd, &c.path);
+        let mut all_paths = siblings.clone();
+        if !all_paths.iter().any(|p| p == &c.path) {
+            all_paths.push(c.path.clone());
+        }
+        let bodies = load_bodies(cwd, &all_paths);
+
+        if cfg.sensor.structure.enabled {
+            let subject_body = bodies.get(&c.path).map(String::as_str);
+            let input = mmk_core::sensors::StructureInput {
+                path: &c.path,
+                siblings: &siblings,
+                bodies: &bodies,
+                subject_body,
+                mode: mmk_core::sensors::StructureMode::Review,
+                cfg: &cfg.sensor.structure,
+            };
+            if let Some(sf) = mmk_core::sensors::compute_structure_finding(&input) {
+                out.push(structure_to_finding(&sf, cap, pct));
+            }
+        }
+        if cfg.sensor.complexity.enabled {
+            let input = mmk_core::sensors::ComplexityInput {
+                path: &c.path,
+                siblings: &siblings,
+                bodies: &bodies,
+                cfg: &cfg.sensor.complexity,
+            };
+            for cf in mmk_core::sensors::compute_complexity_findings(&input) {
+                out.push(complexity_to_finding(&cf));
+            }
+        }
+    }
+    out
 }
 
 pub(crate) fn bulk_self_findings(files_n: u32, lines_n: u64, cfg: &Config) -> Vec<Finding> {
@@ -566,36 +581,42 @@ pub(crate) fn compute_findings(
     };
     let triggers = mmk_core::budget::check_diff_budget(&check, &cfg.bulk);
     if triggers.is_empty() {
-        // Under cap: ramp tier may still fire.
-        let progress = mmk_core::budget::budget_progress(&check, &cfg.bulk);
-        match mmk_core::budget::budget_tier(&progress) {
-            mmk_core::budget::BudgetTier::Approaching => {
-                findings.push(Finding::new(
-                    Layer::Budget,
-                    Severity::Info,
-                    messages::budget_ramp(
-                        progress.files.0,
-                        progress.files.1,
-                        progress.lines.0,
-                        progress.lines.1,
-                        false,
-                    ),
-                ));
+        // Under cap: ramp tier may fire when explicitly opted in.
+        // Ramp shipped behind a flag because n=1 evidence isn't enough
+        // to default-on a continuous-feedback signal that competes for
+        // attention with the other layers; eval --replay measures
+        // whether ramp findings correlate with course-correction.
+        if cfg.sensor.budget_ramp.enabled {
+            let progress = mmk_core::budget::budget_progress(&check, &cfg.bulk);
+            match mmk_core::budget::budget_tier(&progress) {
+                mmk_core::budget::BudgetTier::Approaching => {
+                    findings.push(Finding::new(
+                        Layer::Budget,
+                        Severity::Info,
+                        messages::budget_ramp(
+                            progress.files.0,
+                            progress.files.1,
+                            progress.lines.0,
+                            progress.lines.1,
+                            false,
+                        ),
+                    ));
+                }
+                mmk_core::budget::BudgetTier::Near => {
+                    findings.push(Finding::new(
+                        Layer::Budget,
+                        Severity::Warn,
+                        messages::budget_ramp(
+                            progress.files.0,
+                            progress.files.1,
+                            progress.lines.0,
+                            progress.lines.1,
+                            true,
+                        ),
+                    ));
+                }
+                mmk_core::budget::BudgetTier::Quiet | mmk_core::budget::BudgetTier::Over => {}
             }
-            mmk_core::budget::BudgetTier::Near => {
-                findings.push(Finding::new(
-                    Layer::Budget,
-                    Severity::Warn,
-                    messages::budget_ramp(
-                        progress.files.0,
-                        progress.files.1,
-                        progress.lines.0,
-                        progress.lines.1,
-                        true,
-                    ),
-                ));
-            }
-            mmk_core::budget::BudgetTier::Quiet | mmk_core::budget::BudgetTier::Over => {}
         }
     } else {
         for t in triggers {

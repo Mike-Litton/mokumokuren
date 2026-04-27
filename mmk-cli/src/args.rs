@@ -392,6 +392,14 @@ pub struct EvalArgs {
     /// move whenever anything ships).
     #[arg(long)]
     pub learn: bool,
+
+    /// Emit a per-layer replay histogram: for each layer, the share
+    /// of sampled commits that fired it, the distinct paths surfaced,
+    /// and the severity mix. Composable with `--learn`. Designed to
+    /// answer "do mmk's defaults produce signal on this codebase, and
+    /// where?" across many repos without requiring agent sessions.
+    #[arg(long)]
+    pub replay: bool,
 }
 
 #[derive(Debug, Parser)]

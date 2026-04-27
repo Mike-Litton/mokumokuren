@@ -108,6 +108,17 @@ pub struct SensorFile {
     pub structure: Option<StructureFile>,
     #[serde(default)]
     pub complexity: Option<ComplexityFile>,
+    #[serde(default)]
+    pub budget_ramp: Option<BudgetRampFile>,
+}
+
+/// `[sensor.budget_ramp]` block. Opt-in: under-cap BUDGET ramp
+/// findings only fire when `enabled = true`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BudgetRampFile {
+    #[serde(default)]
+    pub enabled: Option<bool>,
 }
 
 /// `[sensor.structure]` block. Every field optional; unset fields

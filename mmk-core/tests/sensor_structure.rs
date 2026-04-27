@@ -97,11 +97,12 @@ fn test_files_aggregate_separately() {
 }
 
 #[test]
-fn aggregation_3_of_4_passes_default_majority() {
-    // 4 siblings; 3 import zod. Default import_majority=0.66 →
-    // floor=ceil(0.66*3) = 2 (after the subject is filtered out
-    // there are 4 siblings; floor=ceil(0.66*4)=3). At 3-of-4 the
-    // import survives.
+fn aggregation_3_of_4_passes_explicit_two_thirds_majority() {
+    // 4 siblings; 3 import zod = 75 %. The current default
+    // (`DEFAULT_STRUCTURE_IMPORT_MAJORITY = 0.85`) would reject
+    // this, so the test sets an explicit 0.66 threshold to exercise
+    // the mechanism on a sub-unanimous fixture without binding the
+    // assertion to the default value.
     let (bodies_map, siblings) = bodies(&[
         (
             "dlg/award.tsx",
@@ -117,7 +118,11 @@ fn aggregation_3_of_4_passes_default_majority() {
         ),
         ("dlg/empty.tsx", "export const D=4;\n"),
     ]);
-    let cfg = cfg();
+    let cfg = StructureCfg {
+        import_majority: 0.66,
+        export_template_majority: 0.66,
+        ..StructureCfg::default()
+    };
     let input = StructureInput {
         path: Path::new("dlg/new.tsx"),
         siblings: &siblings,
@@ -135,9 +140,11 @@ fn aggregation_3_of_4_passes_default_majority() {
 }
 
 #[test]
-fn aggregation_2_of_3_below_majority_drops_import() {
-    // 3 siblings; 2 import 'rare'. floor=ceil(0.66*3)=2 — so it
-    // *just* survives. Knock it down to 1-of-3 to ensure dropping.
+fn aggregation_1_of_3_below_majority_drops_import() {
+    // 3 siblings; only `dlg/a.tsx` imports `rare` = 33 %. Below
+    // any reasonable majority threshold (default 0.85 or the
+    // historical 0.66), so `rare` must not survive aggregation
+    // while `zod` (3-of-3 = 100 %) does.
     let (bodies_map, siblings) = bodies(&[
         ("dlg/a.tsx", "import { z } from 'zod';\nimport { x } from 'rare';\nexport function CreateADialog(){}\n"),
         ("dlg/b.tsx", "import { z } from 'zod';\nexport function CreateBDialog(){}\n"),
@@ -162,7 +169,7 @@ fn aggregation_2_of_3_below_majority_drops_import() {
     assert!(sources.contains(&"zod"));
     assert!(
         !sources.contains(&"rare"),
-        "1-of-3 must not survive 0.66 majority; got: {sources:?}"
+        "1-of-3 must not survive any reasonable majority; got: {sources:?}"
     );
 }
 

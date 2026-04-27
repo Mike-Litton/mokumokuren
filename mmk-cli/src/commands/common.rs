@@ -11,8 +11,8 @@
 use anyhow::{Context, Result};
 use globset::GlobSet;
 use mmk_config::{
-    ComplexityCfg, ConfigFile, CouplingCfg, CouplingFile, HealthFile, HealthTsCfg, SensorFile,
-    StructureCfg,
+    BudgetRampCfg, ComplexityCfg, ConfigFile, CouplingCfg, CouplingFile, HealthFile, HealthTsCfg,
+    SensorFile, StructureCfg,
 };
 use mmk_core::CouplingEntry;
 use mmk_health::{HealthFinding, HealthPattern};
@@ -193,8 +193,14 @@ pub fn coupling_findings(input: CouplingEmission<'_>) -> Vec<Finding> {
 pub fn apply_sensor_file(
     structure: &mut StructureCfg,
     complexity: &mut ComplexityCfg,
+    budget_ramp: &mut BudgetRampCfg,
     file_s: &SensorFile,
 ) {
+    if let Some(b) = file_s.budget_ramp.as_ref() {
+        if let Some(v) = b.enabled {
+            budget_ramp.enabled = v;
+        }
+    }
     if let Some(s) = file_s.structure.as_ref() {
         if let Some(v) = s.enabled {
             structure.enabled = v;

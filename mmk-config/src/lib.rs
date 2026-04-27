@@ -6,8 +6,8 @@ use serde::Serialize;
 pub mod file;
 
 pub use file::{
-    BlastRadiusFile, BulkFile, ComplexityFile, ConfigFile, CouplingFile, HealthFile, HealthTsFile,
-    SensorFile, StructureFile,
+    BlastRadiusFile, BudgetRampFile, BulkFile, ComplexityFile, ConfigFile, CouplingFile,
+    HealthFile, HealthTsFile, SensorFile, StructureFile,
 };
 
 pub const SECONDS_PER_DAY: i64 = 86_400;
@@ -50,14 +50,19 @@ pub const DEFAULT_GREENFIELD_THRESHOLD: f64 = 0.5;
 ///
 /// 3 sibling files is the floor for declaring a directory has a
 /// convention worth surfacing: two siblings is *too* easy to pattern
-/// match on (every `mod.rs`/`lib.rs` pair would fire). 0.66 majority
-/// is the conservative reading of NATURALIZE-style "consensus
-/// floor" — half the room agrees plus a buffer. `mmk eval --learn`
-/// reports per-repo fire rate at multiple settings so adopters can
+/// match on (every `mod.rs`/`lib.rs` pair would fire). 0.85 majority
+/// is the calibrated reading after the first agent-eval session: at
+/// 0.66, sibling directories with heterogeneous file roles
+/// (e.g. routers where 4 of 5 import zod for input validation and
+/// the 5th is a CRUD wrapper that legitimately doesn't) produced
+/// false positives the agent had to mentally filter on every write.
+/// 0.85 reads as "near-unanimous consensus," which is the right bar
+/// for declaring a convention worth flagging divergence from.
+/// `mmk eval --learn` reports per-repo fire rate so adopters can
 /// see whether the defaults match their codebase.
 pub const DEFAULT_STRUCTURE_MIN_SIBLINGS: u32 = 3;
-pub const DEFAULT_STRUCTURE_IMPORT_MAJORITY: f64 = 0.66;
-pub const DEFAULT_STRUCTURE_EXPORT_TEMPLATE_MAJORITY: f64 = 0.66;
+pub const DEFAULT_STRUCTURE_IMPORT_MAJORITY: f64 = 0.85;
+pub const DEFAULT_STRUCTURE_EXPORT_TEMPLATE_MAJORITY: f64 = 0.85;
 pub const DEFAULT_STRUCTURE_TOP_IMPORTS_TO_SHOW: usize = 6;
 pub const DEFAULT_STRUCTURE_DIVERGENCE_MIN_MISSING: u32 = 1;
 
@@ -162,6 +167,26 @@ pub struct Config {
 pub struct SensorCfg {
     pub structure: StructureCfg,
     pub complexity: ComplexityCfg,
+    pub budget_ramp: BudgetRampCfg,
+}
+
+/// `[sensor.budget_ramp]` — under-cap continuous BUDGET feedback.
+///
+/// On by default. `mmk review` and `mmk pre-edit` emit a progressive
+/// Info @ ≥50% of cap and Warn @ ≥75% of cap so the agent sees the
+/// meter climbing before it snaps over the line. The over-cap BUDGET
+/// finding is unaffected — it always fires when the diff exceeds
+/// `bulk.max_files` or `bulk.max_lines`. Set `enabled = false` to
+/// silence the under-cap ramp.
+#[derive(Debug, Clone, Serialize)]
+pub struct BudgetRampCfg {
+    pub enabled: bool,
+}
+
+impl Default for BudgetRampCfg {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 /// `[sensor.structure]` — directory-convention sensor.

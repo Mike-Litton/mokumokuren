@@ -337,6 +337,55 @@ fn pre_edit_health_block_absent_when_disabled() {
 }
 
 #[test]
+fn pre_edit_absolute_path_resolves_to_repo_relative_lookup() {
+    // Hook integrations pass absolute paths via
+    // `tool_input.file_path`. The analyzer keys lookups on
+    // repo-relative paths, so without normalization the absolute
+    // form silently misses every layer and falls through to the OK
+    // "new file (no history)" — degrading every hook fire.
+    //
+    // Same fixture, two invocations: relative path and absolute
+    // path. Both must produce the same COUPLING signal.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_coupling_fixture(dir.path(), now);
+
+    let rel_stdout = run_in(dir.path(), pre_edit_args("core/a.rs"));
+    let rel: Value = serde_json::from_slice(&rel_stdout).expect("valid JSON");
+
+    let abs_path = dir.path().join("core/a.rs");
+    let abs_stdout = run_in(
+        dir.path(),
+        pre_edit_args(abs_path.to_str().expect("utf-8 path")),
+    );
+    let abs_v: Value = serde_json::from_slice(&abs_stdout).expect("valid JSON");
+
+    let rel_coupling = rel["findings"]
+        .as_array()
+        .expect("relative findings array")
+        .iter()
+        .filter(|f| f["layer"] == "coupling")
+        .count();
+    let abs_coupling = abs_v["findings"]
+        .as_array()
+        .expect("absolute findings array")
+        .iter()
+        .filter(|f| f["layer"] == "coupling")
+        .count();
+    assert!(
+        rel_coupling > 0,
+        "sanity: relative invocation must surface COUPLING; got: {:?}",
+        rel["findings"]
+    );
+    assert_eq!(
+        rel_coupling, abs_coupling,
+        "absolute path must produce the same COUPLING fires as the relative form. \
+         relative findings: {:?} vs absolute findings: {:?}",
+        rel["findings"], abs_v["findings"]
+    );
+}
+
+#[test]
 fn pre_edit_says_new_file_for_untracked_subject() {
     // Pre-edit on a file that has never appeared in history must
     // distinguish "new file (no history)" from "no signal (N
@@ -381,7 +430,11 @@ fn pre_edit_emits_structure_for_directory_convention() {
     let body_a = "import { z } from 'zod';\nexport function CreateAwardDialog(){}\n";
     let body_g = "import { z } from 'zod';\nexport function CreateGoalDialog(){}\n";
     let body_j = "import { z } from 'zod';\nexport function CreateJobDialog(){}\n";
-    let body_x = "import { z } from 'zod';\nexport function CreateXDialog(){}\n";
+    // Function name matches file stem so template_for() resolves
+    // to `Create*Dialog`; otherwise the 4th sibling contributes a
+    // mismatched stem and the template falls below the majority
+    // floor at the 0.85 default.
+    let body_x = "import { z } from 'zod';\nexport function CreateExtraDialog(){}\n";
     common::write(dir.path(), "dlg/award.tsx", body_a);
     common::write(dir.path(), "dlg/goal.tsx", body_g);
     common::write(dir.path(), "dlg/job.tsx", body_j);
@@ -408,6 +461,78 @@ fn pre_edit_emits_structure_for_directory_convention() {
     assert!(
         msg.contains("Create*Dialog"),
         "STRUCTURE message must list the common export template; got: {msg}"
+    );
+}
+
+#[test]
+fn pre_edit_budget_ramp_fires_by_default() {
+    // Pre-edit's continuous ramp is on by default: a working tree
+    // at 60 % of cap surfaces an Approaching Info finding.
+    use std::fmt::Write as _;
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    write(dir.path(), "seed.rs", "x\n");
+    commit_all(dir.path(), "seed", now - common::DAY);
+
+    let mut body = String::with_capacity(600 * 8);
+    for i in 0..600 {
+        writeln!(body, "line{i}").unwrap();
+    }
+    write(dir.path(), "seed.rs", &body);
+
+    let stdout = run_in(dir.path(), pre_edit_args("seed.rs"));
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+    let ramp_count = v["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .filter(|f| {
+            f["layer"] == "budget" && f["message"].as_str().unwrap_or("").contains("of cap")
+        })
+        .count();
+    assert_eq!(
+        ramp_count, 1,
+        "pre-edit ramp must fire by default; got: {:?}",
+        v["findings"]
+    );
+}
+
+#[test]
+fn pre_edit_budget_ramp_silent_when_disabled() {
+    use std::fmt::Write as _;
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    write(dir.path(), "seed.rs", "x\n");
+    commit_all(dir.path(), "seed", now - common::DAY);
+
+    std::fs::write(
+        dir.path().join("mokumokuren.toml"),
+        "[sensor.budget_ramp]\nenabled = false\n",
+    )
+    .unwrap();
+
+    let mut body = String::with_capacity(600 * 8);
+    for i in 0..600 {
+        writeln!(body, "line{i}").unwrap();
+    }
+    write(dir.path(), "seed.rs", &body);
+
+    let stdout = run_in(dir.path(), pre_edit_args("seed.rs"));
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+    let ramp_count = v["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .filter(|f| {
+            f["layer"] == "budget" && f["message"].as_str().unwrap_or("").contains("of cap")
+        })
+        .count();
+    assert_eq!(
+        ramp_count, 0,
+        "pre-edit ramp must be silent when explicitly disabled; got: {:?}",
+        v["findings"]
     );
 }
 

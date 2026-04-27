@@ -37,13 +37,17 @@ deterministic Git-history sensor that catches LLM slop the linter
 and tests can't see (hotspot blindness, hallucinated coupling,
 thrashing). The agent edit loop wires to it like this:
 
-**Before editing a file `<PATH>`:**
+**Before editing or creating a file `<PATH>`:**
 
-Run `mmk pre-edit <PATH>`. It returns layer-labeled findings:
-HOTSPOT (rank if top-N) and COUPLING (historical co-change
-partners above the threshold). If a partner is not part of your
-plan, either touch it or say why this edit breaks the pattern.
-Add `--format json` if your harness needs structured output.
+Run `mmk pre-edit <PATH>` — even when `<PATH>` doesn't yet exist.
+It returns layer-labeled findings: HOTSPOT (rank if top-N),
+COUPLING (historical co-change partners above the threshold),
+and STRUCTURE (the directory's convention — common imports,
+export shape — when one is detectable). If a partner is not part
+of your plan, either touch it or say why this edit breaks the
+pattern. If STRUCTURE surfaces a convention, match it before
+writing. Add `--format json` if your harness needs structured
+output.
 
 **After every edit (or batch of edits) before declaring "done":**
 
@@ -55,6 +59,10 @@ emits layer-labeled findings:
 - `COUPLING` — file you edited has a historical partner you did
   not touch. Decide deliberately whether the partner needs the
   matching change.
+- `STRUCTURE` — the file's directory has a convention (siblings
+  share imports / export shape). Your file diverges or matches.
+- `COMPLEXITY` — function shape (nesting / LOC) is far above the
+  directory norm or the absolute threshold.
 - `BUDGET` — diff exceeds `bulk.max_files` / `bulk.max_lines` in
   `mokumokuren.toml`. Likely a sweep; consider splitting.
 
@@ -98,9 +106,14 @@ When invoked:
    actionable (partner you didn't touch).
 
 2. **About to edit a file `<PATH>`** — run `mmk pre-edit <PATH>`
-   and surface the HOTSPOT and COUPLING findings. The partners in
-   COUPLING are files the agent should re-read before editing
-   `<PATH>`.
+   and surface the HOTSPOT, COUPLING, and STRUCTURE findings. The
+   partners in COUPLING are files the agent should re-read before
+   editing `<PATH>`.
+
+2a. **About to create a new file `<PATH>`** — run `mmk pre-edit
+    <PATH>` even though `<PATH>` doesn't yet exist. STRUCTURE may
+    surface the directory's convention (common imports, export
+    shape) the new file should match.
 
 3. **End of feature / wrapping up** — run
    `mmk session-summary --base main --drift-sessions 5`. Surface

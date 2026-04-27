@@ -17,6 +17,7 @@ fn eval_args() -> EvalArgs {
         config: None,
         verbose: false,
         learn: false,
+        replay: false,
     }
 }
 
@@ -222,6 +223,93 @@ fn eval_learn_emits_sensor_suggestion_blocks() {
     assert!(
         text.contains("[sensor.complexity]"),
         "text --learn output must include [sensor.complexity] block; got: {text}"
+    );
+}
+
+#[test]
+fn eval_replay_emits_per_layer_histogram() {
+    // --replay populates replay_histogram with per-layer entries: at
+    // least the layer name, fire_rate ∈ [0, 1], commits_with_fire,
+    // distinct_paths, severity mix. The coupling fixture fires
+    // COUPLING on the a-only commits, so COUPLING should land in the
+    // histogram with a non-zero fire rate.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_coupling_fixture(dir.path(), now);
+
+    let mut args = eval_args();
+    args.replay = true;
+    let stdout = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON report");
+
+    let hist = v["replay_histogram"]
+        .as_object()
+        .expect("replay_histogram block must be present when --replay is set");
+    let sampled = hist["commits_sampled"]
+        .as_u64()
+        .expect("commits_sampled must be a number");
+    assert!(sampled > 0, "must have sampled at least one commit");
+
+    let layers = hist["layers"]
+        .as_array()
+        .expect("layers array must be present");
+    assert!(
+        !layers.is_empty(),
+        "fixture fires COUPLING — at least one layer entry expected; got: {layers:?}"
+    );
+    let coupling = layers
+        .iter()
+        .find(|l| l["layer"] == "coupling")
+        .expect("COUPLING layer entry must be present");
+    let fire_rate = coupling["fire_rate"]
+        .as_f64()
+        .expect("fire_rate is a number");
+    assert!(
+        (0.0..=1.0).contains(&fire_rate) && fire_rate > 0.0,
+        "COUPLING fire_rate must be a positive fraction; got: {fire_rate}"
+    );
+    assert!(
+        coupling["distinct_paths"].as_u64().unwrap_or(0) >= 1,
+        "COUPLING must surface at least one distinct path; got: {coupling}"
+    );
+    assert!(
+        coupling.get("severity").is_some(),
+        "severity mix must be present per layer; got: {coupling}"
+    );
+}
+
+#[test]
+fn eval_replay_text_emits_histogram_block() {
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_coupling_fixture(dir.path(), now);
+
+    let mut args = eval_args();
+    args.replay = true;
+    args.format = Format::Text;
+    let stdout = run_in(dir.path(), args);
+    let text = String::from_utf8(stdout).unwrap();
+    assert!(
+        text.contains("replay histogram"),
+        "text --replay output must include the histogram heading; got: {text}"
+    );
+    assert!(
+        text.contains("fire_rate"),
+        "text --replay output must include the fire_rate column; got: {text}"
+    );
+}
+
+#[test]
+fn eval_replay_omitted_by_default() {
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_coupling_fixture(dir.path(), now);
+
+    let stdout = run_in(dir.path(), eval_args());
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON report");
+    assert!(
+        v.get("replay_histogram").is_none(),
+        "default eval JSON must not include replay_histogram; got: {v}"
     );
 }
 

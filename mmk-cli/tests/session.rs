@@ -33,6 +33,42 @@ fn session_summary_includes_window_and_session_blocks() {
 }
 
 #[test]
+fn session_summary_nudges_toward_review_when_session_empty() {
+    // The agent's most common misuse: invoke `mmk session-summary`
+    // on uncommitted working-tree changes with no commits since the
+    // resolved base. Without a nudge, "0 files in session" reads as
+    // silent failure. The Anchor Info finding redirects them to
+    // `mmk review`.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    write(dir.path(), "seed.rs", "x\n");
+    commit_all(dir.path(), "seed", now - DAY);
+
+    // base = HEAD ⇒ session_commits is empty.
+    let mut args = json_args();
+    args.base = Some("HEAD".into());
+    let (stdout, _) = run_session(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let nudge: Vec<&Value> = v["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .filter(|f| {
+            f["layer"] == "anchor" && f["message"].as_str().unwrap_or("").contains("mmk review")
+        })
+        .collect();
+    assert_eq!(
+        nudge.len(),
+        1,
+        "empty session must surface exactly one Anchor nudge to mmk review; got: {:?}",
+        v["findings"]
+    );
+    assert_eq!(nudge[0]["severity"], "info");
+}
+
+#[test]
 fn session_summary_diff_budget_finding_fires_on_oversize_session() {
     use std::fmt::Write as _;
     let dir = TempDir::new().unwrap();

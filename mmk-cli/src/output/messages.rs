@@ -209,6 +209,18 @@ pub fn session_overrun(session_lines: u64, session_n: u32, budget: u64) -> Strin
     format!("session is {session_lines} lines across {session_n} commits; cap {budget}")
 }
 
+/// Empty-session nudge.
+///
+/// Surfaced when `session_commits.len() == 0` (typically
+/// `--base HEAD` or a fresh branch with no commits since base).
+/// Without it the agent reads "0 files" as silent failure; with it
+/// they're pointed at the right subcommand for uncommitted work.
+#[must_use]
+pub const fn session_empty_nudge() -> &'static str {
+    "session contains 0 commits since the resolved base; for uncommitted \
+     working-tree review, use `mmk review` instead"
+}
+
 fn join_paths<P: AsRef<Path>>(paths: &[P]) -> String {
     paths
         .iter()

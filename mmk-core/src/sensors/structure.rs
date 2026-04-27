@@ -362,9 +362,11 @@ mod tests {
 
     #[test]
     fn aggregates_common_imports_at_majority() {
-        // 4 siblings; 3 import zod, 2 import react.
-        // import_majority default = 0.66; floor = ceil(0.66 * 4) = 3.
-        // → zod survives, react does not.
+        // 4 siblings; 3 import zod (75 %), 1 imports react (25 %).
+        // The current default (0.85) would reject zod too — this
+        // test exercises the threshold mechanism on a sub-unanimous
+        // fixture, so it pins an explicit 0.66 threshold. → zod
+        // survives, react does not.
         let body_with = "import { z } from 'zod';\nexport function CreateAwardDialog(){}\n";
         let body_no = "import React from 'react';\nexport function Helper(){}\n";
         let entries = vec![
@@ -376,7 +378,11 @@ mod tests {
         let bodies = make_bodies(&entries);
         let siblings: Vec<PathBuf> = entries.iter().map(|(p, _)| p.clone()).collect();
 
-        let cfg = cfg();
+        let cfg = StructureCfg {
+            import_majority: 0.66,
+            export_template_majority: 0.66,
+            ..StructureCfg::default()
+        };
         let input = StructureInput {
             path: Path::new("dlg/new.tsx"),
             siblings: &siblings,

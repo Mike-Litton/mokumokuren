@@ -847,6 +847,86 @@ fn review_no_greenfield_signal_when_history_layer_fired() {
 }
 
 #[test]
+fn review_budget_ramp_fires_by_default() {
+    // The under-cap continuous ramp is on by default: a 60 %-of-cap
+    // diff surfaces an Approaching Info finding without any toml
+    // flipping it on. Useful signal defaults on; users who don't
+    // want it set [sensor.budget_ramp] enabled = false.
+    use std::fmt::Write as _;
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    write(dir.path(), "seed.rs", "x\n");
+    commit_all(dir.path(), "seed", now - DAY);
+
+    let mut body = String::with_capacity(600 * 8);
+    for i in 0..600 {
+        writeln!(body, "line{i}").unwrap();
+    }
+    write(dir.path(), "seed.rs", &body);
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let ramp_count = v["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .filter(|f| {
+            f["layer"] == "budget" && f["message"].as_str().unwrap_or("").contains("of cap")
+        })
+        .count();
+    assert_eq!(
+        ramp_count, 1,
+        "ramp must fire exactly once at 60 % of cap by default; got: {:?}",
+        v["findings"]
+    );
+}
+
+#[test]
+fn review_budget_ramp_silent_when_disabled() {
+    // [sensor.budget_ramp] enabled = false silences the under-cap
+    // ramp. The over-cap BUDGET finding is unaffected (covered by
+    // review_emits_budget_when_diff_exceeds).
+    use std::fmt::Write as _;
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    write(dir.path(), "seed.rs", "x\n");
+    commit_all(dir.path(), "seed", now - DAY);
+
+    std::fs::write(
+        dir.path().join("mokumokuren.toml"),
+        "[sensor.budget_ramp]\nenabled = false\n",
+    )
+    .unwrap();
+
+    let mut body = String::with_capacity(600 * 8);
+    for i in 0..600 {
+        writeln!(body, "line{i}").unwrap();
+    }
+    write(dir.path(), "seed.rs", &body);
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let budget: Vec<&Value> = v["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .filter(|f| f["layer"] == "budget")
+        .collect();
+    assert!(
+        budget.is_empty(),
+        "ramp must be silent when explicitly disabled; got: {budget:?}"
+    );
+}
+
+#[test]
 fn review_emits_budget_when_diff_exceeds() {
     let dir = TempDir::new().unwrap();
     let now = 1_700_000_000_i64;
@@ -915,6 +995,74 @@ fn review_emits_structure_divergence_on_new_file_not_matching_convention() {
     assert!(
         msg.contains("missing") || msg.contains("not exporting"),
         "STRUCTURE divergence message should mention the missing piece; got: {msg}"
+    );
+}
+
+#[test]
+fn review_bulk_does_not_suppress_structure_or_complexity() {
+    // The bulk-self-filter exists to skip the *expensive* analyze
+    // path (HOTSPOT/COUPLING). STRUCTURE and COMPLEXITY are per-file
+    // and cheap, so they must still surface alongside BUDGET when the
+    // diff exceeds bulk thresholds — otherwise the v0.5 sensors are
+    // invisible in exactly the session shape (sweep, generated drop)
+    // where they have signal.
+    use std::fmt::Write as _;
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    // Three sibling .tsx files share `zod` + Create*Dialog template,
+    // committed so they're known siblings on disk.
+    let body_a = "import { z } from 'zod';\nexport function CreateAwardDialog(){}\n";
+    let body_g = "import { z } from 'zod';\nexport function CreateGoalDialog(){}\n";
+    let body_j = "import { z } from 'zod';\nexport function CreateJobDialog(){}\n";
+    write(dir.path(), "dlg/award.tsx", body_a);
+    write(dir.path(), "dlg/goal.tsx", body_g);
+    write(dir.path(), "dlg/job.tsx", body_j);
+    // A separate seed file we can balloon to push the diff over cap.
+    write(dir.path(), "seed.rs", "x\n");
+    commit_all(dir.path(), "seed", now - 5 * DAY);
+
+    // Untracked sibling that diverges from the convention — STRUCTURE
+    // should fire on it.
+    write(dir.path(), "dlg/divergent.tsx", "export const x = 1;\n");
+    // Untracked deeply-nested .ts function — COMPLEXITY should fire.
+    let deep = "function deep() {\n\
+        if (a) { if (b) { if (c) { if (d) { if (e) { if (f) { if (g) { return 1; } } } } } } }\n\
+        }\n";
+    write(dir.path(), "src/deep.ts", deep);
+    // And blow past bulk.max_lines so the bulk-self-filter trips.
+    let mut huge = String::with_capacity(2000 * 8);
+    for i in 0..2000 {
+        writeln!(huge, "line{i}").unwrap();
+    }
+    write(dir.path(), "seed.rs", &huge);
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let findings = v["findings"].as_array().expect("findings array");
+    let layers: Vec<&str> = findings
+        .iter()
+        .map(|f| f["layer"].as_str().unwrap_or(""))
+        .collect();
+    assert!(
+        layers.contains(&"budget"),
+        "bulk diff must still emit BUDGET; got: {layers:?}"
+    );
+    assert!(
+        layers.contains(&"structure"),
+        "STRUCTURE must surface even when bulk fires; got: {layers:?}"
+    );
+    assert!(
+        layers.contains(&"complexity"),
+        "COMPLEXITY must surface even when bulk fires; got: {layers:?}"
+    );
+    // History-based layers stay suppressed.
+    assert!(
+        !layers.contains(&"hotspot") && !layers.contains(&"coupling"),
+        "bulk path must still suppress HOTSPOT/COUPLING; got: {layers:?}"
     );
 }
 
