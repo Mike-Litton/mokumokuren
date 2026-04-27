@@ -15,6 +15,7 @@ workspace = true
 ahash = { workspace = true }
 anyhow = { workspace = true }
 mmk-config = { path = "../mmk-config" }
+mmk-health = { path = "../mmk-health" }
 serde = { workspace = true }
 
 [dev-dependencies]

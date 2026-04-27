@@ -190,6 +190,42 @@ fn eval_learn_text_mode_emits_toml_block() {
 }
 
 #[test]
+fn eval_learn_emits_sensor_suggestion_blocks() {
+    // Build a small TS-flavoured fixture so eval --learn has
+    // something to chew on for the sensor suggestion blocks. The
+    // fixture mixes file edits the COMPLEXITY/STRUCTURE collectors
+    // can sample from.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    let dlg_body = "import { z } from 'zod';\nexport function CreateADialog(){ return 1; }\n";
+    write(dir.path(), "dlg/a.tsx", dlg_body);
+    write(dir.path(), "dlg/b.tsx", dlg_body);
+    write(dir.path(), "dlg/c.tsx", dlg_body);
+    commit_all(dir.path(), "seed dlg", now - 4 * DAY);
+    write(
+        dir.path(),
+        "dlg/a.tsx",
+        "import { z } from 'zod';\nexport function CreateADialog(){ return 2; }\n",
+    );
+    commit_all(dir.path(), "edit dlg/a", now - 3 * DAY);
+
+    let mut args = eval_args();
+    args.learn = true;
+    args.format = Format::Text;
+    let stdout = run_in(dir.path(), args);
+    let text = String::from_utf8(stdout).unwrap();
+    assert!(
+        text.contains("[sensor.structure]"),
+        "text --learn output must include [sensor.structure] block; got: {text}"
+    );
+    assert!(
+        text.contains("[sensor.complexity]"),
+        "text --learn output must include [sensor.complexity] block; got: {text}"
+    );
+}
+
+#[test]
 fn eval_text_mode_emits_firing_rate_line() {
     let dir = TempDir::new().unwrap();
     let now = 1_700_000_000_i64;

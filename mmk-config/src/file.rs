@@ -36,6 +36,11 @@ pub struct ConfigFile {
     /// in-code defaults.
     #[serde(default)]
     pub bulk: Option<BulkFile>,
+    /// Optional `[sensor]` block — STRUCTURE and COMPLEXITY sensors.
+    /// Each subblock is itself optional. Absent → all sensors run on
+    /// their in-code defaults.
+    #[serde(default)]
+    pub sensor: Option<SensorFile>,
 }
 
 /// `[blast_radius]` block in `mokumokuren.toml`.
@@ -90,6 +95,60 @@ pub struct HealthTsFile {
     pub enabled: Option<bool>,
     #[serde(default)]
     pub patterns: Option<Vec<String>>,
+}
+
+/// `[sensor]` block — wrapper around the per-sensor sub-blocks. Each
+/// subblock is itself fully optional so `[sensor.complexity]
+/// enabled = false` works without having to re-declare the
+/// structure block.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SensorFile {
+    #[serde(default)]
+    pub structure: Option<StructureFile>,
+    #[serde(default)]
+    pub complexity: Option<ComplexityFile>,
+}
+
+/// `[sensor.structure]` block. Every field optional; unset fields
+/// fall through to the in-code defaults.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StructureFile {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub min_siblings: Option<u32>,
+    #[serde(default)]
+    pub import_majority: Option<f64>,
+    #[serde(default)]
+    pub export_template_majority: Option<f64>,
+    #[serde(default)]
+    pub top_imports_to_show: Option<usize>,
+    #[serde(default)]
+    pub divergence_min_missing: Option<u32>,
+    #[serde(default)]
+    pub report_conformance: Option<bool>,
+    #[serde(default)]
+    pub linescan_fallback: Option<bool>,
+}
+
+/// `[sensor.complexity]` block.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComplexityFile {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub nesting_ratio_threshold: Option<f64>,
+    #[serde(default)]
+    pub nesting_absolute_max: Option<u32>,
+    #[serde(default)]
+    pub loc_ratio_threshold: Option<f64>,
+    #[serde(default)]
+    pub loc_absolute_max: Option<u32>,
+    #[serde(default)]
+    pub min_directory_siblings: Option<u32>,
 }
 
 impl ConfigFile {

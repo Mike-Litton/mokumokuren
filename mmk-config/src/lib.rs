@@ -5,7 +5,10 @@ use serde::Serialize;
 
 pub mod file;
 
-pub use file::{BlastRadiusFile, BulkFile, ConfigFile, CouplingFile, HealthFile, HealthTsFile};
+pub use file::{
+    BlastRadiusFile, BulkFile, ComplexityFile, ConfigFile, CouplingFile, HealthFile, HealthTsFile,
+    SensorFile, StructureFile,
+};
 
 pub const SECONDS_PER_DAY: i64 = 86_400;
 
@@ -42,6 +45,36 @@ pub const DEFAULT_COUPLING_CONFIDENCE_THRESHOLD: f64 = 0.20;
 /// guess why HOTSPOT/COUPLING are silent. 0.5 reads as "more new than
 /// modified."
 pub const DEFAULT_GREENFIELD_THRESHOLD: f64 = 0.5;
+
+/// `[sensor.structure]` defaults.
+///
+/// 3 sibling files is the floor for declaring a directory has a
+/// convention worth surfacing: two siblings is *too* easy to pattern
+/// match on (every `mod.rs`/`lib.rs` pair would fire). 0.66 majority
+/// is the conservative reading of NATURALIZE-style "consensus
+/// floor" — half the room agrees plus a buffer. `mmk eval --learn`
+/// reports per-repo fire rate at multiple settings so adopters can
+/// see whether the defaults match their codebase.
+pub const DEFAULT_STRUCTURE_MIN_SIBLINGS: u32 = 3;
+pub const DEFAULT_STRUCTURE_IMPORT_MAJORITY: f64 = 0.66;
+pub const DEFAULT_STRUCTURE_EXPORT_TEMPLATE_MAJORITY: f64 = 0.66;
+pub const DEFAULT_STRUCTURE_TOP_IMPORTS_TO_SHOW: usize = 6;
+pub const DEFAULT_STRUCTURE_DIVERGENCE_MIN_MISSING: u32 = 1;
+
+/// `[sensor.complexity]` defaults.
+///
+/// The relative thresholds catch outliers within a permissive
+/// directory; the absolute thresholds catch files in directories
+/// that are uniformly bad. Code Red's biomarker bundle lists nesting
+/// and function size as the two strongest per-function defect
+/// signals; the absolute caps are a conservative reading meant to be
+/// lowered by `mmk eval --learn` once per-repo distribution data
+/// exists.
+pub const DEFAULT_COMPLEXITY_NESTING_RATIO: f64 = 3.0;
+pub const DEFAULT_COMPLEXITY_NESTING_ABS_MAX: u32 = 6;
+pub const DEFAULT_COMPLEXITY_LOC_RATIO: f64 = 3.0;
+pub const DEFAULT_COMPLEXITY_LOC_ABS_MAX: u32 = 80;
+pub const DEFAULT_COMPLEXITY_MIN_DIRECTORY_SIBLINGS: u32 = 3;
 
 /// Minimum `commits_touching(target)` required before COUPLING fires.
 ///
@@ -114,11 +147,90 @@ pub struct Config {
     pub blast_radius: BlastRadiusCfg,
     pub coupling: CouplingCfg,
     pub health: HealthCfg,
+    pub sensor: SensorCfg,
     /// Rename-similarity threshold (0.0–1.0) passed to the diff engine.
     pub rename_similarity: f32,
     /// Final ignore globs after merging file + CLI sources. The git layer
     /// reads only this field; how it got populated isn't its concern.
     pub ignores: Vec<String>,
+}
+
+/// `[sensor]` block — directory-aggregated and per-function
+/// architecture-fitness sensors that don't depend on git history.
+/// Each subblock can be flipped independently.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct SensorCfg {
+    pub structure: StructureCfg,
+    pub complexity: ComplexityCfg,
+}
+
+/// `[sensor.structure]` — directory-convention sensor.
+#[derive(Debug, Clone, Serialize)]
+pub struct StructureCfg {
+    pub enabled: bool,
+    /// Floor on sibling count before declaring a convention exists.
+    pub min_siblings: u32,
+    /// Fraction of siblings that must share an import for it to be
+    /// declared "common" to the directory.
+    pub import_majority: f64,
+    /// Same fraction for export templates (e.g. `Create*Dialog`).
+    pub export_template_majority: f64,
+    /// Cap on imports listed in a single finding so the message
+    /// stays scannable.
+    pub top_imports_to_show: usize,
+    /// Min missing common-imports for review-mode divergence to fire.
+    pub divergence_min_missing: u32,
+    /// When true, also emit Severity::Ok for new files that *match*
+    /// the convention. Off by default — keeps review terse; on lets
+    /// calibration runs verify the sensor fires correctly.
+    pub report_conformance: bool,
+    /// When true, fall back to the line-scan import extractor for
+    /// languages without a real AST adapter (currently anything but
+    /// TS). Imports-only signal — exports / templates won't be
+    /// considered for those files.
+    pub linescan_fallback: bool,
+}
+
+impl Default for StructureCfg {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_siblings: DEFAULT_STRUCTURE_MIN_SIBLINGS,
+            import_majority: DEFAULT_STRUCTURE_IMPORT_MAJORITY,
+            export_template_majority: DEFAULT_STRUCTURE_EXPORT_TEMPLATE_MAJORITY,
+            top_imports_to_show: DEFAULT_STRUCTURE_TOP_IMPORTS_TO_SHOW,
+            divergence_min_missing: DEFAULT_STRUCTURE_DIVERGENCE_MIN_MISSING,
+            report_conformance: false,
+            linescan_fallback: true,
+        }
+    }
+}
+
+/// `[sensor.complexity]` — per-function structural budget.
+#[derive(Debug, Clone, Serialize)]
+pub struct ComplexityCfg {
+    pub enabled: bool,
+    pub nesting_ratio_threshold: f64,
+    pub nesting_absolute_max: u32,
+    pub loc_ratio_threshold: f64,
+    pub loc_absolute_max: u32,
+    /// Below this many siblings, only the absolute thresholds apply
+    /// — the directory median has too little support to drive a
+    /// ratio-based finding.
+    pub min_directory_siblings: u32,
+}
+
+impl Default for ComplexityCfg {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            nesting_ratio_threshold: DEFAULT_COMPLEXITY_NESTING_RATIO,
+            nesting_absolute_max: DEFAULT_COMPLEXITY_NESTING_ABS_MAX,
+            loc_ratio_threshold: DEFAULT_COMPLEXITY_LOC_RATIO,
+            loc_absolute_max: DEFAULT_COMPLEXITY_LOC_ABS_MAX,
+            min_directory_siblings: DEFAULT_COMPLEXITY_MIN_DIRECTORY_SIBLINGS,
+        }
+    }
 }
 
 /// `[health]` block — structural-pattern adapter (mmk-health).
@@ -206,6 +318,7 @@ impl Default for Config {
             blast_radius: BlastRadiusCfg::default(),
             coupling: CouplingCfg::default(),
             health: HealthCfg::default(),
+            sensor: SensorCfg::default(),
             rename_similarity: 0.5,
             ignores: Vec::new(),
         }

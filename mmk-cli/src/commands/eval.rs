@@ -17,7 +17,10 @@ use std::process::Command;
 use std::time::Instant;
 
 use crate::args::{EvalArgs, Format};
-use crate::commands::common::{apply_coupling_file, apply_health_file, load_config_file};
+use crate::commands::common::{
+    apply_coupling_file, apply_health_file, apply_sensor_file, list_directory_siblings,
+    load_bodies, load_config_file,
+};
 use crate::commands::review::{
     bulk_self_findings, collect_diff, compute_findings, ChangedFile, ReviewMode,
 };
@@ -50,6 +53,13 @@ pub fn run<O: Write, E: Write>(args: &EvalArgs, stdout: &mut O, stderr: &mut E) 
     }
     if let Some(file_h) = file_cfg.health.as_ref() {
         apply_health_file(&mut cfg.health.ts, file_h);
+    }
+    if let Some(file_s) = file_cfg.sensor.as_ref() {
+        apply_sensor_file(
+            &mut cfg.sensor.structure,
+            &mut cfg.sensor.complexity,
+            file_s,
+        );
     }
 
     if args.verbose {
@@ -119,6 +129,9 @@ pub fn run<O: Write, E: Write>(args: &EvalArgs, stdout: &mut O, stderr: &mut E) 
             )
         };
         report.absorb(&findings);
+        if args.learn {
+            report.absorb_sensor_stats(&cwd, &changed, &cfg);
+        }
     }
 
     if args.learn {
@@ -127,6 +140,7 @@ pub fn run<O: Write, E: Write>(args: &EvalArgs, stdout: &mut O, stderr: &mut E) 
             &commits_touching,
             &analysis.commits,
         );
+        report.finalize_sensor_percentiles();
     }
 
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -207,7 +221,51 @@ struct AggregateReport {
     /// glob-style partner path plus the supporting evidence.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     learn_suggestions: Vec<LearnSuggestion>,
+    /// `--learn` per-sensor stats. Populated only when `--learn` is
+    /// set; emit-skipped otherwise so default eval JSON stays terse.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    learn_sensor_stats: Option<LearnSensorStats>,
+    /// Internal accumulator: distinct (dir, shape) pairs seen
+    /// across the sampled-commit diffs. Skipped from JSON — the
+    /// summary number `learn_sensor_stats.structure_dir_shapes_seen`
+    /// is the user-facing surface.
+    #[serde(skip)]
+    structure_pairs_seen: std::collections::BTreeSet<(String, String)>,
+    /// Internal accumulator: per-function nesting depths across
+    /// every sampled-commit diff's TS files.
+    #[serde(skip)]
+    complexity_nesting_samples: Vec<u32>,
+    /// Internal accumulator: per-function LOC across sampled-commit
+    /// diffs.
+    #[serde(skip)]
+    complexity_loc_samples: Vec<u32>,
     duration_ms: u64,
+}
+
+/// Distribution data for the structure / complexity sensors.
+///
+/// Gathered from the sampled-commit diffs. The output threshold
+/// suggestions are conservative: they don't pretend to be optimal,
+/// just visibly grounded in this repo's distribution.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct LearnSensorStats {
+    /// Distinct (dir, shape) pairs seen across the sample.
+    pub structure_dir_shapes_seen: usize,
+    /// Of those, the ones with ≥ default min_siblings.
+    pub structure_dir_shapes_above_floor: usize,
+    /// Sampled commits where STRUCTURE would have fired at least
+    /// once under the configured thresholds.
+    pub structure_commits_with_fire: usize,
+    /// Total functions inspected across all sampled-commit
+    /// diffs. Pulls double duty as the COMPLEXITY denominator.
+    pub complexity_functions_seen: usize,
+    /// Median / p90 / p99 of nesting and LOC across those.
+    pub complexity_nesting_median: u32,
+    pub complexity_nesting_p90: u32,
+    pub complexity_nesting_p99: u32,
+    pub complexity_loc_median: u32,
+    pub complexity_loc_p90: u32,
+    pub complexity_loc_p99: u32,
 }
 
 /// One adoption suggestion from `--learn`. Includes the supporting
@@ -226,6 +284,124 @@ pub struct LearnSuggestion {
 }
 
 impl AggregateReport {
+    /// Walk every changed file in a sampled commit, gather
+    /// STRUCTURE + COMPLEXITY signals, and roll them into the
+    /// learn-stats accumulator. Pure — only mutates `self`.
+    ///
+    /// Reuses the same `list_directory_siblings` + `load_bodies`
+    /// helpers as review/pre-edit so the stats reflect what those
+    /// commands would actually fire on.
+    fn absorb_sensor_stats(
+        &mut self,
+        cwd: &std::path::Path,
+        changed: &[ChangedFile],
+        cfg: &mmk_config::Config,
+    ) {
+        let stats = self
+            .learn_sensor_stats
+            .get_or_insert_with(LearnSensorStats::default);
+        // Track distinct (dir, shape) pairs across sampled commits;
+        // the absolute number per repo is the headline.
+        let mut shape_pairs_this_commit: std::collections::BTreeSet<(String, String)> =
+            std::collections::BTreeSet::new();
+        let mut structure_fired = false;
+        let mut nestings: Vec<u32> = Vec::new();
+        let mut locs: Vec<u32> = Vec::new();
+
+        for c in changed {
+            // Skip non-AST languages: COMPLEXITY would refuse and
+            // STRUCTURE's distribution lessons aren't language-
+            // specific so adding the file would only inflate counts.
+            let abs = cwd.join(&c.path);
+            let Ok(body) = std::fs::read_to_string(&abs) else {
+                continue;
+            };
+            let Some(facts) = mmk_health::extract(&c.path, &body) else {
+                continue;
+            };
+            for f in &facts.functions {
+                nestings.push(f.max_nesting_depth);
+                locs.push(f.loc);
+            }
+
+            // Shape pair tally.
+            if let Some(token) = mmk_core::sensors::structure::shape_token_pub(&c.path) {
+                let dir = c
+                    .path
+                    .parent()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                shape_pairs_this_commit.insert((dir, format!("{}.{}", token.0, token.1)));
+            }
+
+            // Run STRUCTURE on this changed path; cheap because
+            // we already have the body.
+            let siblings = list_directory_siblings(cwd, &c.path);
+            let mut all_paths = siblings.clone();
+            if !all_paths.iter().any(|p| p == &c.path) {
+                all_paths.push(c.path.clone());
+            }
+            let bodies = load_bodies(cwd, &all_paths);
+            let input = mmk_core::sensors::StructureInput {
+                path: &c.path,
+                siblings: &siblings,
+                bodies: &bodies,
+                subject_body: bodies.get(&c.path).map(String::as_str),
+                mode: mmk_core::sensors::StructureMode::Review,
+                cfg: &cfg.sensor.structure,
+            };
+            if mmk_core::sensors::compute_structure_finding(&input).is_some() {
+                structure_fired = true;
+            }
+        }
+
+        for (dir, shape) in shape_pairs_this_commit {
+            // Above-floor accounting is approximate (we don't
+            // re-walk every directory); the headline number that
+            // matters is the seen count. The "above floor" tally
+            // increments when STRUCTURE actually fired on the diff,
+            // since firing implies ≥ min_siblings was met.
+            self.structure_pairs_seen.insert((dir, shape));
+        }
+        if structure_fired {
+            stats.structure_commits_with_fire += 1;
+        }
+        stats.structure_dir_shapes_seen = self.structure_pairs_seen.len();
+        // Crude proxy: distinct (dir, shape) pairs that fired at
+        // least once over the sample.
+        if structure_fired {
+            stats.structure_dir_shapes_above_floor = stats
+                .structure_dir_shapes_above_floor
+                .max(stats.structure_commits_with_fire);
+        }
+
+        if !nestings.is_empty() {
+            self.complexity_nesting_samples.append(&mut nestings);
+        }
+        if !locs.is_empty() {
+            self.complexity_loc_samples.append(&mut locs);
+        }
+        stats.complexity_functions_seen = self.complexity_nesting_samples.len();
+    }
+
+    fn finalize_sensor_percentiles(&mut self) {
+        let Some(stats) = self.learn_sensor_stats.as_mut() else {
+            return;
+        };
+        if !self.complexity_nesting_samples.is_empty() {
+            self.complexity_nesting_samples.sort_unstable();
+            stats.complexity_nesting_median = percentile(&self.complexity_nesting_samples, 50);
+            stats.complexity_nesting_p90 = percentile(&self.complexity_nesting_samples, 90);
+            stats.complexity_nesting_p99 = percentile(&self.complexity_nesting_samples, 99);
+        }
+        if !self.complexity_loc_samples.is_empty() {
+            self.complexity_loc_samples.sort_unstable();
+            stats.complexity_loc_median = percentile(&self.complexity_loc_samples, 50);
+            stats.complexity_loc_p90 = percentile(&self.complexity_loc_samples, 90);
+            stats.complexity_loc_p99 = percentile(&self.complexity_loc_samples, 99);
+        }
+    }
+
     fn absorb(&mut self, findings: &[Finding]) {
         if !findings.is_empty() {
             self.commits_with_findings += 1;
@@ -261,6 +437,8 @@ const fn layer_label(l: Layer) -> &'static str {
         Layer::Drift => "drift",
         Layer::Budget => "budget",
         Layer::Health => "health",
+        Layer::Structure => "structure",
+        Layer::Complexity => "complexity",
         Layer::Anchor => "anchor",
     }
 }
@@ -307,6 +485,19 @@ fn parse_k_of_n(msg: &str) -> Option<(u32, u32)> {
     let k_str = head[..of_idx].split_whitespace().last()?;
     let n_str = head[of_idx + " of ".len()..].trim();
     Some((k_str.parse().ok()?, n_str.parse().ok()?))
+}
+
+/// `pct` ∈ [0, 100]. Returns the value at the requested percentile
+/// using a simple nearest-rank approach. `samples` must already be
+/// sorted ascending. Empty slice → 0.
+fn percentile(samples: &[u32], pct: u32) -> u32 {
+    if samples.is_empty() {
+        return 0;
+    }
+    let n = samples.len();
+    let idx = ((pct as usize) * n) / 100;
+    let idx = idx.min(n - 1);
+    samples[idx]
 }
 
 /// Bucket a Wilson 95 % lower bound into a coarse band. Boundaries
@@ -492,6 +683,60 @@ fn write_text<W: Write>(w: &mut W, r: &AggregateReport) -> Result<()> {
             )?;
         }
         writeln!(w, "  ]")?;
+        writeln!(w)?;
+    }
+
+    if let Some(stats) = r.learn_sensor_stats.as_ref() {
+        writeln!(w, "# Suggested [sensor.structure] for this repo:")?;
+        writeln!(
+            w,
+            "# {} distinct (dir, shape) pairs surveyed across the sample.",
+            stats.structure_dir_shapes_seen,
+        )?;
+        writeln!(
+            w,
+            "# {} sampled commits would have fired STRUCTURE under default thresholds.",
+            stats.structure_commits_with_fire,
+        )?;
+        writeln!(w, "[sensor.structure]")?;
+        writeln!(
+            w,
+            "min_siblings = {}",
+            mmk_config::DEFAULT_STRUCTURE_MIN_SIBLINGS
+        )?;
+        writeln!(
+            w,
+            "import_majority = {}",
+            mmk_config::DEFAULT_STRUCTURE_IMPORT_MAJORITY
+        )?;
+        writeln!(w)?;
+
+        writeln!(w, "# Suggested [sensor.complexity] for this repo:")?;
+        writeln!(
+            w,
+            "# Median function nesting across {} functions: {}",
+            stats.complexity_functions_seen, stats.complexity_nesting_median
+        )?;
+        writeln!(
+            w,
+            "# 90th percentile: {}; 99th percentile: {}.",
+            stats.complexity_nesting_p90, stats.complexity_nesting_p99
+        )?;
+        writeln!(
+            w,
+            "# Median function LOC: {}; 90th percentile: {}; 99th percentile: {}.",
+            stats.complexity_loc_median, stats.complexity_loc_p90, stats.complexity_loc_p99
+        )?;
+        // Suggestion strategy: the absolute caps land between p90
+        // and p99 so common code clears them and the long tail
+        // doesn't. Conservative — calibration runs can tighten.
+        let nesting_suggested = stats
+            .complexity_nesting_p99
+            .max(stats.complexity_nesting_p90 + 1);
+        let loc_suggested = stats.complexity_loc_p99.max(stats.complexity_loc_p90 + 1);
+        writeln!(w, "[sensor.complexity]")?;
+        writeln!(w, "nesting_absolute_max = {nesting_suggested}")?;
+        writeln!(w, "loc_absolute_max = {loc_suggested}")?;
         writeln!(w)?;
     }
 

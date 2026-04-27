@@ -14,7 +14,18 @@
 //! parse files lazily — both bounded (Pattern B by an explicit
 //! peer-scan cap; Pattern A by the directory tree size).
 
+pub mod adapter;
+pub mod facts;
+pub mod linescan;
+pub mod python;
+#[path = "rust_lang/mod.rs"]
+pub mod rust_lang;
 pub mod ts;
+
+pub use adapter::{extract, extract_with_imports, LanguageAdapter};
+pub use facts::{
+    template_for, ExportFact, ExportKind, FunctionFact, ImportFact, StructuredFacts, TypeDensity,
+};
 
 use serde::Serialize;
 use std::path::PathBuf;

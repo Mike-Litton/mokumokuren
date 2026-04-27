@@ -879,3 +879,86 @@ fn review_emits_budget_when_diff_exceeds() {
         v["findings"]
     );
 }
+
+#[test]
+fn review_emits_structure_divergence_on_new_file_not_matching_convention() {
+    // 3 sibling .tsx files share zod + Create*Dialog template.
+    // Adding a new untracked sibling that imports neither must
+    // fire a STRUCTURE divergence.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    let body = "import { z } from 'zod';\nexport function CreateAwardDialog(){}\n";
+    let body_g = "import { z } from 'zod';\nexport function CreateGoalDialog(){}\n";
+    let body_j = "import { z } from 'zod';\nexport function CreateJobDialog(){}\n";
+    write(dir.path(), "dlg/award.tsx", body);
+    write(dir.path(), "dlg/goal.tsx", body_g);
+    write(dir.path(), "dlg/job.tsx", body_j);
+    commit_all(dir.path(), "seed", now - 5 * DAY);
+    write(dir.path(), "dlg/divergent.tsx", "export const x = 1;\n");
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let findings = v["findings"].as_array().expect("findings array");
+    let structure: Vec<&Value> = findings
+        .iter()
+        .filter(|f| f["layer"] == "structure")
+        .collect();
+    assert!(
+        !structure.is_empty(),
+        "STRUCTURE divergence must fire on dlg/divergent.tsx; got: {findings:?}"
+    );
+    let msg = structure[0]["message"].as_str().unwrap_or("");
+    assert!(
+        msg.contains("missing") || msg.contains("not exporting"),
+        "STRUCTURE divergence message should mention the missing piece; got: {msg}"
+    );
+}
+
+#[test]
+fn review_emits_complexity_for_deeply_nested_function() {
+    // Untracked subject with nesting depth 8 — over default cap=6.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    write(dir.path(), "src/seed.ts", "export const x = 1;\n");
+    commit_all(dir.path(), "seed", now - 5 * DAY);
+
+    let deep = "function deep() {\n\
+        if (a) { if (b) { if (c) { if (d) { if (e) { if (f) { if (g) { return 1; } } } } } } }\n\
+        }\n";
+    write(dir.path(), "src/deep.ts", deep);
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let complexity: Vec<&Value> = v["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .filter(|f| f["layer"] == "complexity")
+        .collect();
+    assert!(
+        !complexity.is_empty(),
+        "deep nesting must fire COMPLEXITY; got: {}",
+        v["findings"]
+    );
+    let msg = complexity[0]["message"].as_str().unwrap_or("");
+    assert!(
+        msg.contains("nesting"),
+        "COMPLEXITY message must name the metric; got: {msg}"
+    );
+    assert!(
+        msg.contains("deep"),
+        "COMPLEXITY message must name the function; got: {msg}"
+    );
+    assert!(
+        msg.contains("correlates with"),
+        "COMPLEXITY message must state the empirical implication; got: {msg}"
+    );
+}

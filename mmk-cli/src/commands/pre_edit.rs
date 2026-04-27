@@ -18,10 +18,11 @@ use std::time::Instant;
 use crate::args::{Format, PreEditArgs};
 use crate::commands::analyze::COUPLES_PER_FILE;
 use crate::commands::common::{
-    analyze_health_for_subject, apply_coupling_file, apply_health_file, coupling_findings,
-    health_to_finding, load_config_file, resolve_patterns, CouplingEmission, CouplingProse,
+    analyze_health_for_subject, apply_coupling_file, apply_health_file, apply_sensor_file,
+    coupling_findings, health_to_finding, list_directory_siblings, load_bodies, load_config_file,
+    resolve_patterns, structure_to_finding, CouplingEmission, CouplingProse,
 };
-use crate::commands::review::{build_partner_globset, verdict_for};
+use crate::commands::review::{build_partner_globset, collect_working_tree_diff, verdict_for};
 use crate::output::findings::{render_text, Finding, Layer, Severity};
 use crate::output::messages;
 use crate::Verdict;
@@ -59,6 +60,13 @@ pub fn run<O: Write, E: Write>(
     }
     if let Some(file_h) = file_cfg.health.as_ref() {
         apply_health_file(&mut cfg.health.ts, file_h);
+    }
+    if let Some(file_s) = file_cfg.sensor.as_ref() {
+        apply_sensor_file(
+            &mut cfg.sensor.structure,
+            &mut cfg.sensor.complexity,
+            file_s,
+        );
     }
     if let Some(t) = args.coupling_threshold.or(args.blast_radius_threshold) {
         cfg.coupling.threshold = t;
@@ -112,6 +120,82 @@ pub fn run<O: Write, E: Write>(
     };
     for h in &health_matches {
         findings.push(health_to_finding(h, Severity::Info));
+    }
+
+    // BUDGET (continuous-feedback ramp): read the working-tree
+    // diff state and surface a one-line meter so the agent sees
+    // the cap climbing *before* the next edit, not just after.
+    // Same wording / tiers as review's ramp — single source of
+    // truth in messages::budget_ramp.
+    if let Ok(working_changed) = collect_working_tree_diff(&cwd, &cfg.ignores) {
+        let files_n = u32::try_from(working_changed.len()).unwrap_or(u32::MAX);
+        let lines_n: u64 = working_changed.iter().map(|c| c.added + c.deleted).sum();
+        let check = mmk_core::budget::BudgetCheck {
+            files_changed: files_n,
+            lines_changed: lines_n,
+        };
+        let progress = mmk_core::budget::budget_progress(&check, &cfg.bulk);
+        match mmk_core::budget::budget_tier(&progress) {
+            mmk_core::budget::BudgetTier::Approaching => {
+                findings.push(Finding::new(
+                    Layer::Budget,
+                    Severity::Info,
+                    messages::budget_ramp(
+                        progress.files.0,
+                        progress.files.1,
+                        progress.lines.0,
+                        progress.lines.1,
+                        false,
+                    ),
+                ));
+            }
+            mmk_core::budget::BudgetTier::Near => {
+                findings.push(Finding::new(
+                    Layer::Budget,
+                    Severity::Warn,
+                    messages::budget_ramp(
+                        progress.files.0,
+                        progress.files.1,
+                        progress.lines.0,
+                        progress.lines.1,
+                        true,
+                    ),
+                ));
+            }
+            // Over and Quiet: no pre-edit ramp surface. Over is
+            // handled by review's existing over-cap message; Quiet
+            // is the noise floor.
+            mmk_core::budget::BudgetTier::Quiet | mmk_core::budget::BudgetTier::Over => {}
+        }
+    }
+
+    // STRUCTURE: directory-convention sensor. Pre-edit fires
+    // informationally — the agent reads the convention and conforms
+    // before writing. If the path doesn't yet exist on disk, we
+    // surface the new-file wording; if it does, the existing-file
+    // wording — both surface the same convention.
+    if cfg.sensor.structure.enabled {
+        let abs = cwd.join(&args.path);
+        let mode = if abs.exists() {
+            mmk_core::sensors::StructureMode::PreEditExisting
+        } else {
+            mmk_core::sensors::StructureMode::PreEditNew
+        };
+        let siblings = list_directory_siblings(&cwd, &args.path);
+        let bodies = load_bodies(&cwd, &siblings);
+        let input = mmk_core::sensors::StructureInput {
+            path: &args.path,
+            siblings: &siblings,
+            bodies: &bodies,
+            subject_body: None,
+            mode,
+            cfg: &cfg.sensor.structure,
+        };
+        if let Some(sf) = mmk_core::sensors::compute_structure_finding(&input) {
+            let cap = cfg.sensor.structure.top_imports_to_show;
+            let pct = (cfg.sensor.structure.import_majority * 100.0).round() as u32;
+            findings.push(structure_to_finding(&sf, cap, pct));
+        }
     }
 
     // DRIFT: only if the user opted in via --drift-sessions K. Slow

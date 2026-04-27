@@ -23,8 +23,9 @@ use std::time::Instant;
 use crate::args::{Format, Gate, ReviewArgs};
 use crate::commands::analyze::COUPLES_PER_FILE;
 use crate::commands::common::{
-    analyze_health_for_subject, apply_coupling_file, apply_health_file, coupling_findings,
-    health_severity_for_review, health_to_finding, load_config_file, resolve_patterns,
+    analyze_health_for_subject, apply_coupling_file, apply_health_file, apply_sensor_file,
+    complexity_to_finding, coupling_findings, health_severity_for_review, health_to_finding,
+    list_directory_siblings, load_bodies, load_config_file, resolve_patterns, structure_to_finding,
     CouplingEmission, CouplingProse,
 };
 use crate::output::findings::{render_text, Finding, Layer, Severity};
@@ -112,6 +113,13 @@ pub fn run<O: Write, E: Write>(
     if let Some(file_h) = file_cfg.health.as_ref() {
         apply_health_file(&mut cfg.health.ts, file_h);
     }
+    if let Some(file_s) = file_cfg.sensor.as_ref() {
+        apply_sensor_file(
+            &mut cfg.sensor.structure,
+            &mut cfg.sensor.complexity,
+            file_s,
+        );
+    }
     if let Some(file_b) = file_cfg.bulk.as_ref() {
         if let Some(t) = file_b.greenfield_threshold {
             cfg.bulk.greenfield_threshold = t;
@@ -197,6 +205,56 @@ pub fn run<O: Write, E: Write>(
                 let severity = health_severity_for_review(h.pattern);
                 findings.push(health_to_finding(&h, severity));
                 health_matches.push(h);
+            }
+        }
+    }
+
+    // STRUCTURE + COMPLEXITY: directory-aggregated and per-function
+    // sensors. Both run on the diff's changed paths; STRUCTURE
+    // surfaces convention divergence (or conformance, when
+    // `report_conformance` is on); COMPLEXITY fires per-function
+    // when nesting / LOC clear the absolute or relative threshold.
+    if cfg.sensor.structure.enabled || cfg.sensor.complexity.enabled {
+        let cap = cfg.sensor.structure.top_imports_to_show;
+        let pct = (cfg.sensor.structure.import_majority * 100.0).round() as u32;
+        for c in &changed {
+            // One filesystem walk per changed file's parent dir.
+            // Caching across paths in the same directory would only
+            // matter on absurd diffs (hundreds of files in one dir);
+            // the redundant work is bounded by the bulk-self filter.
+            let siblings = list_directory_siblings(&cwd, &c.path);
+            // Subject's body is part of the bodies map (it's a
+            // sibling of itself for COMPLEXITY's purposes).
+            let mut all_paths = siblings.clone();
+            if !all_paths.iter().any(|p| p == &c.path) {
+                all_paths.push(c.path.clone());
+            }
+            let bodies = load_bodies(&cwd, &all_paths);
+
+            if cfg.sensor.structure.enabled {
+                let subject_body = bodies.get(&c.path).map(String::as_str);
+                let input = mmk_core::sensors::StructureInput {
+                    path: &c.path,
+                    siblings: &siblings,
+                    bodies: &bodies,
+                    subject_body,
+                    mode: mmk_core::sensors::StructureMode::Review,
+                    cfg: &cfg.sensor.structure,
+                };
+                if let Some(sf) = mmk_core::sensors::compute_structure_finding(&input) {
+                    findings.push(structure_to_finding(&sf, cap, pct));
+                }
+            }
+            if cfg.sensor.complexity.enabled {
+                let input = mmk_core::sensors::ComplexityInput {
+                    path: &c.path,
+                    siblings: &siblings,
+                    bodies: &bodies,
+                    cfg: &cfg.sensor.complexity,
+                };
+                for cf in mmk_core::sensors::compute_complexity_findings(&input) {
+                    findings.push(complexity_to_finding(&cf));
+                }
             }
         }
     }
@@ -497,30 +555,90 @@ pub(crate) fn compute_findings(
         }
     }
 
-    // BUDGET — delegated to mmk_core::budget::check_diff_budget so
-    // review and session-summary share the exact threshold logic.
+    // BUDGET — over-cap triggers via check_diff_budget; under-cap
+    // ramp via budget_progress so the meter is visible from 50%
+    // upward instead of snapping at 100%.
     let files_n = u32::try_from(changed.len()).unwrap_or(u32::MAX);
     let lines_n: u64 = changed.iter().map(|c| c.added + c.deleted).sum();
-    let triggers = mmk_core::budget::check_diff_budget(
-        &mmk_core::budget::BudgetCheck {
-            files_changed: files_n,
-            lines_changed: lines_n,
-        },
-        &cfg.bulk,
-    );
-    for t in triggers {
-        let msg = match t {
-            mmk_core::budget::BudgetTrigger::FilesExceeded { actual, max } => {
-                messages::budget_files(actual, max, false)
+    let check = mmk_core::budget::BudgetCheck {
+        files_changed: files_n,
+        lines_changed: lines_n,
+    };
+    let triggers = mmk_core::budget::check_diff_budget(&check, &cfg.bulk);
+    if triggers.is_empty() {
+        // Under cap: ramp tier may still fire.
+        let progress = mmk_core::budget::budget_progress(&check, &cfg.bulk);
+        match mmk_core::budget::budget_tier(&progress) {
+            mmk_core::budget::BudgetTier::Approaching => {
+                findings.push(Finding::new(
+                    Layer::Budget,
+                    Severity::Info,
+                    messages::budget_ramp(
+                        progress.files.0,
+                        progress.files.1,
+                        progress.lines.0,
+                        progress.lines.1,
+                        false,
+                    ),
+                ));
             }
-            mmk_core::budget::BudgetTrigger::LinesExceeded { actual, max } => {
-                messages::budget_lines(actual, max, false)
+            mmk_core::budget::BudgetTier::Near => {
+                findings.push(Finding::new(
+                    Layer::Budget,
+                    Severity::Warn,
+                    messages::budget_ramp(
+                        progress.files.0,
+                        progress.files.1,
+                        progress.lines.0,
+                        progress.lines.1,
+                        true,
+                    ),
+                ));
             }
-        };
-        findings.push(Finding::new(Layer::Budget, Severity::Warn, msg));
+            mmk_core::budget::BudgetTier::Quiet | mmk_core::budget::BudgetTier::Over => {}
+        }
+    } else {
+        for t in triggers {
+            let msg = match t {
+                mmk_core::budget::BudgetTrigger::FilesExceeded { actual, max } => {
+                    messages::budget_files(actual, max, false)
+                }
+                mmk_core::budget::BudgetTrigger::LinesExceeded { actual, max } => {
+                    messages::budget_lines(actual, max, false)
+                }
+            };
+            findings.push(Finding::new(Layer::Budget, Severity::Warn, msg));
+        }
     }
 
     findings
+}
+
+/// Pre-edit's hook to read the *current working-tree* diff vs
+/// HEAD without going through the `ReviewArgs` plumbing. Returns
+/// only the file count + line count form the per-edit BUDGET
+/// ramp uses; binary entries / ignored entries are filtered the
+/// same way `collect_diff` does in WorkingTree mode.
+pub(crate) fn collect_working_tree_diff(
+    cwd: &Path,
+    ignores: &[String],
+) -> Result<Vec<ChangedFile>> {
+    let args = ReviewArgs {
+        staged: false,
+        range: None,
+        commit: None,
+        since: "180days".into(),
+        top: 20,
+        format: Format::Json,
+        ignores: Vec::new(),
+        config: None,
+        verbose: false,
+        coupling_threshold: None,
+        blast_radius_threshold: None,
+        gate: Gate::None,
+        no_dedup: true,
+    };
+    collect_diff(cwd, ReviewMode::WorkingTree, &args, ignores)
 }
 
 pub(crate) fn build_partner_globset(globs: &[String]) -> Option<GlobSet> {

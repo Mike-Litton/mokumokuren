@@ -371,6 +371,47 @@ fn pre_edit_says_new_file_for_untracked_subject() {
 }
 
 #[test]
+fn pre_edit_emits_structure_for_directory_convention() {
+    // 4 sibling .tsx files share `zod` and a Create*Dialog
+    // template. Pre-edit on a brand-new sibling path must surface
+    // a STRUCTURE Info finding listing the convention.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    common::init_repo(dir.path());
+    let body_a = "import { z } from 'zod';\nexport function CreateAwardDialog(){}\n";
+    let body_g = "import { z } from 'zod';\nexport function CreateGoalDialog(){}\n";
+    let body_j = "import { z } from 'zod';\nexport function CreateJobDialog(){}\n";
+    let body_x = "import { z } from 'zod';\nexport function CreateXDialog(){}\n";
+    common::write(dir.path(), "dlg/award.tsx", body_a);
+    common::write(dir.path(), "dlg/goal.tsx", body_g);
+    common::write(dir.path(), "dlg/job.tsx", body_j);
+    common::write(dir.path(), "dlg/extra.tsx", body_x);
+    common::commit_all(dir.path(), "seed", now - 5 * common::DAY);
+
+    let stdout = run_in(dir.path(), pre_edit_args("dlg/new.tsx"));
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let findings = v["findings"].as_array().expect("findings array");
+    let structure: Vec<&Value> = findings
+        .iter()
+        .filter(|f| f["layer"] == "structure")
+        .collect();
+    assert!(
+        !structure.is_empty(),
+        "STRUCTURE must fire on a 4-sibling directory; got: {findings:?}"
+    );
+    let msg = structure[0]["message"].as_str().unwrap_or("");
+    assert!(
+        msg.contains("zod"),
+        "STRUCTURE message must list the common import; got: {msg}"
+    );
+    assert!(
+        msg.contains("Create*Dialog"),
+        "STRUCTURE message must list the common export template; got: {msg}"
+    );
+}
+
+#[test]
 fn pre_edit_json_envelope_has_path_and_findings() {
     let dir = TempDir::new().unwrap();
     let now = 1_700_000_000_i64;

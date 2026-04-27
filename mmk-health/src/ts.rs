@@ -5,9 +5,12 @@
 //! call gets a fresh `Parser` (parsers aren't `Send`, and the cost
 //! is microseconds — pooling would be premature).
 
+pub mod facts;
 pub mod registration;
 pub mod service;
 pub mod test_pair;
+
+pub use facts::TsAdapter;
 
 use crate::{HealthFinding, HealthPattern};
 use std::path::Path;

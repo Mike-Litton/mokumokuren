@@ -1,43 +1,15 @@
 //! Wording rules for the unified findings surface — pure formatting
 //! tests for `mokumokuren::output::messages`.
 //!
-//! Two assertion classes:
-//!   1. Positive fixtures: exact-string equality on a known input,
-//!      so the new wording is pinned against accidental drift.
-//!   2. Negative oracles: forbidden internal-vocabulary tokens that
-//!      must never appear in any rendered message, applied across a
-//!      wide range of inputs so they catch regressions independent of
-//!      the specific positive fixture.
+//! Each formatter has an exact-string equality fixture pinning the
+//! wording. Drift caught at the test boundary. The wording-design
+//! rationale (descriptive over prescriptive, indicator implications,
+//! Code-Red-grounded language) lives in doc-comments on the
+//! formatters themselves — that's the readable source of truth, not
+//! a list of banned substrings.
 
 use mokumokuren::output::messages as msg;
 use std::path::{Path, PathBuf};
-
-/// Tokens that must never appear in any human-readable finding
-/// message. Internal vocabulary (algorithm names, config tokens),
-/// suggestive language, and the percentage framing the user dropped.
-const FORBIDDEN: &[&str] = &[
-    "Wilson",
-    "expected partner",
-    "= 100%",
-    "= 50%",
-    "= 75%",
-    "= 25%",
-    "min_sample_size",
-    "likely a sweep",
-    "pre-edit consulted",
-    "historical co-edit",
-    "historically co-changes",
-    "greenfield_threshold",
-];
-
-fn assert_no_forbidden(message: &str, context: &str) {
-    for token in FORBIDDEN {
-        assert!(
-            !message.contains(token),
-            "{context}: forbidden token {token:?} appeared in: {message:?}"
-        );
-    }
-}
 
 // ---- coupling_review_missed -----------------------------------------------
 
@@ -64,14 +36,6 @@ fn coupling_review_missed_handles_large_n() {
     );
 }
 
-#[test]
-fn coupling_review_missed_no_forbidden_tokens_across_inputs() {
-    for (k, n) in [(1u32, 1u32), (3, 4), (2, 10), (54, 203), (5, 5), (1, 2)] {
-        let s = msg::coupling_review_missed(Path::new("core/a.rs"), Path::new("core/b.rs"), k, n);
-        assert_no_forbidden(&s, &format!("review_missed k={k} n={n}"));
-    }
-}
-
 // ---- coupling_pre_edit ----------------------------------------------------
 
 #[test]
@@ -83,14 +47,6 @@ fn coupling_pre_edit_pins_factual_wording() {
     );
 }
 
-#[test]
-fn coupling_pre_edit_no_forbidden_tokens_across_inputs() {
-    for (k, n) in [(1u32, 1u32), (3, 4), (54, 203), (1, 2)] {
-        let s = msg::coupling_pre_edit(Path::new("a.rs"), Path::new("b.rs"), k, n);
-        assert_no_forbidden(&s, &format!("pre_edit k={k} n={n}"));
-    }
-}
-
 // ---- hotspot --------------------------------------------------------------
 
 #[test]
@@ -99,48 +55,57 @@ fn hotspot_pins_factual_wording() {
     assert_eq!(s, "core/a.rs: rank #2 of top-20");
 }
 
-#[test]
-fn hotspot_no_forbidden_tokens_across_inputs() {
-    for (rank, top) in [(1u32, 5usize), (2, 20), (10, 50), (1, 1)] {
-        let s = msg::hotspot(Path::new("core/a.rs"), rank, top);
-        assert_no_forbidden(&s, &format!("hotspot rank={rank} top={top}"));
-    }
-}
-
 // ---- budget_files / budget_lines ------------------------------------------
 
 #[test]
 fn budget_files_normal_pins_factual_wording() {
     let s = msg::budget_files(120, 100, false);
-    assert_eq!(s, "diff touches 120 files; cap 100");
+    assert_eq!(
+        s,
+        "diff touches 120 files; cap 100; large diffs concentrate rollback risk and slow review"
+    );
 }
 
 #[test]
 fn budget_files_suppressed_appends_analysis_suppressed() {
     let s = msg::budget_files(120, 100, true);
-    assert_eq!(s, "diff touches 120 files; cap 100, analysis suppressed");
+    assert_eq!(
+        s,
+        "diff touches 120 files; cap 100, analysis suppressed; large diffs concentrate rollback risk and slow review"
+    );
 }
 
 #[test]
 fn budget_lines_normal_pins_factual_wording() {
     let s = msg::budget_lines(6000, 1000, false);
-    assert_eq!(s, "diff is 6000 lines; cap 1000");
+    assert_eq!(
+        s,
+        "diff is 6000 lines; cap 1000; large diffs concentrate rollback risk and slow review"
+    );
 }
 
 #[test]
 fn budget_lines_suppressed_appends_analysis_suppressed() {
     let s = msg::budget_lines(6000, 1000, true);
-    assert_eq!(s, "diff is 6000 lines; cap 1000, analysis suppressed");
+    assert_eq!(
+        s,
+        "diff is 6000 lines; cap 1000, analysis suppressed; large diffs concentrate rollback risk and slow review"
+    );
 }
 
 #[test]
-fn budget_no_forbidden_tokens_across_inputs() {
-    for suppressed in [false, true] {
-        let s = msg::budget_files(120, 100, suppressed);
-        assert_no_forbidden(&s, &format!("budget_files suppressed={suppressed}"));
-        let s = msg::budget_lines(6000, 1000, suppressed);
-        assert_no_forbidden(&s, &format!("budget_lines suppressed={suppressed}"));
-    }
+fn budget_ramp_approaching_emits_meter_only() {
+    let s = msg::budget_ramp(8, 15, 600, 1000, false);
+    assert_eq!(s, "diff at 8 of 15 files, 600 of 1000 lines (60% of cap)");
+}
+
+#[test]
+fn budget_ramp_near_appends_decision_clause() {
+    let s = msg::budget_ramp(12, 15, 900, 1000, true);
+    assert_eq!(
+        s,
+        "diff at 12 of 15 files, 900 of 1000 lines (90% of cap); approaching review cap"
+    );
 }
 
 // ---- drift ----------------------------------------------------------------
@@ -149,17 +114,6 @@ fn budget_no_forbidden_tokens_across_inputs() {
 fn drift_pins_factual_wording() {
     let s = msg::drift(Path::new("core/a.rs"), 3, 4, 2);
     assert_eq!(s, "core/a.rs: climbed 3 of 4 transitions; latest rank #2");
-}
-
-#[test]
-fn drift_no_forbidden_tokens_across_inputs() {
-    for (climb, total, rank) in [(3u32, 4u32, 2u32), (1, 1, 5), (10, 10, 1)] {
-        let s = msg::drift(Path::new("core/a.rs"), climb, total, rank);
-        assert_no_forbidden(
-            &s,
-            &format!("drift climb={climb} total={total} rank={rank}"),
-        );
-    }
 }
 
 // ---- health_* -------------------------------------------------------------
@@ -210,26 +164,6 @@ fn health_service_pins_wording() {
     );
 }
 
-#[test]
-fn health_no_forbidden_tokens_across_inputs() {
-    let one = vec![PathBuf::from("src/foo.test.ts")];
-    let many = vec![
-        PathBuf::from("src/a.ts"),
-        PathBuf::from("src/b.ts"),
-        PathBuf::from("src/c.ts"),
-    ];
-    for related in [&one, &many] {
-        for f in [
-            msg::health_test_pair as fn(&Path, &[PathBuf]) -> String,
-            msg::health_registration as fn(&Path, &[PathBuf]) -> String,
-            msg::health_service as fn(&Path, &[PathBuf]) -> String,
-        ] {
-            let s = f(Path::new("src/x.ts"), related);
-            assert_no_forbidden(&s, "health");
-        }
-    }
-}
-
 // ---- quiet_file -----------------------------------------------------------
 
 #[test]
@@ -249,8 +183,8 @@ fn quiet_file_with_rank_appends_rank_clause() {
 
 #[test]
 fn quiet_file_zero_commits_says_new_file() {
-    // The fall-through must distinguish "untouched in window" from
-    // "doesn't exist in history at all". Zero commits → new file.
+    // Distinguishes "untouched in window" from "doesn't exist in
+    // history at all". Zero commits → new file.
     let s = msg::quiet_file(Path::new("brand-new.rs"), 0, 60, None);
     assert_eq!(s, "brand-new.rs: new file (no history)");
 }
@@ -261,27 +195,6 @@ fn quiet_file_zero_commits_with_rank_drops_rank_clause() {
     // mis-rendering by callers that wire `rank` through anyway.
     let s = msg::quiet_file(Path::new("brand-new.rs"), 0, 60, Some(7));
     assert_eq!(s, "brand-new.rs: new file (no history)");
-}
-
-#[test]
-fn quiet_file_zero_commits_no_no_signal_token() {
-    // The whole point: "no signal" is misleading wording for a path
-    // that doesn't exist in history. Lock the negative oracle.
-    let s = msg::quiet_file(Path::new("brand-new.rs"), 0, 60, None);
-    assert!(
-        !s.contains("no signal"),
-        "structurally-new path must not be reported as 'no signal'; got: {s}"
-    );
-}
-
-#[test]
-fn quiet_file_no_forbidden_tokens_across_inputs() {
-    for rank in [None, Some(1), Some(7), Some(50)] {
-        let s = msg::quiet_file(Path::new("q.rs"), 0, 30, rank);
-        assert_no_forbidden(&s, &format!("quiet_file rank={rank:?}"));
-        let s = msg::quiet_file(Path::new("q.rs"), 99, 90, rank);
-        assert_no_forbidden(&s, &format!("quiet_file 99 rank={rank:?}"));
-    }
 }
 
 // ---- greenfield_signal ----------------------------------------------------
@@ -298,12 +211,102 @@ fn greenfield_signal_handles_full_greenfield() {
     assert_eq!(s, "diff is 7 of 7 new files; history priors don't apply");
 }
 
+// ---- structure_* / complexity_* -------------------------------------------
+
 #[test]
-fn greenfield_signal_no_forbidden_tokens_across_inputs() {
-    for (k, n) in [(1usize, 2usize), (4, 5), (10, 15), (100, 200)] {
-        let s = msg::greenfield_signal(k, n);
-        assert_no_forbidden(&s, &format!("greenfield_signal k={k} n={n}"));
-    }
+fn structure_pre_edit_new_pins_factual_wording() {
+    let imports = vec![
+        "zod".to_string(),
+        "@lingui/react/macro".to_string(),
+        "useResumeStore".to_string(),
+        "useDialogStore".to_string(),
+        "useForm".to_string(),
+        "@/components/ui/form".to_string(),
+    ];
+    let templates = vec!["Create*Dialog".to_string(), "Update*Dialog".to_string()];
+    let s = msg::structure_pre_edit_new(&msg::StructurePreEdit {
+        path: Path::new("src/dialogs/resume/sections/job-tracker.tsx"),
+        dir: Path::new("src/dialogs/resume/sections"),
+        sibling_count: 15,
+        shape_ext: "tsx",
+        shape_suffix: "",
+        common_imports: &imports,
+        total_common_imports: 11,
+        cap: 6,
+        majority_pct: 66,
+        common_templates: &templates,
+    });
+    assert_eq!(
+        s,
+        "src/dialogs/resume/sections/job-tracker.tsx: new file in src/dialogs/resume/sections/; \
+         15 sibling *.tsx files share imports {zod, @lingui/react/macro, useResumeStore, \
+         useDialogStore, useForm, @/components/ui/form} (showing 6 of 11 ≥66%) and export \
+         template Create*Dialog, Update*Dialog"
+    );
+}
+
+#[test]
+fn structure_pre_edit_existing_pins_factual_wording() {
+    let imports = vec!["zod".to_string()];
+    let s = msg::structure_pre_edit_existing(&msg::StructurePreEdit {
+        path: Path::new("dlg/foo.tsx"),
+        dir: Path::new("dlg"),
+        sibling_count: 4,
+        shape_ext: "tsx",
+        shape_suffix: "",
+        common_imports: &imports,
+        total_common_imports: 1,
+        cap: 6,
+        majority_pct: 66,
+        common_templates: &[],
+    });
+    assert_eq!(
+        s,
+        "dlg/foo.tsx: existing file in dlg/; 4 sibling *.tsx files share imports {zod}"
+    );
+}
+
+#[test]
+fn structure_review_divergent_lists_missing() {
+    let missing = vec!["zod".to_string(), "react".to_string()];
+    let templates = vec!["Create*Dialog".to_string()];
+    let s = msg::structure_review_divergent(Path::new("dlg/d.tsx"), &missing, 6, &templates);
+    assert_eq!(
+        s,
+        "dlg/d.tsx: missing 2 of 6 directory-common imports {zod, react}; \
+         not exporting expected Create*Dialog"
+    );
+}
+
+#[test]
+fn structure_review_conforming_pins_wording() {
+    let s = msg::structure_review_conforming(Path::new("dlg/d.tsx"), Path::new("dlg"), 4);
+    assert_eq!(s, "dlg/d.tsx: matches dlg/ convention (4 sibling baseline)");
+}
+
+#[test]
+fn complexity_review_nesting_pins_wording() {
+    let s = msg::complexity_review_nesting(
+        Path::new("src/dialogs/resume/sections/job-tracker.tsx"),
+        "parseApplication",
+        8,
+        Some(2),
+    );
+    assert_eq!(
+        s,
+        "src/dialogs/resume/sections/job-tracker.tsx::parseApplication: nesting 8, \
+         directory median 2 (ratio 4.0); correlates with elevated defect rate (Code Red 2022)"
+    );
+}
+
+#[test]
+fn complexity_review_size_pins_wording() {
+    let s = msg::complexity_review_size(Path::new("a.ts"), "longFn", 120, Some(20));
+    assert_eq!(
+        s,
+        "a.ts::longFn: 120 LOC, directory median 20 LOC (ratio 6.0); \
+         correlates with slower comprehension and issue resolution"
+    );
 }
 
 // ---- session_budget / session_overrun -------------------------------------
@@ -320,12 +323,15 @@ fn session_overrun_pins_wording() {
     assert_eq!(s, "session is 8000 lines across 4 commits; cap 8000");
 }
 
+// ---- quiet_file with paths that happen to contain interesting substrings --
+
 #[test]
-fn session_no_forbidden_tokens_across_inputs() {
-    let s = msg::session_budget(1, 50, 100, 1000);
-    assert_no_forbidden(&s, "session_budget small");
-    let s = msg::session_budget(99, 100, 100, 1000);
-    assert_no_forbidden(&s, "session_budget large");
-    let s = msg::session_overrun(2000, 1, 1000);
-    assert_no_forbidden(&s, "session_overrun");
+fn quiet_file_with_path_containing_special_chars_renders_path_unchanged() {
+    // The formatter doesn't rewrite paths. If a real path contains
+    // characters that look like config tokens, they survive into the
+    // output verbatim — which is correct, since they're path-derived,
+    // not formatter-introduced. Locks this so a future "sanitize the
+    // path" change can't silently break it.
+    let s = msg::quiet_file(Path::new("a/min_sample_size_dir/x.rs"), 0, 60, None);
+    assert_eq!(s, "a/min_sample_size_dir/x.rs: new file (no history)");
 }

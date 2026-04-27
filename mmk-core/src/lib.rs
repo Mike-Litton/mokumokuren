@@ -6,6 +6,7 @@ pub mod churn;
 pub mod coupling;
 pub mod drift;
 pub mod hotspot;
+pub mod sensors;
 pub mod session;
 pub mod types;
 

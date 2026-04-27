@@ -27,6 +27,79 @@ pub enum BudgetTrigger {
     LinesExceeded { actual: u64, max: u64 },
 }
 
+/// Continuous-feedback ramp progress.
+///
+/// Distinct from `BudgetTrigger`: the trigger fires only when the
+/// cap is *exceeded*, but the agent loses visibility of the cap
+/// climbing toward the limit. The ramp surfaces an Info from 50%, a
+/// Warn from 75%, and the existing over-cap finding takes over above
+/// 100%. Motivation: the Gloaguen 2026 finding that minimal,
+/// only-essential context helps agents — a meter that climbs is one
+/// essential signal; flat silence followed by a binary "you blew it"
+/// is not.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BudgetProgress {
+    /// `(actual_files, max_files)`.
+    pub files: (u32, u32),
+    /// `(actual_lines, max_lines)`.
+    pub lines: (u64, u64),
+    /// The peak ratio across files / lines, capped at 1.0 for the
+    /// ramp logic. A ratio > 1.0 means the over-cap branch should
+    /// fire instead.
+    pub peak_ratio: f64,
+}
+
+/// Severity tier of the budget ramp. Maps to `Severity::Info` /
+/// `Severity::Warn` at the CLI boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BudgetTier {
+    /// Below 50% — emit nothing (noise floor).
+    Quiet,
+    /// 50–74% — Info: meter climbing, agent should know.
+    Approaching,
+    /// 75–100% — Warn: cap is close, decision point.
+    Near,
+    /// Above 100% — handled by `BudgetTrigger`; this variant
+    /// exists so callers can distinguish "ramp at cap" from
+    /// "ramp under cap" without re-deriving.
+    Over,
+}
+
+/// Compute the ramp tier for a diff against the bulk caps.
+///
+/// Returns `Quiet` (no finding) below 50%; `Approaching` Info from
+/// 50–74%; `Near` Warn from 75–99%; `Over` ≥100%. Callers use
+/// `Over` as a signal to skip the ramp message and emit the
+/// existing `BudgetTrigger`-based one instead so we don't
+/// double-count.
+#[must_use]
+pub fn budget_progress(check: &BudgetCheck, cfg: &BulkCfg) -> BudgetProgress {
+    let max_files = cfg.max_files.max(1);
+    let max_lines = u64::from(cfg.max_lines).max(1);
+    let r_files = f64::from(check.files_changed) / f64::from(max_files);
+    let r_lines = check.lines_changed as f64 / max_lines as f64;
+    let peak_ratio = r_files.max(r_lines);
+    BudgetProgress {
+        files: (check.files_changed, max_files),
+        lines: (check.lines_changed, max_lines),
+        peak_ratio,
+    }
+}
+
+#[must_use]
+pub fn budget_tier(progress: &BudgetProgress) -> BudgetTier {
+    let r = progress.peak_ratio;
+    if r >= 1.0 {
+        BudgetTier::Over
+    } else if r >= 0.75 {
+        BudgetTier::Near
+    } else if r >= 0.50 {
+        BudgetTier::Approaching
+    } else {
+        BudgetTier::Quiet
+    }
+}
+
 /// Per-edit / per-range budget. Used by `mmk review` against the
 /// working-tree (or `--range` / `--commit`) diff. Returns every
 /// trigger that fired so callers can render distinct findings.

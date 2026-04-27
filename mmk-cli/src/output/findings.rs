@@ -20,6 +20,10 @@ pub enum Layer {
     /// Structural-pattern adapter findings (mmk-health). Populated
     /// when `[health.<lang>]` is enabled and a pattern matches.
     Health,
+    /// Directory-convention sensor (`[sensor.structure]`).
+    Structure,
+    /// Per-function structural-budget sensor (`[sensor.complexity]`).
+    Complexity,
     /// Reserved for ADR / CHANGELOG / PR-history surfacing —
     /// declared so adding it later doesn't bump the schema.
     Anchor,
@@ -34,6 +38,8 @@ impl Layer {
             Self::Drift => "DRIFT",
             Self::Budget => "BUDGET",
             Self::Health => "HEALTH",
+            Self::Structure => "STRUCTURE",
+            Self::Complexity => "COMPLEXITY",
             Self::Anchor => "ANCHOR",
         }
     }
@@ -75,12 +81,14 @@ impl Finding {
     }
 }
 
-const LAYER_ORDER: [Layer; 6] = [
+const LAYER_ORDER: [Layer; 8] = [
     Layer::Hotspot,
     Layer::Coupling,
     Layer::Drift,
     Layer::Budget,
     Layer::Health,
+    Layer::Structure,
+    Layer::Complexity,
     Layer::Anchor,
 ];
 

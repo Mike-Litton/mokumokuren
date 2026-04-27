@@ -10,7 +10,10 @@
 
 use anyhow::{Context, Result};
 use globset::GlobSet;
-use mmk_config::{ConfigFile, CouplingCfg, CouplingFile, HealthFile, HealthTsCfg};
+use mmk_config::{
+    ComplexityCfg, ConfigFile, CouplingCfg, CouplingFile, HealthFile, HealthTsCfg, SensorFile,
+    StructureCfg,
+};
 use mmk_core::CouplingEntry;
 use mmk_health::{HealthFinding, HealthPattern};
 use std::path::{Path, PathBuf};
@@ -183,6 +186,63 @@ pub fn coupling_findings(input: CouplingEmission<'_>) -> Vec<Finding> {
     out
 }
 
+/// Apply a parsed `[sensor]` block onto the in-memory config.
+///
+/// Pure: only data merging. Each subblock is independently optional;
+/// fields left unset fall through to the in-code defaults.
+pub fn apply_sensor_file(
+    structure: &mut StructureCfg,
+    complexity: &mut ComplexityCfg,
+    file_s: &SensorFile,
+) {
+    if let Some(s) = file_s.structure.as_ref() {
+        if let Some(v) = s.enabled {
+            structure.enabled = v;
+        }
+        if let Some(v) = s.min_siblings {
+            structure.min_siblings = v;
+        }
+        if let Some(v) = s.import_majority {
+            structure.import_majority = v;
+        }
+        if let Some(v) = s.export_template_majority {
+            structure.export_template_majority = v;
+        }
+        if let Some(v) = s.top_imports_to_show {
+            structure.top_imports_to_show = v;
+        }
+        if let Some(v) = s.divergence_min_missing {
+            structure.divergence_min_missing = v;
+        }
+        if let Some(v) = s.report_conformance {
+            structure.report_conformance = v;
+        }
+        if let Some(v) = s.linescan_fallback {
+            structure.linescan_fallback = v;
+        }
+    }
+    if let Some(c) = file_s.complexity.as_ref() {
+        if let Some(v) = c.enabled {
+            complexity.enabled = v;
+        }
+        if let Some(v) = c.nesting_ratio_threshold {
+            complexity.nesting_ratio_threshold = v;
+        }
+        if let Some(v) = c.nesting_absolute_max {
+            complexity.nesting_absolute_max = v;
+        }
+        if let Some(v) = c.loc_ratio_threshold {
+            complexity.loc_ratio_threshold = v;
+        }
+        if let Some(v) = c.loc_absolute_max {
+            complexity.loc_absolute_max = v;
+        }
+        if let Some(v) = c.min_directory_siblings {
+            complexity.min_directory_siblings = v;
+        }
+    }
+}
+
 /// Apply a parsed `[health]` block onto the in-memory config.
 ///
 /// Pure: only data merging. No tree-sitter, no I/O — that lives in
@@ -270,6 +330,142 @@ fn is_typescript_path(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| e == "ts" || e == "tsx")
+}
+
+// ---- STRUCTURE / COMPLEXITY plumbing ---------------------------
+
+/// List the working-tree paths in `subject`'s parent directory.
+///
+/// One level deep, not recursive. Reads the directory directly so
+/// the result includes untracked files — the same shape rule the
+/// working-tree review uses.
+///
+/// Returns paths *relative to `repo_root`* matching the entries in
+/// the analyzer's `loc.keys()`. Errors (missing directory, I/O)
+/// silently return `Vec::new()` — STRUCTURE / COMPLEXITY are
+/// opportunistic, not load-bearing.
+#[must_use]
+pub fn list_directory_siblings(repo_root: &Path, subject: &Path) -> Vec<PathBuf> {
+    let dir_rel = subject.parent().unwrap_or_else(|| Path::new(""));
+    let abs_dir = repo_root.join(dir_rel);
+    let Ok(entries) = std::fs::read_dir(&abs_dir) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        out.push(dir_rel.join(name_str));
+    }
+    out
+}
+
+/// Read every sibling's body into a [`mmk_core::sensors::FilesMap`].
+/// Files that fail to read silently fall out — sensors handle a
+/// missing entry by treating that sibling as not contributing.
+#[must_use]
+pub fn load_bodies(repo_root: &Path, paths: &[PathBuf]) -> mmk_core::sensors::FilesMap {
+    let mut out = mmk_core::sensors::FilesMap::default();
+    for p in paths {
+        let abs = repo_root.join(p);
+        if let Ok(body) = std::fs::read_to_string(&abs) {
+            out.insert(p.clone(), body);
+        }
+    }
+    out
+}
+
+/// Translate a [`mmk_core::sensors::StructureFinding`] into a CLI
+/// [`Finding`]. Severity is `Info` — STRUCTURE is suggestive, not a
+/// gate; the agent reads the convention and decides.
+#[must_use]
+pub fn structure_to_finding(
+    f: &mmk_core::sensors::StructureFinding,
+    cap: usize,
+    majority_pct: u32,
+) -> Finding {
+    use mmk_core::sensors::StructureFindingKind as K;
+    let dir = f
+        .path
+        .parent()
+        .map_or_else(|| PathBuf::from(""), Path::to_path_buf);
+    let common_imports: Vec<String> = f
+        .convention
+        .common_imports
+        .iter()
+        .map(|i| i.source.clone())
+        .collect();
+    let total = common_imports.len();
+    let templates: Vec<String> = f.convention.common_export_templates.clone();
+
+    let bundle = messages::StructurePreEdit {
+        path: &f.path,
+        dir: &dir,
+        sibling_count: f.convention.sibling_count,
+        shape_ext: &f.convention.shape_ext,
+        shape_suffix: &f.convention.shape_suffix,
+        common_imports: &common_imports,
+        total_common_imports: total,
+        cap,
+        majority_pct,
+        common_templates: &templates,
+    };
+    let (severity, message) = match &f.kind {
+        K::PreEditNew => (Severity::Info, messages::structure_pre_edit_new(&bundle)),
+        K::PreEditExisting => (
+            Severity::Info,
+            messages::structure_pre_edit_existing(&bundle),
+        ),
+        K::ReviewConforming => (
+            Severity::Ok,
+            messages::structure_review_conforming(&f.path, &dir, f.convention.sibling_count),
+        ),
+        K::ReviewDivergent {
+            missing_imports,
+            missing_templates,
+        } => {
+            let missing_sources: Vec<String> =
+                missing_imports.iter().map(|i| i.source.clone()).collect();
+            (
+                Severity::Warn,
+                messages::structure_review_divergent(
+                    &f.path,
+                    &missing_sources,
+                    total,
+                    missing_templates,
+                ),
+            )
+        }
+    };
+    Finding::new(Layer::Structure, severity, message)
+}
+
+/// Translate a [`mmk_core::sensors::ComplexityFinding`] into a CLI
+/// [`Finding`].
+///
+/// Severity is `Warn` — COMPLEXITY is actionable (refactor / split)
+/// and is intended to pause the agent before it builds further on
+/// top of the deep nest.
+#[must_use]
+pub fn complexity_to_finding(f: &mmk_core::sensors::ComplexityFinding) -> Finding {
+    use mmk_core::sensors::ComplexityFindingKind as K;
+    let message = match f.kind {
+        K::Nesting => {
+            messages::complexity_review_nesting(&f.path, &f.function, f.actual, f.directory_median)
+        }
+        K::Size => {
+            messages::complexity_review_size(&f.path, &f.function, f.actual, f.directory_median)
+        }
+    };
+    Finding::new(Layer::Complexity, Severity::Warn, message)
 }
 
 #[cfg(test)]
