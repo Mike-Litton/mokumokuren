@@ -22,13 +22,13 @@ registerAction2(FooContrib);
 
 #[test]
 fn registration_surfaces_nearby_contribution_peers() {
-    let subject = p("src/contrib/extensions/extensions.contribution.ts");
+    let subject = p("src/contrib/feat-a/feat-a.contribution.ts");
     let peers = vec![
-        p("src/contrib/extensions/extensions.contribution.ts"),
-        p("src/contrib/preferences/preferences.contribution.ts"),
-        p("src/contrib/search/search.contribution.ts"),
+        p("src/contrib/feat-a/feat-a.contribution.ts"),
+        p("src/contrib/feat-b/feat-b.contribution.ts"),
+        p("src/contrib/feat-c/feat-c.contribution.ts"),
         // Non-contribution sibling — must not surface.
-        p("src/contrib/extensions/util.ts"),
+        p("src/contrib/feat-a/util.ts"),
     ];
     let findings = analyze_ts(
         &subject,
@@ -41,7 +41,7 @@ fn registration_surfaces_nearby_contribution_peers() {
     assert_eq!(f.pattern, HealthPattern::Registration);
     let names: Vec<&str> = f.related.iter().map(|p| p.to_str().unwrap_or("")).collect();
     assert!(
-        names.contains(&"src/contrib/preferences/preferences.contribution.ts"),
+        names.contains(&"src/contrib/feat-b/feat-b.contribution.ts"),
         "related must include the sibling contribution file as architectural precedent; got {names:?}"
     );
     assert!(
@@ -52,8 +52,8 @@ fn registration_surfaces_nearby_contribution_peers() {
 
 #[test]
 fn registration_silent_when_body_lacks_triggers() {
-    let subject = p("src/contrib/extensions/extensions.contribution.ts");
-    let peers = vec![p("src/contrib/preferences/preferences.contribution.ts")];
+    let subject = p("src/contrib/feat-a/feat-a.contribution.ts");
+    let peers = vec![p("src/contrib/feat-b/feat-b.contribution.ts")];
     let plain = "function helper(): number { return 42; }";
     let findings = analyze_ts(&subject, plain, &peers, &[HealthPattern::Registration]);
     assert!(
@@ -80,11 +80,11 @@ fn registration_silent_when_no_peers_exist() {
 
 #[test]
 fn registration_caps_related_at_three() {
-    let subject = p("src/contrib/extensions/extensions.contribution.ts");
-    let mut peers = vec![p("src/contrib/extensions/extensions.contribution.ts")];
+    let subject = p("src/contrib/feat-a/feat-a.contribution.ts");
+    let mut peers = vec![p("src/contrib/feat-a/feat-a.contribution.ts")];
     for i in 0..10 {
         peers.push(PathBuf::from(format!(
-            "src/contrib/feature{i}/feature{i}.contribution.ts"
+            "src/contrib/peer-{i}/peer-{i}.contribution.ts"
         )));
     }
     let findings = analyze_ts(

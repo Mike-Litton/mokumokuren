@@ -1744,7 +1744,7 @@ checksum = "c505b3e17ed6b70a7ed2e67fbb2c560ee327353556120d6e72f5232b6880d536"
 
 [[package]]
 name = "mmk-config"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -1754,7 +1754,7 @@ dependencies = [
 
 [[package]]
 name = "mmk-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "ahash",
  "anyhow",
@@ -1766,7 +1766,7 @@ dependencies = [
 
 [[package]]
 name = "mmk-git"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "ahash",
  "anyhow",
@@ -1784,7 +1784,7 @@ dependencies = [
 
 [[package]]
 name = "mmk-health"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "ahash",
  "serde",
@@ -1795,7 +1795,7 @@ dependencies = [
 
 [[package]]
 name = "mokumokuren"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "ahash",
  "anyhow",

@@ -38,7 +38,7 @@ context the other three pillars assume the coder already has.
 ## What mmk does in the agent edit loop
 
 The agent's actual work happens in the **working tree**, not in
-committed history. v0.3 exposes one subcommand per phase of that
+committed history. mmk exposes one subcommand per phase of that
 loop, each emitting line-by-line, layer-labeled findings:
 
 | Loop phase                 | Subcommand                  | Sees                                                |

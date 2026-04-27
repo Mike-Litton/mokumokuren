@@ -1,8 +1,8 @@
 # mokumokuren.toml — JS/TS profile.
 #
-# Derived from the v0.3 four-repo eval. Catches the documented noise
-# patterns: workspace-package.json constellation, lockfile bulk
-# rewrites, generated artifacts, build/release config.
+# Catches the typical noise patterns: workspace-package.json
+# constellation, lockfile bulk rewrites, generated artifacts,
+# build/release config.
 
 ignore = [
     "**/node_modules/**",
@@ -34,10 +34,10 @@ ignore_partners = [
 [blast_radius]
 threshold = 0.10
 
-# v0.4 Health adapter: structural-pattern findings for TS files.
+# Health adapter: structural-pattern findings for TS files.
 # Surfaces architectural neighbors the empirical co-change cone
-# can't see (e.g. preferences.contribution.ts as a precedent for
-# extensions.contribution.ts even when they have no commit overlap).
+# can't see (e.g. an `*.contribution.ts` file as a precedent for a
+# sibling `*.contribution.ts` even when they have no commit overlap).
 [health.ts]
 enabled = true
 patterns = ["registration", "service", "test_pair"]

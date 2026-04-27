@@ -9,7 +9,7 @@ or use a published binary).
 ## Working-tree vs history
 
 The agent's actual edit loop happens in the **working tree**, not in
-committed history. v0.3 exposes one subcommand per phase of that
+committed history. mmk exposes one subcommand per phase of that
 loop:
 
 | Loop phase                   | Subcommand                  | Sees                                         |
@@ -20,8 +20,8 @@ loop:
 | End of feature / PR review   | `mmk session-summary`       | Committed session vs base ref + drift / budget overlay. |
 
 `mmk analyze` (the ranked top-N table) and `mmk drift` (climb signal
-across K sessions) are also v0.3 subcommands but operate at coarser
-grain — useful in CI gates and triage, not in the per-edit hook.
+across K sessions) operate at coarser grain — useful in CI gates and
+triage, not in the per-edit hook.
 
 ## Option 1 — `CLAUDE.md` (advisory, easiest)
 

@@ -52,7 +52,7 @@ fn schema_version_present_and_pinned() {
     let stdout = run_in(dir.path(), json_args());
     let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
     assert_eq!(
-        v["schema_version"], "0.4.0",
+        v["schema_version"], "0.5.0",
         "schema_version should be pinned to the mmk minor release"
     );
 }

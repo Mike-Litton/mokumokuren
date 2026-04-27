@@ -109,8 +109,8 @@ pub fn diff_commit(
 
     // Returns true if the path should contribute to metrics. Probes the
     // HEAD-path set by byte-slice so we don't allocate a `PathBuf` just
-    // to do the lookup — at godot scale, that allocation was visible in
-    // profiles.
+    // to do the lookup — at multi-thousand-commit scale, that allocation
+    // was visible in profiles.
     let at_head = |bytes: &[u8]| -> bool { head_paths.map_or(true, |set| set.contains(bytes)) };
 
     let result = platform.for_each_to_obtain_tree(

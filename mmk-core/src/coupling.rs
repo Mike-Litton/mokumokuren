@@ -16,8 +16,8 @@
 //!
 //! `top_couples_for` is targeted: pair counts are only updated where at
 //! least one side is in `targets`. With the default top-N = 50 and the
-//! existing `bulk.max_files = 15` filter, godot at 3187 commits is ~1.6M
-//! pair-updates — single-digit ms.
+//! existing `bulk.max_files = 15` filter, a ~3.2k-commit reference repo
+//! is ~1.6M pair-updates — single-digit ms.
 
 use ahash::{AHashMap, AHashSet};
 use serde::Serialize;

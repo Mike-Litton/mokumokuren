@@ -10,7 +10,7 @@
 # go in the same list.
 #
 # If your project is a JS/TS monorepo, `mmk init --profile js-ts`
-# ships an opinionated set of defaults derived from the v0.3 eval.
+# ships an opinionated set of ecosystem defaults.
 # `--profile rust|python|go` exist for those ecosystems too.
 
 ignore = [
@@ -79,7 +79,7 @@ ignore = [
 # [blast_radius]
 # threshold = 0.10
 
-# `[health.ts]` enables the v0.4 TypeScript Health adapter:
+# `[health.ts]` enables the TypeScript Health adapter:
 # structural-pattern detection (action-registration files, service
 # decls, test pairs) that surfaces architectural neighbors empirical
 # co-change history cannot see. Off by default outside the js-ts
