@@ -99,6 +99,41 @@ Read the table. Top of the list is where to look first. See the
 when each one starts lying, and [`coupling.md`](coupling.md) for the
 co-change layer.
 
+## Subcommands
+
+| Subcommand               | Use it for                                                                  |
+| ------------------------ | --------------------------------------------------------------------------- |
+| `mmk analyze`            | Ranked top-N hotspots over a window. Triage and CI gating.                  |
+| `mmk pre-edit <PATH>`    | Rank, expected partners, optional drift for a path the agent is about to edit. |
+| `mmk review`             | Diff vs history. The per-edit hot path; also `--staged` / `--range` / `--commit`. |
+| `mmk session-summary`    | End-of-feature view: window vs session, DRIFT + BUDGET overlay.             |
+| `mmk drift --sessions K` | Climb signal across K session boundaries. Slow path; PR review.             |
+| `mmk eval --sample N`    | Sample N recent commits, aggregate noise-floor report. Tune your config.    |
+| `mmk init`               | Write a starter `mokumokuren.toml`. `--profile js-ts` etc. for ecosystems.  |
+| `mmk cache`              | Inspect / clear the per-commit delta cache.                                 |
+
+The `mmk analyze` table:
+
+```shell
+mmk analyze --top 10
+```
+
+```
+rank  path                              loc  weighted_churn   commits       hotspot
+----  ---------------------------  --------  --------------  --------  ------------
+   1  mmk-git/tests/analyze.rs          462          369.00         1         36.30
+   2  mmk-git/src/diff.rs               269          275.00         1         31.47
+   3  mmk-git/src/lib.rs                206          131.00         1         26.04
+   ...
+```
+
+- `weighted_churn` — added + deleted lines across the analysis window,
+  exponentially decayed by commit age.
+- `hotspot` — `log(1 + weighted_churn) × log(1 + loc)`. Larger files
+  with sustained churn rank highest.
+
+The top of the list is where to look first.
+
 ## I want to understand what mmk is doing
 
 - [`metrics.md`](metrics.md) — what each number measures and doesn't.

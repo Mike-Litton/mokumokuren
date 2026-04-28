@@ -402,3 +402,15 @@ A few failure modes worth naming:
 
 If a number ever surprises you, the right next move is `git log
 --follow` on the offending path, not changing the metric.
+
+## Operational limits
+
+- **Shallow clones are warned but not rejected.** History before the
+  shallow boundary isn't analyzed; the JSON output flags it.
+- **Non-UTF8 paths are lossy.** A repository with non-UTF-8 path bytes
+  may silently undercount churn for those paths. Vanishingly rare in
+  practice; the failure mode is a missing entry, not a wrong ranking.
+- **Coupling is empirical, not architectural.** It's the historical
+  co-change cone, not a counterfactual model. A file pair that *should*
+  co-change but historically hasn't will not appear; one that has but
+  shouldn't will.

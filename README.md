@@ -27,8 +27,8 @@ test doesn't know that touching `packfile.c` historically also touches
 `object-file.c` — it only fails when the missing edit breaks something.
 
 `mmk` is the fourth check: a **deterministic, fast, computational
-metric generator that guards against a specific class of LLM slop**
-the other three miss — hotspot blindness, hallucinated coupling,
+metric generator** that catches the failure modes the other three
+structurally cannot see — hotspot blindness, co-change blindness,
 unexpected cascade, and thrashing. It reads Git history (the one
 durable record of what came before) and emits structured findings
 a harness or CI gate can act on. It is not a substitute for typing,
@@ -39,7 +39,7 @@ context the other three pillars assume the coder already has.
 
 The agent's actual work happens in the **working tree**, not in
 committed history. mmk exposes one subcommand per phase of that
-loop, each emitting line-by-line, layer-labeled findings:
+loop, each emitting line-by-line, sensor-labeled findings:
 
 | Loop phase                 | Subcommand                  | Sees                                                |
 | -------------------------- | --------------------------- | --------------------------------------------------- |
@@ -66,10 +66,9 @@ COUPLING:
   ⚠ core/a.rs edited; expected partner core/b.rs not touched (jaccard 0.75)
 ```
 
-The full menu of finding layers `mmk review` and `mmk pre-edit`
-emit:
+The full menu of sensors `mmk review` and `mmk pre-edit` emit:
 
-| Layer        | Question                                                              | Severity         |
+| Sensor       | Question                                                              | Severity         |
 | ------------ | --------------------------------------------------------------------- | ---------------- |
 | `HOTSPOT`    | "Is this file near the top of the rank?"                              | Warn             |
 | `COUPLING`   | "Is a historical co-change partner missing from this diff?"           | Warn / Info      |
@@ -80,50 +79,11 @@ emit:
 | `BUDGET`     | "Is the diff over the size cap, or ramping toward it?"                | Warn / Info      |
 | `DRIFT`      | "Is this file climbing the rank across recent sessions?"              | Warn             |
 
-Each layer maps to peer-reviewed work on defect rate,
-comprehension cost, or change-amplification risk; the design
-doc-comments cite the relevant primary sources at each call site.
-
 JSON output (`--format json`) is the same data with a stable
 schema for harness consumers. See
 [`docs/claude-code.md`](docs/claude-code.md) for the wiring
 (CLAUDE.md / skill / hooks) and
 [`docs/schema.md`](docs/schema.md) for the JSON envelope.
-
-## Subcommands at a glance
-
-| Subcommand               | Use it for                                                                  |
-| ------------------------ | --------------------------------------------------------------------------- |
-| `mmk analyze`            | Ranked top-N hotspots over a window. Triage and CI gating.                  |
-| `mmk pre-edit <PATH>`    | Rank, expected partners, optional drift for a path the agent is about to edit. |
-| `mmk review`             | Diff vs history. The per-edit hot path; also `--staged` / `--range` / `--commit`. |
-| `mmk session-summary`    | End-of-feature view: window vs session, DRIFT + BUDGET overlay.             |
-| `mmk drift --sessions K` | Climb signal across K session boundaries. Slow path; PR review.             |
-| `mmk eval --sample N`    | Sample N recent commits, aggregate noise-floor report. Tune your config.    |
-| `mmk init`               | Write a starter `mokumokuren.toml`. `--profile js-ts` etc. for ecosystems.  |
-| `mmk cache`              | Inspect / clear the per-commit delta cache.                                 |
-
-The original `mmk analyze` table:
-
-```shell
-mmk analyze --top 10
-```
-
-```
-rank  path                              loc  weighted_churn   commits       hotspot
-----  ---------------------------  --------  --------------  --------  ------------
-   1  mmk-git/tests/analyze.rs          462          369.00         1         36.30
-   2  mmk-git/src/diff.rs               269          275.00         1         31.47
-   3  mmk-git/src/lib.rs                206          131.00         1         26.04
-   ...
-```
-
-- `weighted_churn` — added + deleted lines across the analysis window,
-  exponentially decayed by commit age.
-- `hotspot` — `log(1 + weighted_churn) × log(1 + loc)`. Larger files
-  with sustained churn rank highest.
-
-The top of the list is where to look first.
 
 ## How to read it
 
@@ -190,17 +150,8 @@ a per-commit cache and finish in ~300 ms. See
 [`docs/performance.md`](docs/performance.md) for cache layout and
 `MMK_CACHE_DIR` overrides.
 
-## Known limitations
-
-- **Shallow clones are warned but not rejected.** History before the
-  shallow boundary isn't analyzed; the JSON output flags it.
-- **Non-UTF8 paths are lossy.** A repository with non-UTF-8 path bytes
-  may silently undercount churn for those paths. Vanishingly rare in
-  practice; the failure mode is a missing entry, not a wrong ranking.
-- **Coupling is empirical, not architectural.** It's the historical
-  co-change cone, not a counterfactual model. A file pair that *should*
-  co-change but historically hasn't will not appear; one that has but
-  shouldn't will.
+Known operational limits (shallow clones, non-UTF-8 paths, empirical
+coupling) are documented in [`docs/metrics.md`](docs/metrics.md).
 
 ## Development
 
