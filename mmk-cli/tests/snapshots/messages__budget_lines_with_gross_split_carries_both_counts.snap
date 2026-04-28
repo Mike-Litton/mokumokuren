@@ -1,0 +1,5 @@
+---
+source: mmk-cli/tests/messages.rs
+expression: s
+---
+diff is 80 lines (1500 gross, ignore_for_budget excluded 1420); cap 1000; large diffs concentrate rollback risk and slow review

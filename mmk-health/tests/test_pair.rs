@@ -1,12 +1,10 @@
 //! Pattern C — naming-convention test pair.
 
+mod common;
+
+use common::p;
 use mmk_health::ts::analyze_ts;
 use mmk_health::HealthPattern;
-use std::path::PathBuf;
-
-fn p(s: &str) -> PathBuf {
-    PathBuf::from(s)
-}
 
 #[test]
 fn test_pair_finds_sibling_test_file() {

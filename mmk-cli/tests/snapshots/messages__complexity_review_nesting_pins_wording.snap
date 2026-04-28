@@ -1,0 +1,5 @@
+---
+source: mmk-cli/tests/messages.rs
+expression: s
+---
+src/dialogs/resume/sections/job-tracker.tsx::parseApplication: nesting 8, directory median 2 (ratio 4.0); correlates with elevated defect rate (Code Red 2022)

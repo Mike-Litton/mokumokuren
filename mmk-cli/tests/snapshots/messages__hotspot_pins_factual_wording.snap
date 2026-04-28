@@ -1,0 +1,5 @@
+---
+source: mmk-cli/tests/messages.rs
+expression: s
+---
+core/a.rs: rank #2 of top-20

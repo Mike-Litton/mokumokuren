@@ -1,0 +1,5 @@
+---
+source: mmk-cli/tests/messages.rs
+expression: s
+---
+core/a.rs: climbed 3 of 4 transitions; latest rank #2

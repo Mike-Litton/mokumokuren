@@ -26,6 +26,26 @@ const Z_95: f64 = 1.96;
 /// Returns `0.0` when `n == 0` (no observations → no inference).
 /// Saturates `k` to `n` if a caller passes a malformed pair so the
 /// formula stays in `[0, 1]`.
+///
+/// # Examples
+///
+/// The hot-file calibration target — 54 of 203 commits is the
+/// motivating "real partner" case the COUPLING gate must surface:
+///
+/// ```
+/// use mmk_core::coupling::wilson::wilson_lower_95;
+/// let lo = wilson_lower_95(54, 203);
+/// // scipy says ≈ 0.21097; our Z_95 is rounded to 1.96 so we land
+/// // a few permille tighter (0.20998).
+/// assert!(lo > 0.205 && lo < 0.215, "got {lo}");
+/// ```
+///
+/// Empty observations collapse to zero, never NaN:
+///
+/// ```
+/// # use mmk_core::coupling::wilson::wilson_lower_95;
+/// assert_eq!(wilson_lower_95(0, 0), 0.0);
+/// ```
 #[must_use]
 pub fn wilson_lower_95(k: u32, n: u32) -> f64 {
     if n == 0 {

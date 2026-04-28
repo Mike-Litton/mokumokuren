@@ -1,0 +1,5 @@
+---
+source: mmk-cli/tests/messages.rs
+expression: s
+---
+src/foo.ts: test partner src/foo.test.ts not in diff

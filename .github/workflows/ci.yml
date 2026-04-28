@@ -26,6 +26,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
+  doctest:
+    name: doctest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: Swatinem/rust-cache@v2
+      # `cargo nextest` (used by the `test` job) does not support
+      # doc-tests; this job covers the gap so docstring examples stay
+      # in sync with the code. Single-OS is fine — the doc-tests
+      # exercise pure math (Wilson, churn, budget, coupling) with no
+      # platform-specific behaviour.
+      - run: cargo test --doc --workspace
+
   test:
     name: test (${{ matrix.os }})
     strategy:

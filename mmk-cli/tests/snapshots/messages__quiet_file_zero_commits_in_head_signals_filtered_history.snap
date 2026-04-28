@@ -1,0 +1,5 @@
+---
+source: mmk-cli/tests/messages.rs
+expression: s
+---
+docs/configuration.md: present in HEAD but no analyzable history (file may be stale or prior touches were filtered as bulk commits)

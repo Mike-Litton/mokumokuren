@@ -12,10 +12,10 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-ahash = { workspace = true }
 serde = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-typescript = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+proptest = { workspace = true }

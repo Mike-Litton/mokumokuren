@@ -5,25 +5,18 @@
 
 mod common;
 
-use common::{
-    build_canonical_fixture, build_coupling_fixture, build_session_fixture, write, CWD_LOCK,
-};
+use common::{build_canonical_fixture, build_coupling_fixture, build_session_fixture, write};
 use mokumokuren::args::{AnalyzeArgs, DriftArgs, Format, PreEditArgs, ReviewArgs, SessionArgs};
 use serde_json::Value;
+use serial_test::serial;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
 fn run_in(repo: &std::path::Path, args: AnalyzeArgs) -> Vec<u8> {
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let orig = std::env::current_dir().unwrap();
-    std::env::set_current_dir(repo).unwrap();
-    let mut stdout: Vec<u8> = Vec::new();
-    let mut stderr: Vec<u8> = Vec::new();
-    let res = mokumokuren::commands::analyze::run(&args, &mut stdout, &mut stderr);
-    std::env::set_current_dir(orig).unwrap();
+    let (res, stdout, _) = common::with_cwd(repo, |so, se| {
+        mokumokuren::commands::analyze::run(&args, so, se)
+    });
     res.expect("analyze should succeed on fixture");
     stdout
 }
@@ -43,6 +36,7 @@ fn json_args() -> AnalyzeArgs {
     }
 }
 
+#[serial(cwd)]
 #[test]
 fn schema_version_present_and_pinned() {
     let dir = TempDir::new().unwrap();
@@ -57,6 +51,7 @@ fn schema_version_present_and_pinned() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn crate_version_distinct_from_schema_version() {
     let dir = TempDir::new().unwrap();
@@ -152,6 +147,7 @@ fn coupling_entry_keys() -> Vec<&'static str> {
     ]
 }
 
+#[serial(cwd)]
 #[test]
 fn schema_shape_matches_docs_contract() {
     let dir = TempDir::new().unwrap();
@@ -245,6 +241,7 @@ fn schema_shape_matches_docs_contract() {
     }
 }
 
+#[serial(cwd)]
 #[test]
 fn schema_top_couples_entry_shape_against_coupling_fixture() {
     // Pin the `top_couples[]` entry shape on a fixture that
@@ -296,6 +293,7 @@ fn schema_top_couples_entry_shape_against_coupling_fixture() {
     assert_eq!(co, 4, "co_change_count of canonical pair");
 }
 
+#[serial(cwd)]
 #[test]
 fn schema_blast_radius_block_shape_matches_docs() {
     let dir = TempDir::new().unwrap();
@@ -345,19 +343,14 @@ fn session_args() -> SessionArgs {
 }
 
 fn run_session_in(repo: &std::path::Path, args: SessionArgs) -> Vec<u8> {
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let orig = std::env::current_dir().unwrap();
-    std::env::set_current_dir(repo).unwrap();
-    let mut stdout: Vec<u8> = Vec::new();
-    let mut stderr: Vec<u8> = Vec::new();
-    let res = mokumokuren::commands::session::run(&args, &mut stdout, &mut stderr);
-    std::env::set_current_dir(orig).unwrap();
+    let (res, stdout, _) = common::with_cwd(repo, |so, se| {
+        mokumokuren::commands::session::run(&args, so, se)
+    });
     res.expect("session should succeed on fixture");
     stdout
 }
 
+#[serial(cwd)]
 #[test]
 fn schema_session_shape_matches_docs_contract() {
     let dir = TempDir::new().unwrap();
@@ -447,43 +440,25 @@ fn schema_session_shape_matches_docs_contract() {
 // --- review / pre-edit / drift envelope locks. ---
 
 fn run_review_in(repo: &std::path::Path, args: ReviewArgs) -> Vec<u8> {
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let orig = std::env::current_dir().unwrap();
-    std::env::set_current_dir(repo).unwrap();
-    let mut stdout: Vec<u8> = Vec::new();
-    let mut stderr: Vec<u8> = Vec::new();
-    let res = mokumokuren::commands::review::run(&args, None, &mut stdout, &mut stderr);
-    std::env::set_current_dir(orig).unwrap();
+    let (res, stdout, _) = common::with_cwd(repo, |so, se| {
+        mokumokuren::commands::review::run(&args, None, so, se)
+    });
     res.expect("review should succeed on fixture");
     stdout
 }
 
 fn run_pre_edit_in(repo: &std::path::Path, args: PreEditArgs) -> Vec<u8> {
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let orig = std::env::current_dir().unwrap();
-    std::env::set_current_dir(repo).unwrap();
-    let mut stdout: Vec<u8> = Vec::new();
-    let mut stderr: Vec<u8> = Vec::new();
-    let res = mokumokuren::commands::pre_edit::run(&args, None, &mut stdout, &mut stderr);
-    std::env::set_current_dir(orig).unwrap();
+    let (res, stdout, _) = common::with_cwd(repo, |so, se| {
+        mokumokuren::commands::pre_edit::run(&args, None, so, se)
+    });
     res.expect("pre-edit should succeed on fixture");
     stdout
 }
 
 fn run_drift_in(repo: &std::path::Path, args: DriftArgs) -> Vec<u8> {
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let orig = std::env::current_dir().unwrap();
-    std::env::set_current_dir(repo).unwrap();
-    let mut stdout: Vec<u8> = Vec::new();
-    let mut stderr: Vec<u8> = Vec::new();
-    let res = mokumokuren::commands::drift::run(&args, &mut stdout, &mut stderr);
-    std::env::set_current_dir(orig).unwrap();
+    let (res, stdout, _) = common::with_cwd(repo, |so, se| {
+        mokumokuren::commands::drift::run(&args, so, se)
+    });
     res.expect("drift should succeed on fixture");
     stdout
 }
@@ -492,6 +467,7 @@ fn finding_keys() -> Vec<&'static str> {
     vec!["layer", "severity", "message"]
 }
 
+#[serial(cwd)]
 #[test]
 fn schema_review_shape_with_changes() {
     // Build the coupling fixture, then dirty the working tree so
@@ -560,6 +536,7 @@ fn schema_review_shape_with_changes() {
     }
 }
 
+#[serial(cwd)]
 #[test]
 fn schema_review_clean_tree_minimal_envelope() {
     // Clean working tree → review skips analyze and emits the
@@ -598,6 +575,7 @@ fn schema_review_clean_tree_minimal_envelope() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn schema_pre_edit_shape() {
     let dir = TempDir::new().unwrap();
@@ -641,6 +619,7 @@ fn schema_pre_edit_shape() {
     }
 }
 
+#[serial(cwd)]
 #[test]
 fn schema_drift_shape() {
     let dir = TempDir::new().unwrap();

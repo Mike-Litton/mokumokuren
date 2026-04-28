@@ -3,9 +3,10 @@
 
 mod common;
 
-use common::{build_coupling_fixture, commit_all, init_repo, write, CWD_LOCK, DAY};
+use common::{build_coupling_fixture, commit_all, init_repo, write, DAY};
 use mokumokuren::args::{EvalArgs, Format};
 use serde_json::Value;
+use serial_test::serial;
 use tempfile::TempDir;
 
 fn eval_args() -> EvalArgs {
@@ -22,19 +23,14 @@ fn eval_args() -> EvalArgs {
 }
 
 fn run_in(repo: &std::path::Path, args: EvalArgs) -> Vec<u8> {
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let orig = std::env::current_dir().unwrap();
-    std::env::set_current_dir(repo).unwrap();
-    let mut stdout: Vec<u8> = Vec::new();
-    let mut stderr: Vec<u8> = Vec::new();
-    let res = mokumokuren::commands::eval::run(&args, &mut stdout, &mut stderr);
-    std::env::set_current_dir(orig).unwrap();
+    let (res, stdout, _) = common::with_cwd(repo, |so, se| {
+        mokumokuren::commands::eval::run(&args, so, se)
+    });
     res.expect("eval should succeed on fixture");
     stdout
 }
 
+#[serial(cwd)]
 #[test]
 fn eval_aggregates_findings_across_sampled_commits() {
     // The coupling fixture has 5 commits. Eval samples them and runs
@@ -102,6 +98,7 @@ fn build_learn_noise_fixture(repo: &std::path::Path, now: i64) {
     }
 }
 
+#[serial(cwd)]
 #[test]
 fn eval_learn_suggests_partners_with_high_breadth() {
     // --learn must surface the cross-subject CHANGELOG pattern.
@@ -148,6 +145,7 @@ fn eval_learn_suggests_partners_with_high_breadth() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn eval_without_learn_omits_suggestions_block() {
     // Negative: the suggestion block is opt-in. Default eval output
@@ -165,6 +163,7 @@ fn eval_without_learn_omits_suggestions_block() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn eval_learn_text_mode_emits_toml_block() {
     let dir = TempDir::new().unwrap();
@@ -190,6 +189,7 @@ fn eval_learn_text_mode_emits_toml_block() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn eval_learn_emits_sensor_suggestion_blocks() {
     // Build a small TS-flavoured fixture so eval --learn has
@@ -226,6 +226,7 @@ fn eval_learn_emits_sensor_suggestion_blocks() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn eval_replay_emits_per_layer_histogram() {
     // --replay populates replay_histogram with per-layer entries: at
@@ -278,6 +279,7 @@ fn eval_replay_emits_per_layer_histogram() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn eval_replay_text_emits_histogram_block() {
     let dir = TempDir::new().unwrap();
@@ -299,6 +301,7 @@ fn eval_replay_text_emits_histogram_block() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn eval_replay_omitted_by_default() {
     let dir = TempDir::new().unwrap();
@@ -313,6 +316,7 @@ fn eval_replay_omitted_by_default() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn eval_text_mode_emits_firing_rate_line() {
     let dir = TempDir::new().unwrap();
@@ -417,6 +421,7 @@ fn build_cohesion_tangled_fixture(repo: &std::path::Path, now: i64) {
     }
 }
 
+#[serial(cwd)]
 #[test]
 fn eval_learn_records_cohesion_tangled_diffs_when_present() {
     // The tangled fixture is constructed so the late commits each

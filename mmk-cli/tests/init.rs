@@ -7,25 +7,19 @@
 
 mod common;
 
-use common::CWD_LOCK;
 use mmk_config::ConfigFile;
 use mokumokuren::args::InitArgs;
+use serial_test::serial;
 use std::path::Path;
 use tempfile::TempDir;
 
 fn run_init_in(dir: &Path, args: InitArgs) -> (Result<(), anyhow::Error>, Vec<u8>, Vec<u8>) {
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let orig = std::env::current_dir().unwrap();
-    std::env::set_current_dir(dir).unwrap();
-    let mut stdout: Vec<u8> = Vec::new();
-    let mut stderr: Vec<u8> = Vec::new();
-    let res = mokumokuren::commands::init::run(&args, &mut stdout, &mut stderr);
-    std::env::set_current_dir(orig).unwrap();
-    (res, stdout, stderr)
+    common::with_cwd(dir, |so, se| {
+        mokumokuren::commands::init::run(&args, so, se)
+    })
 }
 
+#[serial(cwd)]
 #[test]
 fn init_creates_mokumokuren_toml_in_cwd() {
     let dir = TempDir::new().unwrap();
@@ -47,6 +41,7 @@ fn init_creates_mokumokuren_toml_in_cwd() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn init_output_parses_as_a_valid_config_file() {
     let dir = TempDir::new().unwrap();
@@ -70,6 +65,7 @@ fn init_output_parses_as_a_valid_config_file() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn init_starter_mentions_common_ecosystem_patterns() {
     let dir = TempDir::new().unwrap();
@@ -100,6 +96,7 @@ fn init_starter_mentions_common_ecosystem_patterns() {
     }
 }
 
+#[serial(cwd)]
 #[test]
 fn init_refuses_to_overwrite_without_force() {
     let dir = TempDir::new().unwrap();
@@ -128,6 +125,7 @@ fn init_refuses_to_overwrite_without_force() {
     assert!(body.contains("existing/**"));
 }
 
+#[serial(cwd)]
 #[test]
 fn init_with_js_ts_profile_writes_expected_keys() {
     let dir = TempDir::new().unwrap();
@@ -159,6 +157,7 @@ fn init_with_js_ts_profile_writes_expected_keys() {
     }
 }
 
+#[serial(cwd)]
 #[test]
 fn init_with_rust_profile_writes_minimal_config() {
     let dir = TempDir::new().unwrap();
@@ -175,6 +174,7 @@ fn init_with_rust_profile_writes_minimal_config() {
     assert!(body.contains("[coupling]"));
 }
 
+#[serial(cwd)]
 #[test]
 fn init_unknown_profile_is_an_error() {
     let dir = TempDir::new().unwrap();
@@ -193,6 +193,7 @@ fn init_unknown_profile_is_an_error() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn init_force_overwrites_existing_file() {
     let dir = TempDir::new().unwrap();

@@ -7,12 +7,14 @@
 
 mod common;
 
-use common::{build_session_fixture, commit_all, git, init_repo, write, CWD_LOCK, DAY};
+use common::{build_session_fixture, commit_all, git, init_repo, write, DAY};
 use mokumokuren::args::{Format, SessionArgs};
 use serde_json::Value;
+use serial_test::serial;
 use std::path::Path;
 use tempfile::TempDir;
 
+#[serial(cwd)]
 #[test]
 fn session_summary_includes_window_and_session_blocks() {
     let dir = TempDir::new().unwrap();
@@ -32,6 +34,7 @@ fn session_summary_includes_window_and_session_blocks() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn session_summary_nudges_toward_review_when_session_empty() {
     // The agent's most common misuse: invoke `mmk session-summary`
@@ -68,6 +71,7 @@ fn session_summary_nudges_toward_review_when_session_empty() {
     assert_eq!(nudge[0]["severity"], "info");
 }
 
+#[serial(cwd)]
 #[test]
 fn empty_session_omits_window_files_block_and_emits_text_one_liner() {
     // v0.6: when `session_commits.len() == 0` the WINDOW ranking is
@@ -119,6 +123,7 @@ fn empty_session_omits_window_files_block_and_emits_text_one_liner() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn non_empty_session_keeps_window_files_block() {
     // Negative: when the session has commits, the WINDOW `files` key
@@ -138,6 +143,7 @@ fn non_empty_session_keeps_window_files_block() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn session_summary_diff_budget_finding_fires_on_oversize_session() {
     use std::fmt::Write as _;
@@ -174,15 +180,9 @@ fn session_summary_diff_budget_finding_fires_on_oversize_session() {
 }
 
 fn run_session(repo: &Path, args: SessionArgs) -> (Vec<u8>, Vec<u8>) {
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let orig = std::env::current_dir().unwrap();
-    std::env::set_current_dir(repo).unwrap();
-    let mut stdout: Vec<u8> = Vec::new();
-    let mut stderr: Vec<u8> = Vec::new();
-    let res = mokumokuren::commands::session::run(&args, &mut stdout, &mut stderr);
-    std::env::set_current_dir(orig).unwrap();
+    let (res, stdout, stderr) = common::with_cwd(repo, |so, se| {
+        mokumokuren::commands::session::run(&args, so, se)
+    });
     res.expect("session should succeed on fixture");
     (stdout, stderr)
 }
@@ -206,6 +206,7 @@ fn json_args() -> SessionArgs {
     }
 }
 
+#[serial(cwd)]
 #[test]
 fn explicit_base_resolves_via_explicit() {
     let dir = TempDir::new().unwrap();
@@ -239,6 +240,7 @@ fn explicit_base_resolves_via_explicit() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn since_commit_equals_merge_base_yields_same_output() {
     let dir = TempDir::new().unwrap();
@@ -279,6 +281,7 @@ fn since_commit_equals_merge_base_yields_same_output() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn detached_head_falls_back_to_head_minus_one_with_warning() {
     let dir = TempDir::new().unwrap();
@@ -325,6 +328,7 @@ fn detached_head_falls_back_to_head_minus_one_with_warning() {
 // - Second test (the negative one) protects **CI/CD mode** against
 //   false-positive review noise on a healthy `--base main`.
 
+#[serial(cwd)]
 #[test]
 fn synthetic_base_emits_machine_readable_resolution_field() {
     let dir = TempDir::new().unwrap();
@@ -368,6 +372,7 @@ fn synthetic_base_emits_machine_readable_resolution_field() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn explicit_base_does_not_emit_synthetic_warning() {
     let dir = TempDir::new().unwrap();
@@ -459,6 +464,7 @@ fn build_loc_drift_fixture(repo: &Path, now: i64) {
     commit_all(repo, "feat: truncate big", now - DAY);
 }
 
+#[serial(cwd)]
 #[test]
 fn session_relative_churn_uses_base_epoch_loc() {
     let dir = TempDir::new().unwrap();
@@ -505,6 +511,7 @@ fn session_relative_churn_uses_base_epoch_loc() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn window_files_still_use_head_loc() {
     // Sanity: the top-level `files[]` (window ranking) keeps using

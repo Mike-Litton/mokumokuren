@@ -7,3 +7,14 @@ slow-timeout = { period = "30s", terminate-after = 2 }
 fail-fast = false
 retries = 1
 final-status-level = "fail"
+
+# CI must never silently adopt a snapshot drift; insta's `no` policy
+# turns any unreviewed `*.snap.new` into a hard test failure.
+[profile.ci.env]
+INSTA_UPDATE = "no"
+
+# Long-running discretionary runs (mutation testing, miri, fuzz harnesses)
+# land here so default and CI profiles stay fast. Add a recipe per tool;
+# the profile only sets the timeout envelope.
+[profile.slow]
+slow-timeout = { period = "120s", terminate-after = 2 }

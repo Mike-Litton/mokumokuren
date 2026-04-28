@@ -1,0 +1,5 @@
+---
+source: mmk-cli/tests/messages.rs
+expression: s
+---
+diff touches 120 files; cap 100, HOTSPOT/COUPLING skipped (partners co-touched by construction); large diffs concentrate rollback risk and slow review

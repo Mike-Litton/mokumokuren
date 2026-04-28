@@ -1,0 +1,5 @@
+---
+source: mmk-cli/tests/messages.rs
+expression: s
+---
+diff is 10 of 15 new files; history priors don't apply

@@ -14,6 +14,32 @@ use crate::types::Commit;
 /// `now_ts` should be the analysis-start timestamp (typically HEAD's committer
 /// time, or wall-clock "now"); commits newer than `now_ts` are treated as
 /// `age = 0`.
+///
+/// # Examples
+///
+/// A commit one tau old decays its weight to `1/e ≈ 0.368`:
+///
+/// ```
+/// use mmk_core::churn::weighted_churn;
+/// use mmk_core::types::{Commit, CommitInfo, FileDelta};
+/// use std::path::PathBuf;
+///
+/// let now = 1_700_000_000_i64;
+/// let tau = 86_400.0 * 90.0; // 90-day half-life
+/// let commit = Commit {
+///     info: CommitInfo {
+///         sha: "0".into(),
+///         parent_sha: None,
+///         timestamp: now - tau as i64,
+///         author_email: "t@example.com".into(),
+///     },
+///     deltas: vec![FileDelta { path: PathBuf::from("a.rs"), added: 10, deleted: 0 }],
+/// };
+/// let out = weighted_churn(&[commit], now, tau);
+/// // Expected: 10 × e^(-1) ≈ 3.679
+/// let v = out[&PathBuf::from("a.rs")];
+/// assert!((v - 10.0 * (-1.0_f64).exp()).abs() < 1e-6);
+/// ```
 #[must_use]
 pub fn weighted_churn(commits: &[Commit], now_ts: i64, tau_seconds: f64) -> AHashMap<PathBuf, f64> {
     let mut out: AHashMap<PathBuf, f64> = AHashMap::new();

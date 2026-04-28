@@ -7,12 +7,13 @@
 
 mod common;
 
-use common::{commit_all, init_repo, write, CWD_LOCK, DAY};
+use common::{commit_all, init_repo, write, DAY};
 use mokumokuren::args::{Format, Gate, ReviewArgs};
 use mokumokuren::monotonic::{
     self, should_suppress, MonotonicEntry, MonotonicStore, MONOTONIC_SWEEP_MULTIPLIER,
 };
 use serde_json::Value;
+use serial_test::serial;
 use tempfile::TempDir;
 
 fn review_args() -> ReviewArgs {
@@ -46,12 +47,9 @@ fn review_args() -> ReviewArgs {
 /// modifications atomic from the perspective of any concurrent
 /// run from another test in this binary.
 fn run_review_held_lock(repo: &std::path::Path, args: ReviewArgs) -> Vec<u8> {
-    let orig = std::env::current_dir().unwrap();
-    std::env::set_current_dir(repo).unwrap();
-    let mut stdout: Vec<u8> = Vec::new();
-    let mut stderr: Vec<u8> = Vec::new();
-    let res = mokumokuren::commands::review::run(&args, None, &mut stdout, &mut stderr);
-    std::env::set_current_dir(orig).unwrap();
+    let (res, stdout, _) = common::with_cwd(repo, |so, se| {
+        mokumokuren::commands::review::run(&args, None, so, se)
+    });
     res.expect("review should succeed");
     stdout
 }
@@ -73,15 +71,13 @@ fn complexity_count(stdout: &[u8]) -> usize {
         .count()
 }
 
+#[serial(cwd)]
 #[test]
 fn complexity_re_emit_with_unchanged_axes_is_suppressed() {
     // The motivating failure: same `parse: nesting 8` finding
     // re-emitted across edits where neither nesting nor LOC actually
     // changed. Pre-v0.6 the agent saw multiple copies; the monotonic
     // gate must drop the second and later repeats.
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
 
     let dir = TempDir::new().unwrap();
     // Scope MMK_CACHE_DIR to this tempdir. Because we hold the
@@ -121,12 +117,9 @@ fn complexity_re_emit_with_unchanged_axes_is_suppressed() {
     std::env::remove_var("MMK_CACHE_DIR");
 }
 
+#[serial(cwd)]
 #[test]
 fn complexity_re_emit_with_strict_worsening_re_fires() {
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-
     let dir = TempDir::new().unwrap();
     let cache = dir.path().join(".mmk-cache");
     std::env::set_var("MMK_CACHE_DIR", &cache);
@@ -206,6 +199,7 @@ fn should_suppress_handles_axis_count_change() {
     assert!(!should_suppress(Some(&prior), &[8, 80, 0], 2000, 1800));
 }
 
+#[serial(cwd)]
 #[test]
 fn coupling_re_emit_with_unchanged_axes_is_suppressed() {
     // Generalization of the COMPLEXITY case to COUPLING. The
@@ -213,9 +207,6 @@ fn coupling_re_emit_with_unchanged_axes_is_suppressed() {
     // `[k, n]` (k = co_change_count, n = commits_touching(subject)).
     // A second review run against the same diff produces identical
     // axes; the per-key gate must drop the repeat.
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
 
     let dir = TempDir::new().unwrap();
     let cache = dir.path().join(".mmk-cache");

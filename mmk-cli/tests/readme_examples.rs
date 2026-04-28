@@ -18,8 +18,9 @@
 mod common;
 
 use clap::Parser;
-use common::{build_canonical_fixture, CWD_LOCK};
+use common::build_canonical_fixture;
 use mokumokuren::args::{Cli, Command};
+use serial_test::serial;
 use std::fs;
 use tempfile::TempDir;
 
@@ -90,36 +91,20 @@ fn run_cmd_against_fixture(cmd: &[String]) -> Result<(), String> {
     let cli = Cli::try_parse_from(&normalized)
         .map_err(|e| format!("clap rejected `{}`: {e}", normalized.join(" ")))?;
 
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = TempDir::new().unwrap();
     let now: i64 = 1_700_000_000;
     build_canonical_fixture(dir.path(), now);
 
-    let orig = std::env::current_dir().unwrap();
-    std::env::set_current_dir(dir.path()).unwrap();
-
-    let mut stdout: Vec<u8> = Vec::new();
-    let mut stderr: Vec<u8> = Vec::new();
-    let result: anyhow::Result<()> = match cli.command {
-        Command::Analyze(a) => mokumokuren::commands::analyze::run(&a, &mut stdout, &mut stderr),
-        Command::SessionSummary(a) => {
-            mokumokuren::commands::session::run(&a, &mut stdout, &mut stderr).map(|_| ())
-        }
-        Command::Review(a) => {
-            mokumokuren::commands::review::run(&a, None, &mut stdout, &mut stderr).map(|_| ())
-        }
-        Command::PreEdit(a) => {
-            mokumokuren::commands::pre_edit::run(&a, None, &mut stdout, &mut stderr).map(|_| ())
-        }
-        Command::Drift(a) => mokumokuren::commands::drift::run(&a, &mut stdout, &mut stderr),
+    let (result, _stdout, _stderr) = common::with_cwd(dir.path(), |so, se| match cli.command {
+        Command::Analyze(a) => mokumokuren::commands::analyze::run(&a, so, se),
+        Command::SessionSummary(a) => mokumokuren::commands::session::run(&a, so, se).map(|_| ()),
+        Command::Review(a) => mokumokuren::commands::review::run(&a, None, so, se).map(|_| ()),
+        Command::PreEdit(a) => mokumokuren::commands::pre_edit::run(&a, None, so, se).map(|_| ()),
+        Command::Drift(a) => mokumokuren::commands::drift::run(&a, so, se),
         Command::Init(_) | Command::Eval(_) | Command::Cache(_) => {
             unreachable!("filtered by SKIP_TOKENS")
         }
-    };
-
-    std::env::set_current_dir(orig).unwrap();
+    });
     result.map_err(|e| format!("running `{}` failed: {e:#}", normalized.join(" ")))
 }
 
@@ -167,6 +152,7 @@ fn readme_mmk_commands_parse_via_clap() {
 // End-to-end: every README `mmk` command runs cleanly against the
 // canonical fixture. Strongest contract; catches both flag drift and
 // runtime regressions.
+#[serial(cwd)]
 #[test]
 fn readme_mmk_commands_run_clean_on_canonical_fixture() {
     let readme = fs::read_to_string("../README.md").expect("read README.md");

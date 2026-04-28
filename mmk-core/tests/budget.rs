@@ -7,6 +7,7 @@ use mmk_config::BulkCfg;
 use mmk_core::budget::{
     check_diff_budget, check_session_aggregate, new_file_fraction, BudgetCheck, BudgetTrigger,
 };
+use rstest::rstest;
 use std::path::PathBuf;
 
 const fn cfg(max_files: u32, max_lines: u32) -> BulkCfg {
@@ -18,70 +19,41 @@ const fn cfg(max_files: u32, max_lines: u32) -> BulkCfg {
     }
 }
 
-#[test]
-fn diff_budget_silent_under_thresholds() {
+/// Per-edit budget table. The cap is fixed at (15 files, 1000 lines)
+/// for every case; what varies is the diff size and which triggers
+/// must / must not fire. `(expect_files, expect_lines)` is the
+/// expectation matrix.
+#[rstest]
+#[case::silent_under_thresholds(5, 200, false, false)]
+#[case::files_only(20, 100, true, false)]
+#[case::lines_only(1, 6000, false, true)]
+#[case::both(50, 6000, true, true)]
+fn diff_budget_cases(
+    #[case] files_changed: u32,
+    #[case] lines_changed: u64,
+    #[case] expect_files: bool,
+    #[case] expect_lines: bool,
+) {
     let triggers = check_diff_budget(
         &BudgetCheck {
-            files_changed: 5,
-            lines_changed: 200,
+            files_changed,
+            lines_changed,
         },
         &cfg(15, 1000),
     );
-    assert!(
-        triggers.is_empty(),
-        "under-threshold diff produces no triggers"
-    );
-}
-
-#[test]
-fn diff_budget_files_exceeded() {
-    let triggers = check_diff_budget(
-        &BudgetCheck {
-            files_changed: 20,
-            lines_changed: 100,
-        },
-        &cfg(15, 1000),
-    );
-    assert!(
-        triggers.contains(&BudgetTrigger::FilesExceeded {
-            actual: 20,
-            max: 15
-        }),
-        "20 > max_files 15 must fire FilesExceeded; got: {triggers:?}"
-    );
-}
-
-#[test]
-fn diff_budget_lines_exceeded() {
-    let triggers = check_diff_budget(
-        &BudgetCheck {
-            files_changed: 1,
-            lines_changed: 6000,
-        },
-        &cfg(15, 1000),
-    );
-    assert!(
-        triggers.contains(&BudgetTrigger::LinesExceeded {
-            actual: 6000,
-            max: 1000
-        }),
-        "6000 > max_lines 1000 must fire LinesExceeded; got: {triggers:?}"
-    );
-}
-
-#[test]
-fn diff_budget_both_can_fire() {
-    let triggers = check_diff_budget(
-        &BudgetCheck {
-            files_changed: 50,
-            lines_changed: 6000,
-        },
-        &cfg(15, 1000),
+    let saw_files = triggers
+        .iter()
+        .any(|t| matches!(t, BudgetTrigger::FilesExceeded { .. }));
+    let saw_lines = triggers
+        .iter()
+        .any(|t| matches!(t, BudgetTrigger::LinesExceeded { .. }));
+    assert_eq!(
+        saw_files, expect_files,
+        "FilesExceeded mismatch ({files_changed} files): got {triggers:?}"
     );
     assert_eq!(
-        triggers.len(),
-        2,
-        "both files and lines exceeded must produce two distinct triggers; got: {triggers:?}"
+        saw_lines, expect_lines,
+        "LinesExceeded mismatch ({lines_changed} lines): got {triggers:?}"
     );
 }
 

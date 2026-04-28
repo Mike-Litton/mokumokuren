@@ -1,0 +1,5 @@
+---
+source: mmk-cli/tests/messages.rs
+expression: s
+---
+diff at 12 of 15 files, 900 of 1000 lines (90% of cap); approaching review cap

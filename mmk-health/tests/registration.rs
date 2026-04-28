@@ -1,13 +1,12 @@
 //! Pattern A — monorepo-style registration files
 //! (`*.contribution.ts` paired with `registerAction2` / `Action2`).
 
+mod common;
+
+use common::p;
 use mmk_health::ts::analyze_ts;
 use mmk_health::HealthPattern;
 use std::path::PathBuf;
-
-fn p(s: &str) -> PathBuf {
-    PathBuf::from(s)
-}
 
 const REGISTRATION_BODY: &str = r"
 import { registerAction2, Action2 } from 'vs/platform/actions/common/actions';

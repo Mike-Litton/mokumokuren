@@ -1,6 +1,13 @@
 //! Fixture-repo helpers. Creation uses the git CLI (`git` in $PATH) —
 //! rolling our own commit synthesis via gix's write APIs would be
 //! considerably more code for no test-value gain.
+//!
+//! `init_repo` / `commit_all` / `write` / `git` / `DAY` are
+//! intentionally duplicated in `mmk-cli/tests/common/mod.rs`: a
+//! workspace `mmk-test-fixtures` crate would add cross-crate path
+//! dev-deps that complicate `cargo install`, and the helpers haven't
+//! drifted across three releases. Re-evaluate if a third crate needs
+//! the same surface.
 
 use std::path::Path;
 use std::process::Command;

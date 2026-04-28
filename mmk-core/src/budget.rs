@@ -86,6 +86,23 @@ pub fn budget_progress(check: &BudgetCheck, cfg: &BulkCfg) -> BudgetProgress {
     }
 }
 
+/// Map a [`BudgetProgress::peak_ratio`] to its tier.
+///
+/// # Examples
+///
+/// The 50% / 75% / 100% transition points the ramp emits at:
+///
+/// ```
+/// use mmk_core::budget::{budget_tier, BudgetProgress, BudgetTier};
+///
+/// fn tier_at(r: f64) -> BudgetTier {
+///     budget_tier(&BudgetProgress { files: (0, 0), lines: (0, 0), peak_ratio: r })
+/// }
+/// assert_eq!(tier_at(0.40), BudgetTier::Quiet);
+/// assert_eq!(tier_at(0.60), BudgetTier::Approaching);
+/// assert_eq!(tier_at(0.80), BudgetTier::Near);
+/// assert_eq!(tier_at(1.10), BudgetTier::Over);
+/// ```
 #[must_use]
 pub fn budget_tier(progress: &BudgetProgress) -> BudgetTier {
     let r = progress.peak_ratio;

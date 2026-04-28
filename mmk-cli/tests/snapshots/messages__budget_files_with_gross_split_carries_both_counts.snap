@@ -1,0 +1,5 @@
+---
+source: mmk-cli/tests/messages.rs
+expression: s
+---
+diff touches 20 files (45 gross, ignore_for_budget excluded 25); cap 15; large diffs concentrate rollback risk and slow review

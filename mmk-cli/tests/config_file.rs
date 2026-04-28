@@ -4,17 +4,15 @@
 
 mod common;
 
-use common::{commit_all, init_repo, write, CWD_LOCK, DAY};
+use common::{commit_all, init_repo, write, DAY};
 use mokumokuren::args::{AnalyzeArgs, Format};
 use serde_json::Value;
+use serial_test::serial;
 use std::collections::HashSet;
 use std::path::Path;
 use tempfile::TempDir;
 
 fn run_in(repo: &Path, args: AnalyzeArgs) -> (Vec<u8>, Vec<u8>) {
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let orig = std::env::current_dir().unwrap();
     std::env::set_current_dir(repo).unwrap();
     let mut stdout: Vec<u8> = Vec::new();
@@ -65,6 +63,7 @@ fn paths_in(stdout: &[u8]) -> HashSet<String> {
         .collect()
 }
 
+#[serial(cwd)]
 #[test]
 fn no_config_file_includes_all_paths() {
     let dir = TempDir::new().unwrap();
@@ -81,6 +80,7 @@ fn no_config_file_includes_all_paths() {
     assert!(paths.contains("po/sv.po"));
 }
 
+#[serial(cwd)]
 #[test]
 fn repo_root_config_filters_listed_paths() {
     let dir = TempDir::new().unwrap();
@@ -101,6 +101,7 @@ fn repo_root_config_filters_listed_paths() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn cli_ignore_unions_with_config_file() {
     let dir = TempDir::new().unwrap();
@@ -124,6 +125,7 @@ fn cli_ignore_unions_with_config_file() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn explicit_config_path_overrides_repo_discovery() {
     let dir = TempDir::new().unwrap();
@@ -153,23 +155,18 @@ fn explicit_config_path_overrides_repo_discovery() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn explicit_missing_config_path_is_an_error() {
     let dir = TempDir::new().unwrap();
     let now: i64 = 1_700_000_000;
     build_multi_ecosystem_fixture(dir.path(), now);
 
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let orig = std::env::current_dir().unwrap();
-    std::env::set_current_dir(dir.path()).unwrap();
     let mut args = default_args();
     args.config = Some(dir.path().join("does-not-exist.toml"));
-    let mut stdout: Vec<u8> = Vec::new();
-    let mut stderr: Vec<u8> = Vec::new();
-    let res = mokumokuren::commands::analyze::run(&args, &mut stdout, &mut stderr);
-    std::env::set_current_dir(orig).unwrap();
+    let (res, _, _) = common::with_cwd(dir.path(), |so, se| {
+        mokumokuren::commands::analyze::run(&args, so, se)
+    });
     let err = res.expect_err("missing explicit --config should error");
     let msg = format!("{err:#}");
     assert!(
@@ -178,6 +175,7 @@ fn explicit_missing_config_path_is_an_error() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn verbose_reports_config_source_and_filter_impact() {
     let dir = TempDir::new().unwrap();

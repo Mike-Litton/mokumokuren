@@ -67,7 +67,7 @@ pub fn run<O: Write, E: Write>(args: &EvalArgs, stdout: &mut O, stderr: &mut E) 
     // `bulk.max_files` / `max_lines` decide which of the sampled
     // commits go through the full analyzer path vs which fire as
     // bulk-self-filter findings; the toml override has to be
-    // honored or eval mis-reports the firing-rate baseline on
+    // honored or eval reports the wrong firing-rate baseline on
     // wide-grain repos.
     if let Some(file_b) = file_cfg.bulk.as_ref() {
         if let Some(t) = file_b.greenfield_threshold {
@@ -758,10 +758,11 @@ const LEARN_MIN_SUBJECT_COUNT: usize = 3;
 /// archived-version snapshots, lockstep manifest files).
 ///
 /// `mean_inverse_conditional_probability` is reported as evidence
-/// rather than used as a filter — it would mis-classify legit
-/// 1-to-N parent-file patterns (e.g. an `index.ts` re-exporting many
-/// children) as noise. The user reads the suggestion + evidence and
-/// decides whether to add the path to `ignore_partners`.
+/// rather than used as a filter — using it as a filter would
+/// wrongly classify legit 1-to-N parent-file patterns (e.g. an
+/// `index.ts` re-exporting many children) as noise. The user reads
+/// the suggestion + evidence and decides whether to add the path
+/// to `ignore_partners`.
 fn synthesize_learn_suggestions(
     partner_subjects: &BTreeMap<String, BTreeSet<String>>,
     commits_touching: &ahash::AHashMap<PathBuf, u32>,

@@ -1,36 +1,9 @@
+mod common;
+
 use ahash::AHashSet;
-use mmk_core::coupling::{
-    compute_conditional_couples_for, neighborhood, top_couples_for, CouplingEntry,
-};
-use mmk_core::types::{Commit, CommitInfo, FileDelta};
+use common::{commit, entry_for, p};
+use mmk_core::coupling::{compute_conditional_couples_for, neighborhood, top_couples_for};
 use std::path::{Path, PathBuf};
-
-fn commit(ts: i64, files: &[&str]) -> Commit {
-    Commit {
-        info: CommitInfo {
-            sha: format!("{ts:040x}"),
-            parent_sha: None,
-            timestamp: ts,
-            author_email: "t@example.com".into(),
-        },
-        deltas: files
-            .iter()
-            .map(|p| FileDelta {
-                path: PathBuf::from(p),
-                added: 1,
-                deleted: 0,
-            })
-            .collect(),
-    }
-}
-
-fn p(s: &str) -> PathBuf {
-    PathBuf::from(s)
-}
-
-fn entry_for<'a>(entries: &'a [CouplingEntry], partner: &str) -> Option<&'a CouplingEntry> {
-    entries.iter().find(|e| e.partner == p(partner))
-}
 
 #[test]
 fn jaccard_three_quarters_on_hand_built_fixture() {

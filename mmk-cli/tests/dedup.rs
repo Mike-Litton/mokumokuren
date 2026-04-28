@@ -12,9 +12,10 @@
 
 mod common;
 
-use common::{commit_all, init_repo, write, CWD_LOCK, DAY};
+use common::{commit_all, init_repo, write, DAY};
 use mokumokuren::args::{Format, Gate, ReviewArgs};
 use mokumokuren::dedup::{should_suppress, DedupRecord};
+use serial_test::serial;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -115,15 +116,9 @@ fn review_args() -> ReviewArgs {
 }
 
 fn run_in(repo: &std::path::Path, args: ReviewArgs) -> Vec<u8> {
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let orig = std::env::current_dir().unwrap();
-    std::env::set_current_dir(repo).unwrap();
-    let mut stdout: Vec<u8> = Vec::new();
-    let mut stderr: Vec<u8> = Vec::new();
-    let res = mokumokuren::commands::review::run(&args, None, &mut stdout, &mut stderr);
-    std::env::set_current_dir(orig).unwrap();
+    let (res, stdout, _) = common::with_cwd(repo, |so, se| {
+        mokumokuren::commands::review::run(&args, None, so, se)
+    });
     res.expect("review");
     stdout
 }
@@ -155,6 +150,7 @@ fn unique_cache_dir() -> TempDir {
     TempDir::new().expect("tmpdir")
 }
 
+#[serial(cwd)]
 #[test]
 fn review_twice_in_succession_suppresses_second() {
     // Same findings hash + same HEAD + within TTL → second invocation
@@ -178,6 +174,7 @@ fn review_twice_in_succession_suppresses_second() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_re_emits_after_head_changes() {
     // A fresh commit changes HEAD SHA → re-emit even within TTL.
@@ -201,6 +198,7 @@ fn review_re_emits_after_head_changes() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_re_emits_after_ttl_elapsed() {
     // TTL=1s + sleep 2 → second invocation re-emits.
@@ -225,6 +223,7 @@ fn review_re_emits_after_ttl_elapsed() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_no_dedup_flag_always_emits() {
     // --no-dedup must bypass the suppression entirely.

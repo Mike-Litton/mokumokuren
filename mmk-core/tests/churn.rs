@@ -1,28 +1,11 @@
+mod common;
+
 use ahash::AHashMap;
+use common::commit;
 use mmk_core::churn::{commits_touching, relative_churn, weighted_churn};
-use mmk_core::types::{Commit, CommitInfo, FileDelta};
 use std::path::PathBuf;
 
 const DAY: i64 = 86_400;
-
-fn commit(ts: i64, files: &[(&str, u32, u32)]) -> Commit {
-    Commit {
-        info: CommitInfo {
-            sha: format!("{ts:040x}"),
-            parent_sha: None,
-            timestamp: ts,
-            author_email: "t@example.com".into(),
-        },
-        deltas: files
-            .iter()
-            .map(|(p, a, d)| FileDelta {
-                path: PathBuf::from(p),
-                added: *a,
-                deleted: *d,
-            })
-            .collect(),
-    }
-}
 
 #[test]
 fn empty_input_yields_empty_map() {

@@ -1,0 +1,5 @@
+---
+source: mmk-cli/tests/messages.rs
+expression: s
+---
+session is 8000 lines across 4 commits; cap 8000

@@ -8,9 +8,10 @@
 
 mod common;
 
-use common::{build_coupling_fixture, commit_all, init_repo, write, CWD_LOCK, DAY};
+use common::{build_coupling_fixture, commit_all, init_repo, write, DAY};
 use mokumokuren::args::{Format, Gate, ReviewArgs};
 use serde_json::Value;
+use serial_test::serial;
 use tempfile::TempDir;
 
 fn review_args() -> ReviewArgs {
@@ -36,15 +37,9 @@ fn review_args() -> ReviewArgs {
 }
 
 fn run_in(repo: &std::path::Path, args: ReviewArgs) -> (Vec<u8>, Vec<u8>) {
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let orig = std::env::current_dir().unwrap();
-    std::env::set_current_dir(repo).unwrap();
-    let mut stdout: Vec<u8> = Vec::new();
-    let mut stderr: Vec<u8> = Vec::new();
-    let res = mokumokuren::commands::review::run(&args, None, &mut stdout, &mut stderr);
-    std::env::set_current_dir(orig).unwrap();
+    let (res, stdout, stderr) = common::with_cwd(repo, |so, se| {
+        mokumokuren::commands::review::run(&args, None, so, se)
+    });
     res.expect("review should succeed on fixture");
     (stdout, stderr)
 }
@@ -53,19 +48,14 @@ fn run_in_with_verdict(
     repo: &std::path::Path,
     args: ReviewArgs,
 ) -> (Vec<u8>, mokumokuren::Verdict) {
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let orig = std::env::current_dir().unwrap();
-    std::env::set_current_dir(repo).unwrap();
-    let mut stdout: Vec<u8> = Vec::new();
-    let mut stderr: Vec<u8> = Vec::new();
-    let verdict =
-        mokumokuren::commands::review::run(&args, None, &mut stdout, &mut stderr).expect("review");
-    std::env::set_current_dir(orig).unwrap();
+    let (res, stdout, _) = common::with_cwd(repo, |so, se| {
+        mokumokuren::commands::review::run(&args, None, so, se)
+    });
+    let verdict = res.expect("review");
     (stdout, verdict)
 }
 
+#[serial(cwd)]
 #[test]
 fn review_silent_on_clean_working_tree() {
     let dir = TempDir::new().unwrap();
@@ -90,6 +80,7 @@ fn review_silent_on_clean_working_tree() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_emits_hotspot_for_changed_top_n_file() {
     let dir = TempDir::new().unwrap();
@@ -124,6 +115,7 @@ fn review_emits_hotspot_for_changed_top_n_file() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_emits_coupling_miss_on_uncommitted_diff() {
     let dir = TempDir::new().unwrap();
@@ -159,6 +151,7 @@ fn review_emits_coupling_miss_on_uncommitted_diff() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_silent_when_partner_also_touched() {
     let dir = TempDir::new().unwrap();
@@ -185,6 +178,7 @@ fn review_silent_when_partner_also_touched() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_staged_only_reads_index() {
     let dir = TempDir::new().unwrap();
@@ -216,6 +210,7 @@ fn review_staged_only_reads_index() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_range_uses_committed_diff() {
     let dir = TempDir::new().unwrap();
@@ -267,6 +262,7 @@ fn review_range_uses_committed_diff() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_self_throttles_on_bulk_diff() {
     // When the input diff itself trips bulk thresholds, review
@@ -308,6 +304,7 @@ fn review_self_throttles_on_bulk_diff() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_respects_coupling_threshold() {
     // --coupling-threshold above the partner's Wilson lower bound
@@ -336,6 +333,7 @@ fn review_respects_coupling_threshold() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_respects_coupling_ignore_partners() {
     // A glob in [coupling] ignore_partners must drop the matching
@@ -370,6 +368,7 @@ fn review_respects_coupling_ignore_partners() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_gate_warn_returns_nonzero_on_warn_finding() {
     // --gate warn must surface a non-zero verdict when any
@@ -389,6 +388,7 @@ fn review_gate_warn_returns_nonzero_on_warn_finding() {
     assert_eq!(verdict, mokumokuren::Verdict::GateTriggered);
 }
 
+#[serial(cwd)]
 #[test]
 fn review_gate_none_returns_ok_even_with_findings() {
     let dir = TempDir::new().unwrap();
@@ -402,6 +402,7 @@ fn review_gate_none_returns_ok_even_with_findings() {
     assert_eq!(verdict, mokumokuren::Verdict::Ok);
 }
 
+#[serial(cwd)]
 #[test]
 fn review_legacy_coupling_threshold_emits_deprecation_warning_in_verbose() {
     // Pinning [coupling] threshold = X must surface a one-line
@@ -423,16 +424,10 @@ fn review_legacy_coupling_threshold_emits_deprecation_warning_in_verbose() {
     args.format = Format::Json;
     args.verbose = true;
 
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let orig = std::env::current_dir().unwrap();
-    std::env::set_current_dir(dir.path()).unwrap();
-    let mut stdout: Vec<u8> = Vec::new();
-    let mut stderr: Vec<u8> = Vec::new();
-    let _ =
-        mokumokuren::commands::review::run(&args, None, &mut stdout, &mut stderr).expect("review");
-    std::env::set_current_dir(orig).unwrap();
+    let (res, _, stderr) = common::with_cwd(dir.path(), |so, se| {
+        mokumokuren::commands::review::run(&args, None, so, se).map(|_| ())
+    });
+    res.expect("review");
     let err = String::from_utf8(stderr).unwrap();
     assert!(
         err.contains("[coupling] threshold is deprecated"),
@@ -440,6 +435,7 @@ fn review_legacy_coupling_threshold_emits_deprecation_warning_in_verbose() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_legacy_coupling_threshold_silent_without_verbose() {
     // Same config, no -v → no deprecation noise. The warning is
@@ -458,16 +454,10 @@ fn review_legacy_coupling_threshold_silent_without_verbose() {
     let mut args = review_args();
     args.format = Format::Json;
 
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let orig = std::env::current_dir().unwrap();
-    std::env::set_current_dir(dir.path()).unwrap();
-    let mut stdout: Vec<u8> = Vec::new();
-    let mut stderr: Vec<u8> = Vec::new();
-    let _ =
-        mokumokuren::commands::review::run(&args, None, &mut stdout, &mut stderr).expect("review");
-    std::env::set_current_dir(orig).unwrap();
+    let (res, _, stderr) = common::with_cwd(dir.path(), |so, se| {
+        mokumokuren::commands::review::run(&args, None, so, se).map(|_| ())
+    });
+    res.expect("review");
     let err = String::from_utf8(stderr).unwrap();
     assert!(
         !err.contains("deprecated"),
@@ -475,6 +465,7 @@ fn review_legacy_coupling_threshold_silent_without_verbose() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_emits_health_warn_when_test_partner_not_touched() {
     // Editing src/foo.ts without touching src/foo.test.ts must
@@ -519,6 +510,7 @@ fn review_emits_health_warn_when_test_partner_not_touched() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_health_warn_suppressed_when_test_partner_also_touched() {
     // The Warn for Pattern C is the "you forgot the test" signal.
@@ -566,6 +558,7 @@ fn review_health_warn_suppressed_when_test_partner_also_touched() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_includes_untracked_in_changed_files() {
     // An untracked file (created on disk, not `git add`-ed) should be
@@ -600,6 +593,7 @@ fn review_includes_untracked_in_changed_files() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_suppresses_coupling_when_partner_is_now_untracked() {
     // The historical partner `core/b.rs` is a co-changer of
@@ -662,6 +656,7 @@ fn review_suppresses_coupling_when_partner_is_now_untracked() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_respects_ignores_for_untracked() {
     // An untracked file matching an ignore glob must not appear in
@@ -703,6 +698,7 @@ fn review_respects_ignores_for_untracked() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_skips_binary_untracked() {
     // Untracked files whose first 8 KiB contains a NUL byte must be
@@ -740,6 +736,7 @@ fn review_skips_binary_untracked() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_signals_greenfield_when_diff_is_mostly_new() {
     // When most of the diff is paths the analyzer hasn't seen, the
@@ -808,6 +805,7 @@ fn review_signals_greenfield_when_diff_is_mostly_new() {
     assert_eq!(greenfield[0]["severity"], "info");
 }
 
+#[serial(cwd)]
 #[test]
 fn review_no_greenfield_signal_when_history_layer_fired() {
     // The greenfield finding is a fall-through, not an addition.
@@ -848,6 +846,7 @@ fn review_no_greenfield_signal_when_history_layer_fired() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_budget_ramp_fires_by_default() {
     // The under-cap continuous ramp is on by default: a 60 %-of-cap
@@ -887,6 +886,7 @@ fn review_budget_ramp_fires_by_default() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_budget_ramp_silent_when_disabled() {
     // [sensor.budget_ramp] enabled = false silences the under-cap
@@ -928,6 +928,7 @@ fn review_budget_ramp_silent_when_disabled() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_emits_budget_when_diff_exceeds() {
     let dir = TempDir::new().unwrap();
@@ -962,6 +963,7 @@ fn review_emits_budget_when_diff_exceeds() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_emits_structure_divergence_on_new_file_not_matching_convention() {
     // 3 sibling .tsx files share zod + Create*Dialog template.
@@ -1000,6 +1002,7 @@ fn review_emits_structure_divergence_on_new_file_not_matching_convention() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_bulk_does_not_suppress_structure_or_complexity() {
     // The bulk-self-filter exists to skip the *expensive* analyze
@@ -1068,6 +1071,7 @@ fn review_bulk_does_not_suppress_structure_or_complexity() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_emits_complexity_for_deeply_nested_function() {
     // Untracked subject with nesting depth 8 — over default cap=6.
@@ -1113,6 +1117,7 @@ fn review_emits_complexity_for_deeply_nested_function() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_ignore_for_budget_keeps_generated_file_below_cap() {
     // v0.6: a 1500-line generated file regeneration would otherwise
@@ -1217,6 +1222,7 @@ fn review_ignore_for_budget_keeps_generated_file_below_cap() {
     assert_eq!(ignored[0].as_str().unwrap(), "**/routeTree.gen.ts");
 }
 
+#[serial(cwd)]
 #[test]
 fn review_default_gate_suppresses_wilson_one_of_one() {
     // n=1 / k=1 has Wilson 95% lower ≈ 0.206. Pre-v0.6 this scraped

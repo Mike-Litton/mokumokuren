@@ -1,0 +1,5 @@
+---
+source: mmk-cli/tests/messages.rs
+expression: s
+---
+src/dialogs/resume/sections/job-tracker.tsx: new file in src/dialogs/resume/sections/; 15 sibling *.tsx files share imports {zod, @lingui/react/macro, useResumeStore, useDialogStore, useForm, @/components/ui/form} (showing 6 of 11 ≥66%) and export template Create*Dialog, Update*Dialog

@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc a225c4140172cb33534f08e369845dc0d379993190a84f1869ea8185ffe05317 # shrinks to snapshots = [Snapshot { label: "s1", ranking: [HotspotEntry { path: "b.rs", loc: 100, weighted_churn: 1.0, relative_churn: 0.01, hotspot_score: 999.0, hotspot_rank: 1, commits_touching: 1, last_modified: 0, top_couples: [] }] }, Snapshot { label: "s2", ranking: [HotspotEntry { path: "a.rs", loc: 100, weighted_churn: 1.0, relative_churn: 0.01, hotspot_score: 999.0, hotspot_rank: 1, commits_touching: 1, last_modified: 0, top_couples: [] }, HotspotEntry { path: "a.rs", loc: 100, weighted_churn: 1.0, relative_churn: 0.01, hotspot_score: 998.0, hotspot_rank: 2, commits_touching: 1, last_modified: 0, top_couples: [] }] }]
+cc 06bf31df372edab0d4e4cece198dd17b185687fb1b14fb1ab83cdc8893b99528 # shrinks to snap = Snapshot { label: "s2", ranking: [HotspotEntry { path: "w.rs", loc: 100, weighted_churn: 1.0, relative_churn: 0.01, hotspot_score: 999.0, hotspot_rank: 1, commits_touching: 1, last_modified: 0, top_couples: [] }, HotspotEntry { path: "w.rs", loc: 100, weighted_churn: 1.0, relative_churn: 0.01, hotspot_score: 998.0, hotspot_rank: 2, commits_touching: 1, last_modified: 0, top_couples: [] }] }, copies = 2

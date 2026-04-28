@@ -1,0 +1,5 @@
+---
+source: mmk-cli/tests/messages.rs
+expression: s
+---
+dlg/foo.tsx: existing file in dlg/; 4 sibling *.tsx files share imports {zod}

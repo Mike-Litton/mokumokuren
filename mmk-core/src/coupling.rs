@@ -60,6 +60,50 @@ pub struct CouplingEntry {
 /// `O(files_per_commit²)`.
 ///
 /// `k == 0` returns every partner, ranked.
+///
+/// # Examples
+///
+/// Two-file fixture: A and B co-change in two commits, A appears
+/// alone in a third. `jaccard(A,B) = 2 / (3 + 2 - 2) = 2/3`.
+///
+/// ```
+/// use ahash::AHashSet;
+/// use mmk_core::coupling::top_couples_for;
+/// use mmk_core::types::{Commit, CommitInfo, FileDelta};
+/// use std::path::PathBuf;
+///
+/// fn commit(ts: i64, files: &[&str]) -> Commit {
+///     Commit {
+///         info: CommitInfo {
+///             sha: format!("{ts:040x}"),
+///             parent_sha: None,
+///             timestamp: ts,
+///             author_email: "t@example.com".into(),
+///         },
+///         deltas: files
+///             .iter()
+///             .map(|p| FileDelta {
+///                 path: PathBuf::from(p),
+///                 added: 1,
+///                 deleted: 0,
+///             })
+///             .collect(),
+///     }
+/// }
+///
+/// let commits = vec![
+///     commit(100, &["A", "B"]),
+///     commit(200, &["A", "B"]),
+///     commit(300, &["A"]),
+/// ];
+/// let mut targets = AHashSet::new();
+/// targets.insert(PathBuf::from("A"));
+/// let out = top_couples_for(&commits, &targets, 1);
+/// let entries = out.get(&PathBuf::from("A")).unwrap();
+/// assert_eq!(entries.len(), 1);
+/// assert_eq!(entries[0].partner, PathBuf::from("B"));
+/// assert!((entries[0].jaccard - 2.0 / 3.0).abs() < 1e-9);
+/// ```
 #[must_use]
 pub fn top_couples_for(
     commits: &[Commit],
@@ -280,6 +324,53 @@ pub struct NeighborhoodNode {
 /// looser than Herzig & Zeller (2013) — they untangle at AST /
 /// dependency granularity; mmk approximates with co-change-graph
 /// cohesion at diff time.
+///
+/// # Examples
+///
+/// Three paths, four commits: `A↔B` co-change tightly, `C` is
+/// untouched-with-them. The graph splits into two components.
+///
+/// ```
+/// use ahash::AHashSet;
+/// use mmk_core::coupling::connected_components_by_wilson;
+/// use mmk_core::types::{Commit, CommitInfo, FileDelta};
+/// use std::path::PathBuf;
+///
+/// fn c(ts: i64, files: &[&str]) -> Commit {
+///     Commit {
+///         info: CommitInfo {
+///             sha: format!("{ts:040x}"),
+///             parent_sha: None,
+///             timestamp: ts,
+///             author_email: "t@example.com".into(),
+///         },
+///         deltas: files.iter().map(|p| FileDelta {
+///             path: PathBuf::from(p),
+///             added: 1,
+///             deleted: 0,
+///         }).collect(),
+///     }
+/// }
+///
+/// // 3 co-change commits over (A,B), 1 solo touch on C.
+/// let commits = vec![
+///     c(100, &["A", "B"]),
+///     c(200, &["A", "B"]),
+///     c(300, &["A", "B"]),
+///     c(400, &["C"]),
+/// ];
+/// let mut changed: AHashSet<PathBuf> = AHashSet::new();
+/// changed.insert(PathBuf::from("A"));
+/// changed.insert(PathBuf::from("B"));
+/// changed.insert(PathBuf::from("C"));
+///
+/// // Default-ish gate: confidence 0.30, sample-size 3.
+/// let comps = connected_components_by_wilson(&commits, &changed, 0.30, 3);
+/// assert_eq!(comps.len(), 2);
+/// // Largest component first; lex order within.
+/// assert_eq!(comps[0], vec![PathBuf::from("A"), PathBuf::from("B")]);
+/// assert_eq!(comps[1], vec![PathBuf::from("C")]);
+/// ```
 #[must_use]
 pub fn connected_components_by_wilson(
     commits: &[Commit],

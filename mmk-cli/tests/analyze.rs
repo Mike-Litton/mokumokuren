@@ -1,20 +1,15 @@
 mod common;
 
-use common::{build_canonical_fixture, CWD_LOCK};
+use common::build_canonical_fixture;
 use mokumokuren::args::{AnalyzeArgs, Format};
 use serde_json::Value;
+use serial_test::serial;
 use tempfile::TempDir;
 
 fn run_in(repo: &std::path::Path, args: AnalyzeArgs) -> Vec<u8> {
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let orig = std::env::current_dir().unwrap();
-    std::env::set_current_dir(repo).unwrap();
-    let mut stdout: Vec<u8> = Vec::new();
-    let mut stderr: Vec<u8> = Vec::new();
-    let res = mokumokuren::commands::analyze::run(&args, &mut stdout, &mut stderr);
-    std::env::set_current_dir(orig).unwrap();
+    let (res, stdout, _) = common::with_cwd(repo, |so, se| {
+        mokumokuren::commands::analyze::run(&args, so, se)
+    });
     res.expect("analyze should succeed on fixture");
     stdout
 }
@@ -34,6 +29,7 @@ fn default_args() -> AnalyzeArgs {
     }
 }
 
+#[serial(cwd)]
 #[test]
 fn json_output_on_canonical_fixture() {
     let dir = TempDir::new().unwrap();
@@ -53,6 +49,7 @@ fn json_output_on_canonical_fixture() {
     assert!(top["weighted_churn"].as_f64().unwrap() > 0.0);
 }
 
+#[serial(cwd)]
 #[test]
 fn text_output_on_canonical_fixture() {
     let dir = TempDir::new().unwrap();

@@ -18,6 +18,11 @@ test:
 test-ci:
     cargo nextest run --workspace --profile ci
 
+# Discretionary slow-suite recipe; reserved for mutation/miri/fuzz runs.
+# Default and CI profiles keep their tight timeout envelopes.
+test-slow:
+    cargo nextest run --workspace --profile slow
+
 bench:
     cargo bench --workspace
 

@@ -1,19 +1,44 @@
 //! Fixture-repo helpers. Creation uses the git CLI (`git` in $PATH) —
 //! rolling our own commit synthesis via gix's write APIs would be
 //! considerably more code for no test-value gain.
+//!
+//! `init_repo` / `commit_all` / `write` / `git` / `DAY` are
+//! intentionally duplicated in `mmk-git/tests/common/mod.rs`: a
+//! workspace `mmk-test-fixtures` crate would add cross-crate path
+//! dev-deps that complicate `cargo install`, and the helpers haven't
+//! drifted across three releases. Re-evaluate if a third crate needs
+//! the same surface.
 
 use std::path::Path;
 use std::process::Command;
-use std::sync::Mutex;
 
-/// Serializes process-wide CWD manipulation across parallel tests in
-/// the same binary. `analyze` and `init` both read `current_dir()`
-/// internally, so any test pointing them at a fixture has to flip CWD
-/// — and parallel flips race. Hold this lock for the duration of the
-/// command invocation.
-pub static CWD_LOCK: Mutex<()> = Mutex::new(());
-
+/// Tests that flip `current_dir()` (cwd-flipping helpers like
+/// `run_in`) carry `#[serial_test::serial(cwd)]` to serialize
+/// against the process-wide CWD hazard. Tests that don't touch cwd
+/// keep running in parallel.
 pub const DAY: i64 = 86_400;
+
+/// Run `f` with `current_dir = repo`, returning `(result, stdout,
+/// stderr)`. Centralises the cwd-flip + restore boilerplate that
+/// every per-command integration helper used to inline.
+///
+/// Callers pass a closure that takes `&mut Vec<u8>` writers for
+/// stdout / stderr and returns the command's `Result`. The helper
+/// owns lifetime of the buffers so callers can pull either back
+/// without re-flipping cwd.
+#[allow(dead_code)]
+pub fn with_cwd<R, F>(repo: &Path, f: F) -> (anyhow::Result<R>, Vec<u8>, Vec<u8>)
+where
+    F: FnOnce(&mut Vec<u8>, &mut Vec<u8>) -> anyhow::Result<R>,
+{
+    let orig = std::env::current_dir().expect("read cwd");
+    std::env::set_current_dir(repo).expect("set cwd");
+    let mut stdout: Vec<u8> = Vec::new();
+    let mut stderr: Vec<u8> = Vec::new();
+    let res = f(&mut stdout, &mut stderr);
+    std::env::set_current_dir(orig).expect("restore cwd");
+    (res, stdout, stderr)
+}
 
 pub fn git(cwd: &Path, args: &[&str]) {
     let out = Command::new("git")

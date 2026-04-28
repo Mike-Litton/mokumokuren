@@ -10,9 +10,10 @@
 
 mod common;
 
-use common::{commit_all, init_repo, write, CWD_LOCK, DAY};
+use common::{commit_all, init_repo, write, DAY};
 use mokumokuren::args::{Format, Gate, ReviewArgs};
 use serde_json::Value;
+use serial_test::serial;
 use tempfile::TempDir;
 
 fn review_args() -> ReviewArgs {
@@ -37,15 +38,9 @@ fn review_args() -> ReviewArgs {
 }
 
 fn run_review(repo: &std::path::Path, args: ReviewArgs) -> Vec<u8> {
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let orig = std::env::current_dir().unwrap();
-    std::env::set_current_dir(repo).unwrap();
-    let mut stdout: Vec<u8> = Vec::new();
-    let mut stderr: Vec<u8> = Vec::new();
-    let res = mokumokuren::commands::review::run(&args, None, &mut stdout, &mut stderr);
-    std::env::set_current_dir(orig).unwrap();
+    let (res, stdout, _) = common::with_cwd(repo, |so, se| {
+        mokumokuren::commands::review::run(&args, None, so, se)
+    });
     res.expect("review run");
     stdout
 }
@@ -115,6 +110,7 @@ fn build_two_cluster_fixture(repo: &std::path::Path, now: i64) {
     }
 }
 
+#[serial(cwd)]
 #[test]
 fn two_cluster_diff_fires_cohesion() {
     let dir = TempDir::new().unwrap();
@@ -137,6 +133,7 @@ fn two_cluster_diff_fires_cohesion() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn one_cluster_diff_does_not_fire_cohesion() {
     // The cluster-A files are *all* in the diff but no cluster-B
@@ -159,6 +156,7 @@ fn one_cluster_diff_does_not_fire_cohesion() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn greenfield_only_diff_does_not_fire_cohesion() {
     // Brand-new files with no history: every "component" the
@@ -185,6 +183,7 @@ fn greenfield_only_diff_does_not_fire_cohesion() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn min_files_per_cluster_blocks_singleton_clusters() {
     // One clear historical cluster (auth/{a,b,c}) plus one

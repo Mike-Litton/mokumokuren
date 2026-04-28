@@ -11,10 +11,11 @@
 
 mod common;
 
-use common::{commit_all, init_repo, write, CWD_LOCK, DAY};
+use common::{commit_all, init_repo, write, DAY};
 use mokumokuren::args::{Format, Gate, PreEditArgs, ReviewArgs};
 use mokumokuren::hook::{HookEnvelope, HookToolInput};
 use serde_json::Value;
+use serial_test::serial;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -74,33 +75,22 @@ fn post_tool_use_envelope() -> HookEnvelope {
 }
 
 fn run_pre_edit(repo: &std::path::Path, args: PreEditArgs, env: Option<&HookEnvelope>) -> Vec<u8> {
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let orig = std::env::current_dir().unwrap();
-    std::env::set_current_dir(repo).unwrap();
-    let mut stdout: Vec<u8> = Vec::new();
-    let mut stderr: Vec<u8> = Vec::new();
-    let res = mokumokuren::commands::pre_edit::run(&args, env, &mut stdout, &mut stderr);
-    std::env::set_current_dir(orig).unwrap();
+    let (res, stdout, _) = common::with_cwd(repo, |so, se| {
+        mokumokuren::commands::pre_edit::run(&args, env, so, se)
+    });
     res.expect("pre-edit run");
     stdout
 }
 
 fn run_review(repo: &std::path::Path, args: ReviewArgs, env: Option<&HookEnvelope>) -> Vec<u8> {
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let orig = std::env::current_dir().unwrap();
-    std::env::set_current_dir(repo).unwrap();
-    let mut stdout: Vec<u8> = Vec::new();
-    let mut stderr: Vec<u8> = Vec::new();
-    let res = mokumokuren::commands::review::run(&args, env, &mut stdout, &mut stderr);
-    std::env::set_current_dir(orig).unwrap();
+    let (res, stdout, _) = common::with_cwd(repo, |so, se| {
+        mokumokuren::commands::review::run(&args, env, so, se)
+    });
     res.expect("review run");
     stdout
 }
 
+#[serial(cwd)]
 #[test]
 fn pre_edit_envelope_with_file_path_threads_into_lookup() {
     // The hook envelope's tool_input.file_path takes the place of
@@ -129,6 +119,7 @@ fn pre_edit_envelope_with_file_path_threads_into_lookup() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_post_tool_use_with_warn_gate_emits_block_when_warn_finding_fires() {
     // Calibrated fixture: A and B co-change 4 of 5 prior commits
@@ -156,6 +147,7 @@ fn review_post_tool_use_with_warn_gate_emits_block_when_warn_finding_fires() {
     assert!(reason.contains("COUPLING") || reason.contains("warn"),);
 }
 
+#[serial(cwd)]
 #[test]
 fn review_post_tool_use_without_gate_uses_additional_context_only() {
     // Same fixture; same uncommitted edit; but no --gate. The warn
@@ -181,6 +173,7 @@ fn review_post_tool_use_without_gate_uses_additional_context_only() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn review_clean_tree_envelope_returns_empty_additional_context() {
     // Clean tree → no findings to surface. The hook output keeps

@@ -9,6 +9,11 @@
 # Mokumokuren local cache
 .mokumokuren/
 
+# insta intermediate snapshots awaiting `cargo insta review`. Reviewed
+# snapshots (`*.snap`) are committed; pending ones (`*.snap.new`) are
+# the developer's WIP and never make it to the repo.
+*.snap.new
+
 # Editors / IDEs
 .idea/
 .vscode/

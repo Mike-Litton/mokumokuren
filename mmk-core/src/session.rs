@@ -155,7 +155,11 @@ fn commit_entropy(commits: &[Commit]) -> f64 {
     #[allow(clippy::cast_precision_loss)]
     let norm = (n as f64).ln();
     if norm > 0.0 {
-        h / norm
+        // Clamp to [0, 1] — at perfect uniformity h equals norm to
+        // within a few ULPs of f64 accumulation, which can land the
+        // ratio just above 1.0. The docstring promises [0, 1]; honor
+        // it deterministically.
+        (h / norm).clamp(0.0, 1.0)
     } else {
         0.0
     }

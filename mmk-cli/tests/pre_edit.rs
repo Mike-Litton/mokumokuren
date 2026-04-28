@@ -6,9 +6,10 @@
 
 mod common;
 
-use common::{build_coupling_fixture, commit_all, init_repo, write, CWD_LOCK, DAY};
+use common::{build_coupling_fixture, commit_all, init_repo, write, DAY};
 use mokumokuren::args::{Format, Gate, PreEditArgs};
 use serde_json::Value;
+use serial_test::serial;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -32,19 +33,14 @@ fn pre_edit_args(path: &str) -> PreEditArgs {
 }
 
 fn run_in(repo: &std::path::Path, args: PreEditArgs) -> Vec<u8> {
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let orig = std::env::current_dir().unwrap();
-    std::env::set_current_dir(repo).unwrap();
-    let mut stdout: Vec<u8> = Vec::new();
-    let mut stderr: Vec<u8> = Vec::new();
-    let res = mokumokuren::commands::pre_edit::run(&args, None, &mut stdout, &mut stderr);
-    std::env::set_current_dir(orig).unwrap();
+    let (res, stdout, _) = common::with_cwd(repo, |so, se| {
+        mokumokuren::commands::pre_edit::run(&args, None, so, se)
+    });
     res.expect("pre-edit should succeed on fixture");
     stdout
 }
 
+#[serial(cwd)]
 #[test]
 fn pre_edit_emits_hotspot_when_path_is_top_n() {
     let dir = TempDir::new().unwrap();
@@ -70,6 +66,7 @@ fn pre_edit_emits_hotspot_when_path_is_top_n() {
         .any(|f| f["message"].as_str().unwrap_or("").contains("core/a.rs")));
 }
 
+#[serial(cwd)]
 #[test]
 fn pre_edit_emits_coupling_for_partners_above_threshold() {
     let dir = TempDir::new().unwrap();
@@ -99,6 +96,7 @@ fn pre_edit_emits_coupling_for_partners_above_threshold() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn pre_edit_emits_ok_finding_when_no_signal_fires() {
     // When no layer (HOTSPOT/COUPLING/HEALTH/DRIFT) fires, pre-edit
@@ -153,6 +151,7 @@ fn pre_edit_emits_ok_finding_when_no_signal_fires() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn pre_edit_no_ok_finding_when_coupling_already_fires() {
     // The OK finding is a fall-through, not an addition. If the
@@ -173,6 +172,7 @@ fn pre_edit_no_ok_finding_when_coupling_already_fires() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn pre_edit_emits_ok_finding_for_lone_file_with_no_partners() {
     // A file with history but no co-edited partners and no other
@@ -212,6 +212,7 @@ fn pre_edit_emits_ok_finding_for_lone_file_with_no_partners() {
     assert_eq!(f["layer"], "coupling");
 }
 
+#[serial(cwd)]
 #[test]
 fn pre_edit_with_drift_sessions_runs_and_shapes_findings() {
     use std::fmt::Write as _;
@@ -257,6 +258,7 @@ fn pre_edit_with_drift_sessions_runs_and_shapes_findings() {
     }
 }
 
+#[serial(cwd)]
 #[test]
 fn pre_edit_emits_health_test_pair_finding_when_partner_exists() {
     // With [health.ts] enabled, pre-edit on a TS impl file whose
@@ -316,6 +318,7 @@ fn pre_edit_emits_health_test_pair_finding_when_partner_exists() {
     assert_eq!(matches[0]["subject"], "src/foo.ts");
 }
 
+#[serial(cwd)]
 #[test]
 fn pre_edit_health_block_absent_when_disabled() {
     // Default pre-edit (no [health.ts]) emits no `health` block,
@@ -336,6 +339,7 @@ fn pre_edit_health_block_absent_when_disabled() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn pre_edit_absolute_path_resolves_to_repo_relative_lookup() {
     // Hook integrations pass absolute paths via
@@ -385,6 +389,7 @@ fn pre_edit_absolute_path_resolves_to_repo_relative_lookup() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn pre_edit_says_new_file_for_untracked_subject() {
     // Pre-edit on a file that's never been committed AND isn't in
@@ -421,6 +426,7 @@ fn pre_edit_says_new_file_for_untracked_subject() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn pre_edit_emits_structure_for_directory_convention() {
     // 4 sibling .tsx files share `zod` and a Create*Dialog
@@ -466,6 +472,7 @@ fn pre_edit_emits_structure_for_directory_convention() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn pre_edit_budget_ramp_fires_by_default() {
     // Pre-edit's continuous ramp is on by default: a working tree
@@ -500,6 +507,7 @@ fn pre_edit_budget_ramp_fires_by_default() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn pre_edit_budget_ramp_silent_when_disabled() {
     use std::fmt::Write as _;
@@ -538,6 +546,7 @@ fn pre_edit_budget_ramp_silent_when_disabled() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn pre_edit_json_envelope_has_path_and_findings() {
     let dir = TempDir::new().unwrap();

@@ -48,6 +48,9 @@ dhat-heap = ["dep:dhat"]
 [dev-dependencies]
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+insta = { workspace = true }
+serial_test = { workspace = true }
+proptest = { workspace = true }
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.{ archive-format }"

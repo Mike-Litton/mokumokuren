@@ -3,21 +3,16 @@
 
 mod common;
 
-use common::{build_coupling_fixture, CWD_LOCK, DAY};
+use common::{build_coupling_fixture, DAY};
 use mokumokuren::args::{AnalyzeArgs, Format};
 use serde_json::Value;
+use serial_test::serial;
 use tempfile::TempDir;
 
 fn run_in(repo: &std::path::Path, args: AnalyzeArgs) -> Vec<u8> {
-    let _g = CWD_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let orig = std::env::current_dir().unwrap();
-    std::env::set_current_dir(repo).unwrap();
-    let mut stdout: Vec<u8> = Vec::new();
-    let mut stderr: Vec<u8> = Vec::new();
-    let res = mokumokuren::commands::analyze::run(&args, &mut stdout, &mut stderr);
-    std::env::set_current_dir(orig).unwrap();
+    let (res, stdout, _) = common::with_cwd(repo, |so, se| {
+        mokumokuren::commands::analyze::run(&args, so, se)
+    });
     res.expect("analyze should succeed on coupling fixture");
     stdout
 }
@@ -37,6 +32,7 @@ fn json_args() -> AnalyzeArgs {
     }
 }
 
+#[serial(cwd)]
 #[test]
 fn json_files_carry_top_couples_array() {
     let dir = TempDir::new().unwrap();
@@ -76,6 +72,7 @@ fn json_files_carry_top_couples_array() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn couples_of_flag_returns_partners_for_a_single_path() {
     let dir = TempDir::new().unwrap();
@@ -111,6 +108,7 @@ fn couples_of_flag_returns_partners_for_a_single_path() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn default_text_table_does_not_include_couples_block() {
     let dir = TempDir::new().unwrap();
@@ -128,6 +126,7 @@ fn default_text_table_does_not_include_couples_block() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn text_with_couples_flag_renders_indented_partners() {
     let dir = TempDir::new().unwrap();
@@ -164,6 +163,7 @@ fn day_constant_still_exported() {
 // produced the neighborhood) and **CI/CD mode** (per-repo tuning
 // without code changes).
 
+#[serial(cwd)]
 #[test]
 fn blast_radius_threshold_echoes_in_json() {
     let dir = TempDir::new().unwrap();
@@ -184,6 +184,7 @@ fn blast_radius_threshold_echoes_in_json() {
     );
 }
 
+#[serial(cwd)]
 #[test]
 fn blast_radius_threshold_cli_override_filters_more() {
     let dir = TempDir::new().unwrap();
