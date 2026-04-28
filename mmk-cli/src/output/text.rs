@@ -118,6 +118,13 @@ pub fn write<W: Write>(
 }
 
 /// Render a `mmk session` text report.
+///
+/// When `suppress_window` is set the WINDOW ranking table is replaced
+/// with a single-line suppression notice. Used when the session is
+/// empty: the WINDOW table would bury the ANCHOR nudge under
+/// generated-file noise the user can fetch from `mmk analyze` if
+/// they want it.
+#[allow(clippy::too_many_arguments)]
 pub fn write_session<W: Write>(
     w: &mut W,
     window_ranked: &[HotspotEntry],
@@ -126,6 +133,7 @@ pub fn write_session<W: Write>(
     session_out: &SessionAnalyzeOutput,
     duration_ms: u64,
     blast: Option<(&Path, f64, &[NeighborhoodNode])>,
+    suppress_window: bool,
 ) -> Result<()> {
     writeln!(w, "session:")?;
     match &session_out.base {
@@ -154,8 +162,16 @@ pub fn write_session<W: Write>(
 
     writeln!(w, "\nsession ranking ({} files):", session_ranked.len())?;
     write_simple_table(w, session_ranked)?;
-    writeln!(w, "\nwindow ranking ({} files):", window_ranked.len())?;
-    write_simple_table(w, window_ranked)?;
+    if suppress_window {
+        writeln!(
+            w,
+            "\n{}",
+            crate::output::messages::session_window_suppressed(),
+        )?;
+    } else {
+        writeln!(w, "\nwindow ranking ({} files):", window_ranked.len())?;
+        write_simple_table(w, window_ranked)?;
+    }
 
     if let Some((root, threshold, nodes)) = blast {
         writeln!(

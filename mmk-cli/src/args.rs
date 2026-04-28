@@ -247,8 +247,10 @@ pub enum Gate {
 
 #[derive(Debug, Parser)]
 pub struct PreEditArgs {
-    /// File to look up. Relative to the repo root.
-    pub path: PathBuf,
+    /// File to look up. Relative to the repo root. Optional when mmk
+    /// is invoked via a Claude Code hook — the file path then comes
+    /// from the JSON envelope on stdin (`tool_input.file_path`).
+    pub path: Option<PathBuf>,
 
     /// Window for the historical baseline (couples + ranking).
     #[arg(long, default_value = "180days")]

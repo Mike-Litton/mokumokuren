@@ -6,8 +6,8 @@ use serde::Serialize;
 pub mod file;
 
 pub use file::{
-    BlastRadiusFile, BudgetRampFile, BulkFile, ComplexityFile, ConfigFile, CouplingFile,
-    HealthFile, HealthTsFile, SensorFile, StructureFile,
+    BlastRadiusFile, BudgetRampFile, BulkFile, CohesionFile, ComplexityFile, ConfigFile,
+    CouplingFile, HealthFile, HealthTsFile, SensorFile, StructureFile,
 };
 
 pub const SECONDS_PER_DAY: i64 = 86_400;
@@ -31,11 +31,15 @@ pub const DEFAULT_COUPLING_THRESHOLD: f64 = 0.30;
 /// Default Wilson 95 % lower-bound floor for `P(partner | target)`.
 ///
 /// Used by `mmk review` and `mmk pre-edit`. Reads as "I want to know
-/// about partners with at least 20 % conditional probability of
+/// about partners with at least 30 % conditional probability of
 /// co-edit, with 95 % statistical confidence." Frequency-invariant —
 /// hot files (54 / 203 ≈ 0.27) and quiet files (1 / 1 = 1.0) are
-/// scored on the same scale.
-pub const DEFAULT_COUPLING_CONFIDENCE_THRESHOLD: f64 = 0.20;
+/// scored on the same scale. v0.6 bumped this from 0.20: at 0.20 the
+/// n=1 Wilson floor (`wilson_lower(1, 1) ≈ 0.206`) just barely cleared,
+/// surfacing single-observation co-edits that agent test runs flagged
+/// as load-bearing-feeling false positives. v0.7 will retune from
+/// `mmk eval --replay` data across multiple repos.
+pub const DEFAULT_COUPLING_CONFIDENCE_THRESHOLD: f64 = 0.30;
 
 /// Default `[bulk] greenfield_threshold`.
 ///
@@ -66,6 +70,19 @@ pub const DEFAULT_STRUCTURE_EXPORT_TEMPLATE_MAJORITY: f64 = 0.85;
 pub const DEFAULT_STRUCTURE_TOP_IMPORTS_TO_SHOW: usize = 6;
 pub const DEFAULT_STRUCTURE_DIVERGENCE_MIN_MISSING: u32 = 1;
 
+/// `[bulk] ignore_for_budget` default — empty.
+///
+/// Globs in this list are excluded from the *diff-time* BUDGET
+/// accounting (bulk-self-filter and the over-cap / under-cap ramp
+/// triggers) so a generated-file regeneration (e.g. a router
+/// codegen output) doesn't trip BUDGET on every edit and silence
+/// HOTSPOT/COUPLING for the rest of the session. Distinct from
+/// `ignores` (which excludes paths from history analysis entirely)
+/// and from the per-commit historical bulk filter in `mmk-git`,
+/// which stays conservative. v0.6 ships an empty default; v0.7
+/// retunes from `mmk eval --replay` data.
+pub const DEFAULT_BULK_IGNORE_FOR_BUDGET: &[&str] = &[];
+
 /// `[sensor.complexity]` defaults.
 ///
 /// The relative thresholds catch outliers within a permissive
@@ -81,16 +98,51 @@ pub const DEFAULT_COMPLEXITY_LOC_RATIO: f64 = 3.0;
 pub const DEFAULT_COMPLEXITY_LOC_ABS_MAX: u32 = 80;
 pub const DEFAULT_COMPLEXITY_MIN_DIRECTORY_SIBLINGS: u32 = 3;
 
+/// `[sensor.cohesion]` defaults.
+///
+/// Cohesion gates a graph-connectivity question: are these N
+/// changed files in the diff plausibly part of one historical
+/// cluster, or do they decompose into multiple disjoint clusters?
+/// The bar is looser than COUPLING's because connectivity is a
+/// softer claim than "you missed an edit." Calibration knobs only;
+/// the math behind them lives in
+/// `mmk_core::coupling::connected_components_by_wilson`.
+///
+/// `confidence_threshold = 0.20`: the Wilson lower bound on the
+/// directional conditional co-change probability needed for an edge.
+/// Below COUPLING's 0.30 because cohesion edges that don't merge
+/// distinct historical clusters are silently fine; missing an edge
+/// that *should* connect a cluster fragments the graph and produces
+/// a false "tangled diff" finding. The looser bar is the right
+/// failure-mode trade.
+///
+/// `min_sample_size = 3`: at least one endpoint of the edge needs
+/// three commits of history. Same floor as COUPLING — single-commit
+/// pairs would otherwise reach Wilson's small-sample lower bound
+/// (≈0.21) and admit edges with no real evidence.
+///
+/// `min_files_per_cluster = 2`: a "cluster" with one file is just
+/// an isolated change, not a cluster. Singleton greenfield files
+/// (no commit history) are dropped before the count to avoid
+/// flagging "added one new file alongside two coupled ones" as a
+/// tangled diff.
+pub const DEFAULT_COHESION_CONFIDENCE_THRESHOLD: f64 = 0.20;
+pub const DEFAULT_COHESION_MIN_SAMPLE_SIZE: u32 = 3;
+pub const DEFAULT_COHESION_MIN_FILES_PER_CLUSTER: u32 = 2;
+
 /// Minimum `commits_touching(target)` required before COUPLING fires.
 ///
-/// Defaults to 1 — Wilson's lower bound already handles small-n
-/// correctly (a single observation scores `wilson_lower(1, 1) ≈ 0.21`,
-/// barely above the default `confidence_threshold = 0.20`). Earlier
-/// versions of this constant defaulted to 5 as a defensive floor on
-/// top of Wilson; that floor measurably suppressed real co-edits on
-/// quiet subjects (most fix commits) without improving precision,
-/// because Wilson alone was already gating the small-n cases.
-pub const DEFAULT_COUPLING_MIN_SAMPLE_SIZE: u32 = 1;
+/// v0.4 set this to 5 (defensive floor over Wilson). v0.5 dropped to
+/// 1 (Wilson alone, since the lower bound handles small-n honestly).
+/// v0.6 calibrated to 3: with `confidence_threshold = 0.30`, the n=1
+/// case (Wilson 0.21) already fails confidence, but n=2/2 still has
+/// Wilson ≈ 0.34 and would fire on a single coincidental co-edit.
+/// `min_sample_size = 3` enforces "at least three commits of subject
+/// history" before COUPLING infers anything, which agent test runs
+/// validated as the right bar for the gate without measurably
+/// suppressing real coupling. v0.7 will retune from
+/// `mmk eval --replay` data across 5+ reference repos.
+pub const DEFAULT_COUPLING_MIN_SAMPLE_SIZE: u32 = 3;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct WindowCfg {
@@ -114,6 +166,12 @@ pub struct BulkCfg {
     /// explicit greenfield acknowledgement so the agent doesn't have
     /// to guess why history-based layers are silent.
     pub greenfield_threshold: f64,
+    /// Glob patterns whose paths are excluded from diff-time BUDGET
+    /// accounting (bulk-self-filter, over-cap trigger, under-cap
+    /// ramp). The full diff still appears in `review.diff.files[]`
+    /// — this only affects the BUDGET layer's gross-vs-net counts.
+    /// Defaults to [`DEFAULT_BULK_IGNORE_FOR_BUDGET`] (empty).
+    pub ignore_for_budget: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -168,6 +226,7 @@ pub struct SensorCfg {
     pub structure: StructureCfg,
     pub complexity: ComplexityCfg,
     pub budget_ramp: BudgetRampCfg,
+    pub cohesion: CohesionCfg,
 }
 
 /// `[sensor.budget_ramp]` — under-cap continuous BUDGET feedback.
@@ -258,6 +317,44 @@ impl Default for ComplexityCfg {
     }
 }
 
+/// `[sensor.cohesion]` — tangled-diff detection via co-change-graph
+/// cohesion.
+///
+/// Fires when a working-tree diff partitions into multiple disjoint
+/// connected components in the historical co-change graph. The
+/// failure mode is well-evidenced (Herzig & Zeller 2013 on tangled
+/// changes inflating revert / review cost); mmk's implementation is
+/// a structural-fingerprint proxy at diff granularity rather than
+/// the AST-level untangling those papers describe. Severity is
+/// Info — the sensor names a pattern, it doesn't prescribe a fix.
+#[derive(Debug, Clone, Serialize)]
+pub struct CohesionCfg {
+    pub enabled: bool,
+    /// Wilson 95 % lower-bound floor for the symmetrized edge
+    /// metric. See [`DEFAULT_COHESION_CONFIDENCE_THRESHOLD`] for
+    /// the motivation behind the default.
+    pub confidence_threshold: f64,
+    /// Minimum value of `max(commits_touching(A),
+    /// commits_touching(B))` for the pair to admit an edge. Filters
+    /// the small-sample pairs Wilson alone wouldn't fully reject.
+    pub min_sample_size: u32,
+    /// Minimum cluster size for a component to count toward the
+    /// fire decision. Singletons aren't clusters; cohesion needs
+    /// ≥2 multi-file groups to claim "tangled."
+    pub min_files_per_cluster: u32,
+}
+
+impl Default for CohesionCfg {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            confidence_threshold: DEFAULT_COHESION_CONFIDENCE_THRESHOLD,
+            min_sample_size: DEFAULT_COHESION_MIN_SAMPLE_SIZE,
+            min_files_per_cluster: DEFAULT_COHESION_MIN_FILES_PER_CLUSTER,
+        }
+    }
+}
+
 /// `[health]` block — structural-pattern adapter (mmk-health).
 ///
 /// Currently ships a TypeScript adapter only; future implementations
@@ -311,6 +408,10 @@ impl Default for BulkCfg {
             max_files: 15,
             max_lines: 1000,
             greenfield_threshold: DEFAULT_GREENFIELD_THRESHOLD,
+            ignore_for_budget: DEFAULT_BULK_IGNORE_FOR_BUDGET
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
         }
     }
 }

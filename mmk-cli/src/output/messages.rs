@@ -49,35 +49,66 @@ pub fn hotspot(path: &Path, rank: u32, top: usize) -> String {
     format!("{}: rank #{rank} of top-{top}", path.display())
 }
 
-/// `diff touches A files; cap M[, analysis suppressed]; large diffs concentrate rollback risk and slow review`
+/// `diff touches N files [(G gross, ignore_for_budget excluded G-N)]; cap M[, HOTSPOT/COUPLING skipped (partners co-touched by construction)]; large diffs concentrate rollback risk and slow review`
 ///
-/// `suppressed = true` is the bulk-self-filter path: the diff itself
-/// was so big that hotspot/coupling analysis was skipped. The
-/// indicator tail names the implication (rollback risk + review
-/// slowdown) — the agent decides what to do; the message doesn't
-/// prescribe.
+/// The `suppressed = true` tail names *what* mmk did not run and
+/// *why*, instead of leaving the agent to infer it from "analysis
+/// suppressed" jargon. The history-graph layers (HOTSPOT, COUPLING,
+/// DRIFT, greenfield) are skipped on bulk diffs because their
+/// signal collapses at scale: with hundreds of changed files,
+/// every historical partner of every changed file is already in
+/// the diff, so COUPLING's "missed partner" question is trivially
+/// answered "no" and HOTSPOT degenerates to "every file is a
+/// hotspot." Per-file sensors (STRUCTURE, COMPLEXITY) still run —
+/// their cost and signal both scale per-file, not with diff size.
+///
+/// The rollback / review-slowdown tail is the empirical Cohen-2006
+/// SmartBear / Cisco data point on review-quality degradation past
+/// ~200 LOC; it stays as the descriptive implication.
+///
+/// When `gross` is `Some(g)` and `g > actual`, the prose reports
+/// both the net (post-`ignore_for_budget`) and gross totals so the
+/// agent sees what was excluded — silent dropping was the failure
+/// mode this calibration ships net-with-honest-gross to avoid.
 #[must_use]
-pub fn budget_files(actual: u32, max: u32, suppressed: bool) -> String {
+pub fn budget_files(actual: u32, max: u32, gross: Option<u32>, suppressed: bool) -> String {
     let tail = if suppressed {
-        ", analysis suppressed"
+        ", HOTSPOT/COUPLING skipped (partners co-touched by construction)"
     } else {
         ""
     };
+    let gross_clause = match gross {
+        Some(g) if g > actual => {
+            format!(" ({g} gross, ignore_for_budget excluded {})", g - actual)
+        }
+        _ => String::new(),
+    };
     format!(
-        "diff touches {actual} files; cap {max}{tail}; large diffs concentrate rollback risk and slow review"
+        "diff touches {actual} files{gross_clause}; cap {max}{tail}; large diffs concentrate rollback risk and slow review"
     )
 }
 
-/// `diff is A lines; cap M[, analysis suppressed]; large diffs concentrate rollback risk and slow review`
+/// `diff is N lines [(G gross, ignore_for_budget excluded G-N)]; cap M[, HOTSPOT/COUPLING skipped (partners co-touched by construction)]; large diffs concentrate rollback risk and slow review`
+///
+/// Same shape and rationale as [`budget_files`]; the suppressed
+/// tail names which layers were skipped and why so the agent reads
+/// the silence on HOTSPOT/COUPLING as "didn't compute it because
+/// the answer would be noise" rather than "all clear."
 #[must_use]
-pub fn budget_lines(actual: u64, max: u64, suppressed: bool) -> String {
+pub fn budget_lines(actual: u64, max: u64, gross: Option<u64>, suppressed: bool) -> String {
     let tail = if suppressed {
-        ", analysis suppressed"
+        ", HOTSPOT/COUPLING skipped (partners co-touched by construction)"
     } else {
         ""
     };
+    let gross_clause = match gross {
+        Some(g) if g > actual => {
+            format!(" ({g} gross, ignore_for_budget excluded {})", g - actual)
+        }
+        _ => String::new(),
+    };
     format!(
-        "diff is {actual} lines; cap {max}{tail}; large diffs concentrate rollback risk and slow review"
+        "diff is {actual} lines{gross_clause}; cap {max}{tail}; large diffs concentrate rollback risk and slow review"
     )
 }
 
@@ -159,19 +190,46 @@ pub fn health_test_pair<P: AsRef<Path>>(subject: &Path, related: &[P]) -> String
     )
 }
 
-/// `<path>: no signal (N commits in W-day window[, rank #R])` —
-/// or `<path>: new file (no history)` when `n_commits == 0`.
+/// Pre-edit fall-through when no other layer fires.
 ///
-/// The pre-edit fall-through when no other layer fires. Lets the
-/// agent distinguish "mmk was consulted but had nothing to say" from
-/// "mmk wasn't run." The zero-commit branch distinguishes
-/// "untouched in window" (which has history elsewhere) from "doesn't
-/// exist in history at all" — wording that conflates the two
-/// misleads agents working in greenfield slices.
+/// `commits_touching = 0` is *ambiguous*: it can mean the file is
+/// truly new (not yet committed, absent from HEAD's tree) OR the
+/// file lives in HEAD but every commit that ever touched it was
+/// dropped from analysis (most commonly by the `bulk.max_files`
+/// filter on workspace-grain repos where natural feature commits
+/// run wider than the cap). Conflating those two states reads as
+/// "you can edit freely, no historical risk" — which is true in
+/// the first case and dangerous in the second. `present_in_head`
+/// disambiguates so the wording matches the actual state.
+///
+/// Three messages:
+/// - `<path>: new file (not yet in HEAD)` — file absent from HEAD
+///   tree, nothing to score. The truly-new case.
+/// - `<path>: present in HEAD but no analyzable history (file may
+///   be stale or prior touches were filtered as bulk commits)` —
+///   file exists, history exists, but nothing in the window
+///   survived analysis. The agent should not read this as "no
+///   risk" — they should fall back to git log if the change is
+///   substantive.
+/// - `<path>: no signal (N commits in W-day window[, rank #R])` —
+///   the standard "too little history to fire COUPLING" case.
 #[must_use]
-pub fn quiet_file(path: &Path, n_commits: u32, window_days: u32, rank: Option<u32>) -> String {
+pub fn quiet_file(
+    path: &Path,
+    n_commits: u32,
+    window_days: u32,
+    rank: Option<u32>,
+    present_in_head: bool,
+) -> String {
     if n_commits == 0 {
-        return format!("{}: new file (no history)", path.display());
+        if present_in_head {
+            return format!(
+                "{}: present in HEAD but no analyzable history \
+                 (file may be stale or prior touches were filtered as bulk commits)",
+                path.display()
+            );
+        }
+        return format!("{}: new file (not yet in HEAD)", path.display());
     }
     let rank_clause = rank.map_or_else(String::new, |r| format!(", rank #{r}"));
     format!(
@@ -190,6 +248,43 @@ pub fn quiet_file(path: &Path, n_commits: u32, window_days: u32, rank: Option<u3
 #[must_use]
 pub fn greenfield_signal(new_count: usize, total: usize) -> String {
     format!("diff is {new_count} of {total} new files; history priors don't apply")
+}
+
+/// COHESION indicator: tangled-diff fingerprint.
+///
+/// Forms one of two prose shapes depending on `cluster_paths`:
+///
+/// - paths supplied → "diff spans N disjoint co-change clusters
+///   (sizes s1, s2, …): {paths}; tangled diffs correlate with
+///   elevated revert / review cost"
+/// - paths empty (large clusters, blow up message length) →
+///   summary form with sizes only
+///
+/// The "elevated revert / review cost" tail names the empirical
+/// implication (Herzig & Zeller 2013 measured ~16 % of bug-fixes in
+/// open-source projects carried unrelated changes; tangled commits
+/// inflate review burden). The wording is descriptive, not
+/// prescriptive — mmk doesn't tell the agent how to split the diff.
+#[must_use]
+pub fn cohesion_tangled(cluster_sizes: &[usize], cluster_paths: Option<&[Vec<String>]>) -> String {
+    let n = cluster_sizes.len();
+    let sizes_csv = cluster_sizes
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let detail = cluster_paths.map_or_else(String::new, |groups| {
+        let pretty = groups
+            .iter()
+            .map(|g| format!("{{{}}}", g.join(", ")))
+            .collect::<Vec<_>>()
+            .join("; ");
+        format!(": {pretty}")
+    });
+    format!(
+        "diff spans {n} disjoint co-change clusters (sizes {sizes_csv}){detail}; \
+         tangled diffs correlate with elevated revert / review cost"
+    )
 }
 
 /// `K of N commits dropped (>F files or >L lines)` — session budget.
@@ -219,6 +314,20 @@ pub fn session_overrun(session_lines: u64, session_n: u32, budget: u64) -> Strin
 pub const fn session_empty_nudge() -> &'static str {
     "session contains 0 commits since the resolved base; for uncommitted \
      working-tree review, use `mmk review` instead"
+}
+
+/// Empty-session window-suppression line.
+///
+/// Companion to [`session_empty_nudge`]: when the session is empty
+/// the WINDOW ranking is dropped from output (locale `.po` files,
+/// generated artifacts, etc. drown the ANCHOR nudge). Surface a
+/// one-liner so consumers see the suppression as positive
+/// information — `mmk analyze` is the right tool for pure
+/// window-wide hotspots.
+#[must_use]
+pub const fn session_window_suppressed() -> &'static str {
+    "WINDOW ranking suppressed: 0 commits in session — see `mmk analyze` \
+     for window hotspots"
 }
 
 fn join_paths<P: AsRef<Path>>(paths: &[P]) -> String {

@@ -88,15 +88,14 @@ pub fn build_canonical_fixture(repo: &Path, now: i64) {
 /// Coupling fixture: six commits over `core/a.rs` and `core/b.rs`,
 /// designed to land both metrics in the same range so a single
 /// fixture exercises blast-radius (jaccard) and COUPLING (Wilson
-/// lower bound on conditional probability). The 5-touch floor on A
-/// satisfies the default `coupling.min_sample_size = 5`; if you
-/// tighten the floor further, increase A's commit count too.
+/// lower bound on conditional probability). Calibrated for the v0.6
+/// gate (`confidence_threshold = 0.30`, `min_sample_size = 3`).
 ///
 /// Derived metrics:
-/// - co(A,B) = 3, touches_A = 5, touches_B = 3.
-/// - jaccard(A,B) = 3 / (5+3-3) = 0.60.
-/// - P(B|A) = 3/5 = 0.60.
-/// - Wilson 95 % lower for 3/5, n=5 ≈ 0.231 (above the 0.20 default).
+/// - co(A,B) = 4, touches_A = 5, touches_B = 4.
+/// - jaccard(A,B) = 4 / (5+4-4) = 0.80.
+/// - P(B|A) = 4/5 = 0.80.
+/// - Wilson 95 % lower for 4/5, n=5 ≈ 0.376 (above the 0.30 default).
 ///
 /// A sidecar `core/c.rs` touches once alone, providing a low-jaccard
 /// non-partner for the "popular files" sanity check. Mirrors the
@@ -113,18 +112,20 @@ pub fn build_coupling_fixture(repo: &Path, now: i64) {
     commit_all(repo, "1: a+b co-change", now - 6 * DAY);
 
     write(repo, "core/a.rs", "a1\na2\n");
-    commit_all(repo, "2: a only", now - 5 * DAY);
+    write(repo, "core/b.rs", "b1\nb2\n");
+    commit_all(repo, "2: a+b co-change", now - 5 * DAY);
 
     write(repo, "core/a.rs", "a1\na2\na3\n");
-    write(repo, "core/b.rs", "b1\nb2\n");
+    write(repo, "core/b.rs", "b1\nb2\nb3\n");
     commit_all(repo, "3: a+b co-change", now - 4 * DAY);
 
     write(repo, "core/a.rs", "a1\na2\na3\na4\n");
-    write(repo, "core/b.rs", "b1\nb2\nb3\n");
+    write(repo, "core/b.rs", "b1\nb2\nb3\nb4\n");
     commit_all(repo, "4: a+b co-change", now - 3 * DAY);
 
-    // Extra A-only commit lifts touches_A to 5 so the default
-    // `coupling.min_sample_size = 5` floor lets COUPLING fire.
+    // Extra A-only commit lifts touches_A to 5 (vs touches_B = 4)
+    // so jaccard diverges from P(B|A) and COUPLING fires under the
+    // v0.6 gate (Wilson 4/5 ≈ 0.376 ≥ 0.30, n=5 ≥ 3).
     write(repo, "core/a.rs", "a1\na2\na3\na4\na5\n");
     commit_all(repo, "5: a only", now - 2 * DAY);
 

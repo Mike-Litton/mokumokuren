@@ -14,6 +14,7 @@ const fn cfg(max_files: u32, max_lines: u32) -> BulkCfg {
         max_files,
         max_lines,
         greenfield_threshold: mmk_config::DEFAULT_GREENFIELD_THRESHOLD,
+        ignore_for_budget: Vec::new(),
     }
 }
 

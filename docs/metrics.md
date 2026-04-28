@@ -17,29 +17,74 @@ correlate; across layers, they decouple.
 
 ## What mmk deliberately doesn't measure
 
-mmk is one signal in a multi-tool harness, not a complete safety
-check. It explicitly **does not** emit:
+mmk is one signal in a multi-tool harness — specifically, the
+fourth check in a four-pillar architecture (plan / typecheck-lint /
+tests / mmk). Sensors that duplicate the linter pillar or the
+typecheck pillar are out of scope; mmk catches the LLM-slop class
+of failure those pillars don't already cover. It explicitly **does
+not** emit:
 
-- **Perplexity or token-based complexity scores.** Empirically these
-  do not predict LLM-induced test breakage; they look meaningful but
-  aren't. We omit them rather than ship a number agents will overweigh.
-- **Structural code health (CodeHealth-style 0–10 scores).** That
-  requires AST parsing, which is language-specific and would break
-  the deterministic-sub-second-language-agnostic invariant. It's a
-  different layer of the harness — a richer linter / structural
-  analyzer — not mmk's job.
+- **Perplexity or token-based complexity scores.** Empirically
+  these do not predict LLM-induced test breakage; they look
+  meaningful but aren't. We omit them rather than ship a number
+  agents will overweigh.
 - **Semantic correctness or "does this edit do what it claims."**
-  That's what tests are for.
+  That's what tests are for. Frontier-LLM "silent semantic bugs"
+  (code that runs cleanly and applies wrong logic) are a real
+  failure mode — but detecting them requires runtime, spec, or
+  semantic validation, which is a different harness pillar, not an
+  mmk sensor.
 - **Test outcomes, coverage, runtime metrics.** A different harness
-  component runs tests; mmk reads only Git.
-- **Hallucinated-API detection.** Catching "the agent called a
-  function that doesn't exist" is the linter / type checker's job;
-  mmk has no view into the working tree's symbols.
+  component runs tests; mmk reads only Git history and the local
+  AST.
+- **Type-checking and hallucinated-API detection.** "The agent
+  called a function that doesn't exist" is the typechecker's job;
+  on every mainstream language the typechecker fails the build
+  fast. mmk doesn't replicate that signal.
+- **Dead-code / unused-symbol detection.** TypeScript
+  `noUnusedLocals`, ESLint `no-unused-vars`, Rust compiler
+  warnings, Go's compile-error-on-unused-imports, Python
+  `ruff F401` — every mainstream language's linter pillar already
+  catches this with auto-fix. Building it in mmk would duplicate
+  that pillar.
 
-The right way to use mmk is alongside type checks, linters, and
-tests — not in place of any of them. Each catches a different
-class of failure; mmk's class is "patterns visible only in
-historical data."
+What mmk **does** add to the four-pillar architecture, beyond the
+historical-Git layer, are AST-based or graph-based sensors that
+extend the same "patterns visible only after the fact" thesis to
+shape and connectivity:
+
+- **STRUCTURE** (v0.5) — directory-convention divergence. When ≥3
+  sibling files share an import (≥85% by default) or an export
+  shape and a new sibling diverges, mmk surfaces the convention
+  before the agent writes against it. Language-specific
+  (TypeScript / TSX / JS / JSX AST today; line-scan fallback for
+  other languages emits imports only); refuses to fire rather than
+  emit low-quality signal on unsupported languages.
+- **COMPLEXITY** (v0.5) — per-function nesting and LOC. Either an
+  absolute cap (default nesting 6 / LOC 80) or a 3× directory-median
+  ratio fires. v0.6 adds per-key monotonic-worsening dedup so the
+  same finding doesn't re-fire across edits unless an axis strictly
+  worsened. Same language-coverage rules as STRUCTURE.
+- **COHESION** (v0.6) — tangled-diff fingerprint. Detects working-tree
+  diffs that decompose into multiple disjoint connected components
+  on the historical co-change graph, the structural pattern Herzig
+  & Zeller (2013) identified as elevating revert / review cost.
+  Edge metric is the max-symmetrized Wilson 95 % lower bound on
+  the directional conditional co-change probability — same
+  statistical primitive as COUPLING, generalized to a graph
+  connectivity question. Severity is Info: descriptive, not
+  gating. The sensor is a structural-fingerprint proxy for
+  Herzig & Zeller's AST-level untangling method, not a
+  reimplementation of it.
+
+All three sensors refuse to emit low-quality signal where their
+inputs aren't reliable (STRUCTURE / COMPLEXITY on languages
+without an AST adapter; COHESION on diffs with no historical
+co-change data). The right way to use mmk is alongside type checks,
+linters, and tests — not in place of any of them. Each pillar
+catches a different class of failure; mmk's class is "patterns
+visible only in historical data, plus shape and connectivity
+divergences a linter wouldn't already flag."
 
 ## Magnitude layer
 

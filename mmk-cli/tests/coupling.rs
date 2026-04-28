@@ -62,7 +62,7 @@ fn json_files_carry_top_couples_array() {
 
     assert!(
         partners.contains(&"core/b.rs"),
-        "core/a.rs should be coupled to core/b.rs (they co-change in 3 of 4 commits); got {partners:?}"
+        "core/a.rs should be coupled to core/b.rs (they co-change in 4 of 5 commits); got {partners:?}"
     );
 
     let b_couple = couples
@@ -71,8 +71,8 @@ fn json_files_carry_top_couples_array() {
         .unwrap();
     let jaccard = b_couple["jaccard"].as_f64().unwrap();
     assert!(
-        (jaccard - 0.60).abs() < 1e-9,
-        "expected jaccard 0.60 on the canonical coupling pair (3 co-changes / 5 touches A / 3 touches B), got {jaccard}"
+        (jaccard - 0.80).abs() < 1e-9,
+        "expected jaccard 0.80 on the canonical coupling pair (4 co-changes / 5 touches A / 4 touches B), got {jaccard}"
     );
 }
 

@@ -59,7 +59,7 @@ fn hotspot_pins_factual_wording() {
 
 #[test]
 fn budget_files_normal_pins_factual_wording() {
-    let s = msg::budget_files(120, 100, false);
+    let s = msg::budget_files(120, 100, None, false);
     assert_eq!(
         s,
         "diff touches 120 files; cap 100; large diffs concentrate rollback risk and slow review"
@@ -67,17 +67,47 @@ fn budget_files_normal_pins_factual_wording() {
 }
 
 #[test]
-fn budget_files_suppressed_appends_analysis_suppressed() {
-    let s = msg::budget_files(120, 100, true);
+fn budget_files_suppressed_names_the_skipped_layers() {
+    // The bulk-self path: the diff itself blew the cap, so the
+    // history-graph layers (HOTSPOT/COUPLING) didn't run. Wording
+    // names *what* and *why* so an agent reads the silence
+    // correctly — without it, an empty HOTSPOT/COUPLING block
+    // could be misread as "all clear" rather than "uncomputed."
+    let s = msg::budget_files(120, 100, None, true);
     assert_eq!(
         s,
-        "diff touches 120 files; cap 100, analysis suppressed; large diffs concentrate rollback risk and slow review"
+        "diff touches 120 files; cap 100, HOTSPOT/COUPLING skipped (partners co-touched by construction); large diffs concentrate rollback risk and slow review"
+    );
+}
+
+#[test]
+fn budget_files_with_gross_split_carries_both_counts() {
+    // v0.6 net-with-honest-gross: when ignore_for_budget excluded
+    // some files, the prose surfaces both totals so the agent can
+    // see what was excluded — silent dropping was the failure mode
+    // this calibration ships to avoid.
+    let s = msg::budget_files(20, 15, Some(45), false);
+    assert_eq!(
+        s,
+        "diff touches 20 files (45 gross, ignore_for_budget excluded 25); cap 15; large diffs concentrate rollback risk and slow review"
+    );
+}
+
+#[test]
+fn budget_files_with_equal_gross_omits_split() {
+    // Defensive: when gross == net (globs configured but matched
+    // nothing on this diff), the prose stays terse rather than
+    // emitting "(N gross, ignore_for_budget excluded 0)".
+    let s = msg::budget_files(20, 15, Some(20), false);
+    assert_eq!(
+        s,
+        "diff touches 20 files; cap 15; large diffs concentrate rollback risk and slow review"
     );
 }
 
 #[test]
 fn budget_lines_normal_pins_factual_wording() {
-    let s = msg::budget_lines(6000, 1000, false);
+    let s = msg::budget_lines(6000, 1000, None, false);
     assert_eq!(
         s,
         "diff is 6000 lines; cap 1000; large diffs concentrate rollback risk and slow review"
@@ -85,11 +115,20 @@ fn budget_lines_normal_pins_factual_wording() {
 }
 
 #[test]
-fn budget_lines_suppressed_appends_analysis_suppressed() {
-    let s = msg::budget_lines(6000, 1000, true);
+fn budget_lines_suppressed_names_the_skipped_layers() {
+    let s = msg::budget_lines(6000, 1000, None, true);
     assert_eq!(
         s,
-        "diff is 6000 lines; cap 1000, analysis suppressed; large diffs concentrate rollback risk and slow review"
+        "diff is 6000 lines; cap 1000, HOTSPOT/COUPLING skipped (partners co-touched by construction); large diffs concentrate rollback risk and slow review"
+    );
+}
+
+#[test]
+fn budget_lines_with_gross_split_carries_both_counts() {
+    let s = msg::budget_lines(80, 1000, Some(1500), false);
+    assert_eq!(
+        s,
+        "diff is 80 lines (1500 gross, ignore_for_budget excluded 1420); cap 1000; large diffs concentrate rollback risk and slow review"
     );
 }
 
@@ -168,13 +207,13 @@ fn health_service_pins_wording() {
 
 #[test]
 fn quiet_file_without_rank_pins_wording() {
-    let s = msg::quiet_file(Path::new("quiet.rs"), 2, 60, None);
+    let s = msg::quiet_file(Path::new("quiet.rs"), 2, 60, None, true);
     assert_eq!(s, "quiet.rs: no signal (2 commits in 60-day window)");
 }
 
 #[test]
 fn quiet_file_with_rank_appends_rank_clause() {
-    let s = msg::quiet_file(Path::new("quiet.rs"), 2, 60, Some(7));
+    let s = msg::quiet_file(Path::new("quiet.rs"), 2, 60, Some(7), true);
     assert_eq!(
         s,
         "quiet.rs: no signal (2 commits in 60-day window, rank #7)"
@@ -182,19 +221,34 @@ fn quiet_file_with_rank_appends_rank_clause() {
 }
 
 #[test]
-fn quiet_file_zero_commits_says_new_file() {
-    // Distinguishes "untouched in window" from "doesn't exist in
-    // history at all". Zero commits → new file.
-    let s = msg::quiet_file(Path::new("brand-new.rs"), 0, 60, None);
-    assert_eq!(s, "brand-new.rs: new file (no history)");
+fn quiet_file_zero_commits_not_in_head_says_truly_new() {
+    // The agent reads this as "create-from-scratch territory; no
+    // historical risk." Distinct wording so they don't conflate it
+    // with the history-was-filtered case below.
+    let s = msg::quiet_file(Path::new("brand-new.rs"), 0, 60, None, false);
+    assert_eq!(s, "brand-new.rs: new file (not yet in HEAD)");
+}
+
+#[test]
+fn quiet_file_zero_commits_in_head_signals_filtered_history() {
+    // The dangerous case: file is committed and has been edited
+    // before, but every commit was filtered as bulk. Without this
+    // wording the agent reads silence as "no risk" when the
+    // file's actual maintenance history is just invisible to mmk.
+    let s = msg::quiet_file(Path::new("docs/configuration.md"), 0, 180, None, true);
+    assert_eq!(
+        s,
+        "docs/configuration.md: present in HEAD but no analyzable history \
+         (file may be stale or prior touches were filtered as bulk commits)"
+    );
 }
 
 #[test]
 fn quiet_file_zero_commits_with_rank_drops_rank_clause() {
     // A new file can't have a hotspot rank — guard against
     // mis-rendering by callers that wire `rank` through anyway.
-    let s = msg::quiet_file(Path::new("brand-new.rs"), 0, 60, Some(7));
-    assert_eq!(s, "brand-new.rs: new file (no history)");
+    let s = msg::quiet_file(Path::new("brand-new.rs"), 0, 60, Some(7), false);
+    assert_eq!(s, "brand-new.rs: new file (not yet in HEAD)");
 }
 
 // ---- greenfield_signal ----------------------------------------------------
@@ -332,6 +386,6 @@ fn quiet_file_with_path_containing_special_chars_renders_path_unchanged() {
     // output verbatim — which is correct, since they're path-derived,
     // not formatter-introduced. Locks this so a future "sanitize the
     // path" change can't silently break it.
-    let s = msg::quiet_file(Path::new("a/min_sample_size_dir/x.rs"), 0, 60, None);
-    assert_eq!(s, "a/min_sample_size_dir/x.rs: new file (no history)");
+    let s = msg::quiet_file(Path::new("a/min_sample_size_dir/x.rs"), 0, 60, None, false);
+    assert_eq!(s, "a/min_sample_size_dir/x.rs: new file (not yet in HEAD)");
 }

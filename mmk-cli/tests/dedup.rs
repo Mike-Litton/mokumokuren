@@ -122,7 +122,7 @@ fn run_in(repo: &std::path::Path, args: ReviewArgs) -> Vec<u8> {
     std::env::set_current_dir(repo).unwrap();
     let mut stdout: Vec<u8> = Vec::new();
     let mut stderr: Vec<u8> = Vec::new();
-    let res = mokumokuren::commands::review::run(&args, &mut stdout, &mut stderr);
+    let res = mokumokuren::commands::review::run(&args, None, &mut stdout, &mut stderr);
     std::env::set_current_dir(orig).unwrap();
     res.expect("review");
     stdout

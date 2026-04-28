@@ -255,6 +255,7 @@ fn run_session_summary<O: Write, E: Write>(
 
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
+    let suppress_window = session_n == 0;
     match args.format {
         Format::Text => crate::output::text::write_session(
             stdout,
@@ -264,6 +265,7 @@ fn run_session_summary<O: Write, E: Write>(
             &session_out,
             duration_ms,
             blast_ref,
+            suppress_window,
         )?,
         Format::Json => crate::output::json::write_session(
             stdout,

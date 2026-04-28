@@ -66,10 +66,29 @@ COUPLING:
   ⚠ core/a.rs edited; expected partner core/b.rs not touched (jaccard 0.75)
 ```
 
+The full menu of finding layers `mmk review` and `mmk pre-edit`
+emit:
+
+| Layer        | Question                                                              | Severity         |
+| ------------ | --------------------------------------------------------------------- | ---------------- |
+| `HOTSPOT`    | "Is this file near the top of the rank?"                              | Warn             |
+| `COUPLING`   | "Is a historical co-change partner missing from this diff?"           | Warn / Info      |
+| `COHESION`   | "Does this diff decompose into multiple disjoint clusters?" (v0.6)    | Info             |
+| `STRUCTURE`  | "Does this file diverge from its directory's import / export shape?"  | Warn / Info / Ok |
+| `COMPLEXITY` | "Is this function structurally over the cap (nesting / LOC)?"         | Warn             |
+| `HEALTH`     | "Is the test pair / registration peer / service consumer absent?"     | Warn / Info      |
+| `BUDGET`     | "Is the diff over the size cap, or ramping toward it?"                | Warn / Info      |
+| `DRIFT`      | "Is this file climbing the rank across recent sessions?"              | Warn             |
+
+Each layer maps to peer-reviewed work on defect rate,
+comprehension cost, or change-amplification risk; the design
+doc-comments cite the relevant primary sources at each call site.
+
 JSON output (`--format json`) is the same data with a stable
 schema for harness consumers. See
 [`docs/claude-code.md`](docs/claude-code.md) for the wiring
-(CLAUDE.md / skill / hooks).
+(CLAUDE.md / skill / hooks) and
+[`docs/schema.md`](docs/schema.md) for the JSON envelope.
 
 ## Subcommands at a glance
 

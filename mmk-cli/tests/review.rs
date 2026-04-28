@@ -43,7 +43,7 @@ fn run_in(repo: &std::path::Path, args: ReviewArgs) -> (Vec<u8>, Vec<u8>) {
     std::env::set_current_dir(repo).unwrap();
     let mut stdout: Vec<u8> = Vec::new();
     let mut stderr: Vec<u8> = Vec::new();
-    let res = mokumokuren::commands::review::run(&args, &mut stdout, &mut stderr);
+    let res = mokumokuren::commands::review::run(&args, None, &mut stdout, &mut stderr);
     std::env::set_current_dir(orig).unwrap();
     res.expect("review should succeed on fixture");
     (stdout, stderr)
@@ -61,7 +61,7 @@ fn run_in_with_verdict(
     let mut stdout: Vec<u8> = Vec::new();
     let mut stderr: Vec<u8> = Vec::new();
     let verdict =
-        mokumokuren::commands::review::run(&args, &mut stdout, &mut stderr).expect("review");
+        mokumokuren::commands::review::run(&args, None, &mut stdout, &mut stderr).expect("review");
     std::env::set_current_dir(orig).unwrap();
     (stdout, verdict)
 }
@@ -131,8 +131,8 @@ fn review_emits_coupling_miss_on_uncommitted_diff() {
     build_coupling_fixture(dir.path(), now);
 
     // Edit core/a.rs but leave its historical partner core/b.rs
-    // untouched. The fixture lands P(B|A) = 0.60 with Wilson 95 %
-    // lower ≈ 0.23 — above the default 0.20 confidence floor — so
+    // untouched. The fixture lands P(B|A) = 0.80 with Wilson 95 %
+    // lower ≈ 0.38 — above the default 0.30 confidence floor — so
     // the COUPLING finding fires for the missed partner.
     write(dir.path(), "core/a.rs", "a1\na2\na3\na4\na5\nNEW\n");
 
@@ -311,7 +311,7 @@ fn review_self_throttles_on_bulk_diff() {
 #[test]
 fn review_respects_coupling_threshold() {
     // --coupling-threshold above the partner's Wilson lower bound
-    // (~0.23) must suppress the would-be COUPLING finding for
+    // (~0.38) must suppress the would-be COUPLING finding for
     // core/b.rs. The flag routes to confidence_threshold.
     let dir = TempDir::new().unwrap();
     let now = 1_700_000_000_i64;
@@ -332,7 +332,7 @@ fn review_respects_coupling_threshold() {
         .collect();
     assert!(
         coupling.is_empty(),
-        "threshold 0.99 must suppress coupling whose Wilson lower is ≈0.23; got: {coupling:?}"
+        "threshold 0.99 must suppress coupling whose Wilson lower is ≈0.38; got: {coupling:?}"
     );
 }
 
@@ -374,9 +374,9 @@ fn review_respects_coupling_ignore_partners() {
 fn review_gate_warn_returns_nonzero_on_warn_finding() {
     // --gate warn must surface a non-zero verdict when any
     // warn-severity finding fires. With the default
-    // confidence_threshold (0.20) and min_sample_size (5), editing
+    // confidence_threshold (0.30) and min_sample_size (3), editing
     // core/a.rs alone surfaces COUPLING for core/b.rs (Wilson
-    // lower ≈ 0.23) — above the floor.
+    // lower ≈ 0.38) — above the floor.
     let dir = TempDir::new().unwrap();
     let now = 1_700_000_000_i64;
     build_coupling_fixture(dir.path(), now);
@@ -430,7 +430,8 @@ fn review_legacy_coupling_threshold_emits_deprecation_warning_in_verbose() {
     std::env::set_current_dir(dir.path()).unwrap();
     let mut stdout: Vec<u8> = Vec::new();
     let mut stderr: Vec<u8> = Vec::new();
-    let _ = mokumokuren::commands::review::run(&args, &mut stdout, &mut stderr).expect("review");
+    let _ =
+        mokumokuren::commands::review::run(&args, None, &mut stdout, &mut stderr).expect("review");
     std::env::set_current_dir(orig).unwrap();
     let err = String::from_utf8(stderr).unwrap();
     assert!(
@@ -464,7 +465,8 @@ fn review_legacy_coupling_threshold_silent_without_verbose() {
     std::env::set_current_dir(dir.path()).unwrap();
     let mut stdout: Vec<u8> = Vec::new();
     let mut stderr: Vec<u8> = Vec::new();
-    let _ = mokumokuren::commands::review::run(&args, &mut stdout, &mut stderr).expect("review");
+    let _ =
+        mokumokuren::commands::review::run(&args, None, &mut stdout, &mut stderr).expect("review");
     std::env::set_current_dir(orig).unwrap();
     let err = String::from_utf8(stderr).unwrap();
     assert!(
@@ -1108,5 +1110,174 @@ fn review_emits_complexity_for_deeply_nested_function() {
     assert!(
         msg.contains("correlates with"),
         "COMPLEXITY message must state the empirical implication; got: {msg}"
+    );
+}
+
+#[test]
+fn review_ignore_for_budget_keeps_generated_file_below_cap() {
+    // v0.6: a 1500-line generated file regeneration would otherwise
+    // trip the 1000-line over-cap BUDGET trigger and self-DoS the
+    // analyzer pass — silencing HOTSPOT/COUPLING for the rest of the
+    // session. With `bulk.ignore_for_budget = ["**/routeTree.gen.ts"]`
+    // the generated file is excluded from BUDGET accounting, the diff
+    // sits comfortably under cap, and HOTSPOT can fire on the small
+    // hand-edit. The full diff is still surfaced in
+    // `review.diff.files[]` and a `review.diff.budget` sub-block
+    // reports both gross and net counts.
+    use std::fmt::Write as _;
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    write(dir.path(), "src/router.ts", "export const router = 1;\n");
+    write(
+        dir.path(),
+        "src/routeTree.gen.ts",
+        "export const tree = 0;\n",
+    );
+    commit_all(dir.path(), "seed", now - DAY);
+
+    std::fs::write(
+        dir.path().join("mokumokuren.toml"),
+        "[bulk]\nignore_for_budget = [\"**/routeTree.gen.ts\"]\n",
+    )
+    .unwrap();
+
+    // Hand edit: 5 lines added in router.ts.
+    write(
+        dir.path(),
+        "src/router.ts",
+        "export const router = 1;\nA\nB\nC\nD\nE\n",
+    );
+    // Generated file rewrite: 1500 lines.
+    let mut huge = String::with_capacity(1500 * 8);
+    for i in 0..1500 {
+        writeln!(huge, "tree{i}").unwrap();
+    }
+    write(dir.path(), "src/routeTree.gen.ts", &huge);
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    // BUDGET must NOT fire — net is well under cap.
+    assert!(
+        v["findings"]
+            .as_array()
+            .expect("findings array")
+            .iter()
+            .all(|f| !(f["layer"] == "budget" && f["severity"] != "info")),
+        "ignore_for_budget must suppress the over-cap BUDGET trigger; got: {:?}",
+        v["findings"]
+    );
+
+    // The generated file IS still present in diff.files[].
+    let diff_files = v["review"]["diff"]["files"]
+        .as_array()
+        .expect("diff.files array");
+    let paths: Vec<&str> = diff_files
+        .iter()
+        .map(|f| f["path"].as_str().unwrap_or(""))
+        .collect();
+    assert!(
+        paths.contains(&"src/routeTree.gen.ts"),
+        "generated file must still appear in diff.files even when excluded from BUDGET; got: {paths:?}"
+    );
+
+    // The new budget sub-block reports both totals.
+    let budget = v["review"]["diff"]["budget"]
+        .as_object()
+        .expect("budget sub-block must be present when ignore_for_budget excluded a file");
+    let files_gross = budget["files_gross"].as_u64().unwrap();
+    let files_net = budget["files_net"].as_u64().unwrap();
+    let lines_gross = budget["lines_gross"].as_u64().unwrap();
+    let lines_net = budget["lines_net"].as_u64().unwrap();
+    // Diff also includes the untracked `mokumokuren.toml` we wrote
+    // above, so gross is 3 (router + gen + toml). Net excludes only
+    // the generated file.
+    assert_eq!(
+        files_gross - files_net,
+        1,
+        "one file excluded by ignore_for_budget"
+    );
+    assert!(
+        files_net >= 1,
+        "the hand-edited router.ts must remain in net"
+    );
+    assert!(
+        lines_gross >= 1500,
+        "lines_gross must include the generated file; got {lines_gross}"
+    );
+    assert!(
+        lines_gross - lines_net >= 1500,
+        "the generated file's lines must be excluded from net; got gross={lines_gross} net={lines_net}"
+    );
+    let ignored = budget["ignored_for_budget"].as_array().unwrap();
+    assert_eq!(ignored.len(), 1);
+    assert_eq!(ignored[0].as_str().unwrap(), "**/routeTree.gen.ts");
+}
+
+#[test]
+fn review_default_gate_suppresses_wilson_one_of_one() {
+    // n=1 / k=1 has Wilson 95% lower ≈ 0.206. Pre-v0.6 this scraped
+    // past `confidence_threshold = 0.20` and fired COUPLING — the
+    // false-positive class agent test runs flagged. v0.6 calibration
+    // (`confidence_threshold = 0.30`, `min_sample_size = 3`) must
+    // suppress it. The opt-back-in path (set both knobs to the v0.5
+    // values via TOML) restores the firing — so users with established
+    // calibration aren't surprised by the bump.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+
+    // One commit touching A AND B. touches_A = 1, co(A,B) = 1.
+    write(dir.path(), "core/a.rs", "a1\n");
+    write(dir.path(), "core/b.rs", "b1\n");
+    commit_all(dir.path(), "seed: a+b co-change", now - DAY);
+
+    // Edit A, leave B untouched — this is the case Wilson(1,1) would
+    // fire on if the gate were loose enough.
+    write(dir.path(), "core/a.rs", "a1\nNEW\n");
+
+    // Default gate: COUPLING for B must be suppressed.
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+    let coupling_b: Vec<&Value> = v["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .filter(|f| {
+            f["layer"] == "coupling" && f["message"].as_str().unwrap_or("").contains("core/b.rs")
+        })
+        .collect();
+    assert!(
+        coupling_b.is_empty(),
+        "v0.6 default gate must suppress Wilson(1,1) ≈ 0.21 case; got: {coupling_b:?}"
+    );
+
+    // Opt back in to v0.5 behavior via TOML — both knobs together.
+    std::fs::write(
+        dir.path().join("mokumokuren.toml"),
+        "[coupling]\nconfidence_threshold = 0.20\nmin_sample_size = 1\n",
+    )
+    .unwrap();
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+    let any_coupling_b = v["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .any(|f| {
+            f["layer"] == "coupling" && f["message"].as_str().unwrap_or("").contains("core/b.rs")
+        });
+    assert!(
+        any_coupling_b,
+        "explicit confidence_threshold=0.20 + min_sample_size=1 must restore the v0.5 firing; got: {:?}",
+        v["findings"]
     );
 }

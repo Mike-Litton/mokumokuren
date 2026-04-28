@@ -6,27 +6,37 @@ JSON object whose shape is documented here. The
 against; `crate_version` is the Cargo version of the producing build
 and is diagnostic only.
 
-Subcommands at v0.5.0:
+Subcommands at v0.6.0:
 
 - `mmk analyze` — ranked hotspots over a window.
 - `mmk session-summary` (alias: `mmk session`) — window + session
   ranking, delta block, plus a `findings[]` overlay (DRIFT, BUDGET,
-  ANCHOR on empty session).
+  ANCHOR on empty session). On empty sessions the WINDOW ranking
+  collapses (the `files` key is omitted) so the ANCHOR pointer
+  isn't buried under generated-artefact rankings.
 - `mmk review` — diff against history (working tree by default;
-  `--staged`, `--range A..B`, `--commit <SHA>`). Surfaces STRUCTURE
-  / COMPLEXITY alongside HOTSPOT / COUPLING / HEALTH / BUDGET.
+  `--staged`, `--range A..B`, `--commit <SHA>`). Surfaces HOTSPOT,
+  COUPLING, COHESION (v0.6), STRUCTURE, COMPLEXITY, HEALTH, and
+  BUDGET findings.
 - `mmk pre-edit <PATH>` — historical context for a path before edit.
   Absolute path inputs are normalized against the discovered repo
-  root.
+  root. The path is optional when invoked via a Claude Code hook
+  (the JSON envelope on stdin supplies it).
 - `mmk drift --sessions K` — climb signal across K session boundaries.
 - `mmk eval --sample N` — sampled noise-floor report (adoption tool).
   `--learn` adds suggestion blocks; `--replay` adds a per-layer
   histogram (cross-repo aggregation).
 
+When `mmk review` or `mmk pre-edit` detects a Claude Code hook
+envelope on stdin, it switches to a hook-shape output envelope
+(`hookSpecificOutput.additionalContext` etc.) instead of the
+`--format json` shape documented below. See the
+[Hook output envelope](#hook-output-envelope-v06) section.
+
 ## Stability contract
 
-`schema_version` tracks the `mmk` minor release: every `0.5.x` build
-emits `0.5.0`.
+`schema_version` tracks the `mmk` minor release: every `0.6.x` build
+emits `0.6.0`.
 
 | Change kind                                             | Schema bump? |
 | ------------------------------------------------------- | :----------: |
@@ -44,7 +54,7 @@ and ignore them rather than fail.
 
 | Field            | Type    | Notes                                                                                |
 | ---------------- | ------- | ------------------------------------------------------------------------------------ |
-| `schema_version` | string  | Pinned to the `mmk` minor (`"0.5.0"`).                                               |
+| `schema_version` | string  | Pinned to the `mmk` minor (`"0.6.0"`).                                               |
 | `crate_version`  | string  | `CARGO_PKG_VERSION` of the producing build. Diagnostic only — do not pin against.    |
 | `repo`           | object  | HEAD metadata + repo-level warnings.                                                 |
 | `config`         | object  | Effective `Config` after merging file + CLI sources.                                 |
@@ -138,12 +148,14 @@ it to understand exactly what produced the result.
 | `window.days`                  | uint     | Effective `--since` in days.                                 |
 | `window.tau_days`              | uint     | Recency-decay 1/e point.                                     |
 | `hotspot.top_n`                | uint     | Effective `--top`.                                           |
-| `bulk.max_files`               | uint     | Bulk-filter file threshold.                                  |
-| `bulk.max_lines`               | uint     | Bulk-filter line threshold.                                  |
+| `bulk.max_files`               | uint     | Bulk-filter file threshold (default `15`; v0.6 made this overridable from `mokumokuren.toml`). |
+| `bulk.max_lines`               | uint     | Bulk-filter line threshold (default `1000`; v0.6 made this overridable from `mokumokuren.toml`). The line cap is the literature-backed half (Cohen 2006 SmartBear/Cisco data); the file cap is an engineering heuristic. |
+| `bulk.greenfield_threshold`    | float    | Fraction of changed paths the analyzer must not have seen before `mmk review` emits the greenfield-acknowledgement Info finding (default `0.5`). |
+| `bulk.ignore_for_budget`       | string[] | (v0.6) Glob patterns excluded from diff-time BUDGET accounting. The full diff still appears in `review.diff.files[]`. |
 | `blast_radius.threshold`       | float    | Min Jaccard for `--blast-radius` neighborhood.               |
-| `coupling.threshold`           | float    | (deprecated) Legacy v0.3 jaccard threshold; v0.4 silently maps it to `confidence_threshold`. |
-| `coupling.confidence_threshold`| float    | (v0.4) Min Wilson 95% lower bound on `P(partner | subject)` for COUPLING findings (default 0.20). |
-| `coupling.min_sample_size`     | uint     | (v0.4) Min `commits_touching(subject)` before COUPLING fires (default 5). |
+| `coupling.threshold`           | float    | (deprecated) Legacy v0.3 jaccard threshold; v0.4+ silently maps it to `confidence_threshold`. |
+| `coupling.confidence_threshold`| float    | Min Wilson 95% lower bound on `P(partner | subject)` for COUPLING findings (default `0.30` since v0.6; was `0.20` in v0.4–v0.5). |
+| `coupling.min_sample_size`     | uint     | Min `commits_touching(subject)` before COUPLING fires (default `3` since v0.6; was `5` in v0.4 and `1` in v0.5). |
 | `coupling.ignore_partners`     | string[] | Globs that never fire as the missed partner in COUPLING.     |
 | `health.ts.enabled`            | bool     | (v0.4) Whether the TypeScript Health adapter runs.           |
 | `health.ts.patterns`           | string[] | (v0.4) Pattern tokens (`registration`, `service`, `test_pair`). |
@@ -151,6 +163,10 @@ it to understand exactly what produced the result.
 | `sensor.structure.import_majority` | float | (v0.5) Sibling fraction needed for an import to count as the directory's convention (default 0.85). |
 | `sensor.complexity.enabled`    | bool     | (v0.5) Whether the COMPLEXITY per-function sensor runs.      |
 | `sensor.budget_ramp.enabled`   | bool     | (v0.5) Whether the under-cap BUDGET ramp emits Info @ ≥50% / Warn @ ≥75% (default `true`). |
+| `sensor.cohesion.enabled`      | bool     | (v0.6) Whether the COHESION tangled-diff sensor runs (default `true`). |
+| `sensor.cohesion.confidence_threshold` | float | (v0.6) Wilson 95% lower bound floor for the symmetrized edge metric. Default `0.20` — looser than COUPLING's `0.30` because cohesion gates a graph-connectivity question, not a missed-partner one. |
+| `sensor.cohesion.min_sample_size` | uint  | (v0.6) Min `max(commits_touching(A), commits_touching(B))` for an edge to admit. Default `3`, mirroring COUPLING. |
+| `sensor.cohesion.min_files_per_cluster` | uint | (v0.6) Min cluster size for a component to count toward the fire decision. Default `2` — singletons aren't clusters. |
 | `rename_similarity`            | float    | Diff-engine rename threshold.                                |
 | `ignores`                      | string[] | Final ignore globs after merging file + CLI sources.         |
 
@@ -159,11 +175,11 @@ it to understand exactly what produced the result.
 | Field       | Type     | Notes                                                       |
 | ----------- | -------- | ----------------------------------------------------------- |
 | `root`      | string   | Echo of the `--blast-radius` path.                          |
-| `hops`      | uint     | Always `1` in v0.5.0.                                       |
+| `hops`      | uint     | Always `1` in v0.6.0.                                       |
 | `threshold` | float    | Effective Jaccard threshold applied. Resolved as `--blast-radius-threshold` → `[blast_radius] threshold` in `mokumokuren.toml` → built-in default `0.10`. Echoed so consumers can see what filter produced the listed nodes. |
 | `nodes`     | array    | `[{ "path": string, "jaccard": float, "co_change_count": uint, "hops": uint }]` sorted desc by jaccard. |
 
-## v0.5 envelopes
+## Envelopes by subcommand
 
 ### `mmk review`
 
@@ -172,13 +188,13 @@ before any commit lands.
 
 | Field            | Type    | Notes                                                                                  |
 | ---------------- | ------- | -------------------------------------------------------------------------------------- |
-| `schema_version` | string  | `"0.5.0"`.                                                                             |
+| `schema_version` | string  | `"0.6.0"`.                                                                             |
 | `crate_version`  | string  |                                                                                        |
 | `repo`           | object  | Same as analyze. Present only when there are changes (clean tree skips analyze).       |
 | `config`         | object  | Same as analyze. Present only when there are changes.                                  |
 | `analysis`       | object  | Same as analyze. Present only when there are changes.                                  |
 | `review`         | object  | `mode` + per-file diff numstat. Always present.                                        |
-| `findings`       | array   | Layer-labeled findings (HOTSPOT, COUPLING, BUDGET, HEALTH v0.4, STRUCTURE / COMPLEXITY v0.5). Always present (possibly empty). |
+| `findings`       | array   | Layer-labeled findings (HOTSPOT, COUPLING, COHESION v0.6, BUDGET, HEALTH v0.4, STRUCTURE / COMPLEXITY v0.5). Always present (possibly empty). |
 | `health`         | object? | (v0.4) Present when the Health adapter ran AND returned matches. See [`health` block](#health-block-v04). |
 
 #### `review`
@@ -191,18 +207,22 @@ before any commit lands.
 | `diff.lines_deleted`   | uint   |                                                                                |
 | `diff.files[]`         | array  | `[{ "path": string, "added": uint, "deleted": uint }]`. Binary files omitted. Working-tree mode includes untracked-but-not-ignored files (added = line count, deleted = 0). |
 | `diff.new_file_fraction` | float? | (v0.4) Fraction of changed paths the historical analyzer hasn't seen. Optional: present on the with-changes envelope, omitted on bulk-self / clean-tree envelopes. Lets a consumer reason about why HOTSPOT/COUPLING/DRIFT are silent on greenfield diffs. |
+| `diff.budget`            | object? | (v0.6) Present only when `bulk.ignore_for_budget` matched at least one file in the diff. Carries `files_gross`, `files_net`, `lines_gross`, `lines_net`, and `ignored_for_budget` (the active glob list). Surfaces gross / net divergence so silent file-dropping never recurs. |
 
 #### `mmk review` bulk-self-filter envelope
 
 When the input diff itself trips `bulk.max_files` or
 `bulk.max_lines`, review skips the (expensive) hotspot/coupling
-analysis and emits a slimmer envelope. v0.5: STRUCTURE and
-COMPLEXITY findings now appear here too — they don't depend on the
-analyzer pass and surface alongside BUDGET on over-cap diffs.
+analysis and emits a slimmer envelope. STRUCTURE and COMPLEXITY
+findings appear here alongside BUDGET (since v0.5) — they don't
+depend on the analyzer pass and stay meaningful on over-cap diffs.
+The BUDGET wording on this path names *which* layers were skipped
+and *why* (since v0.6) so silence on HOTSPOT/COUPLING reads as
+"uncomputed at this scale" rather than "all clear."
 
 | Field            | Type    | Notes                                                            |
 | ---------------- | ------- | ---------------------------------------------------------------- |
-| `schema_version` | string  | `"0.5.0"`.                                                       |
+| `schema_version` | string  | `"0.6.0"`.                                                       |
 | `crate_version`  | string  |                                                                  |
 | `review`         | object  | `mode` + per-file diff numstat.                                  |
 | `findings`       | array   | One BUDGET finding plus any STRUCTURE / COMPLEXITY findings on the changed paths; HOTSPOT/COUPLING skipped. |
@@ -219,13 +239,13 @@ queried path.
 
 | Field            | Type    | Notes                                                                                  |
 | ---------------- | ------- | -------------------------------------------------------------------------------------- |
-| `schema_version` | string  | `"0.5.0"`.                                                                             |
+| `schema_version` | string  | `"0.6.0"`.                                                                             |
 | `crate_version`  | string  |                                                                                        |
 | `repo`           | object  |                                                                                        |
 | `config`         | object  |                                                                                        |
 | `analysis`       | object  |                                                                                        |
 | `pre_edit.path`  | string  | Echo of the queried path. Absolute paths are normalized against the discovered repo root before lookup so hook integrations passing `tool_input.file_path` produce the same signal as relative-path manual invocations. |
-| `findings`       | array   | HOTSPOT (Warn), COUPLING (Info), HEALTH (Info, v0.4), STRUCTURE (Info, v0.5), DRIFT (Warn), BUDGET ramp (Info @ ≥50% / Warn @ ≥75%, v0.5). May contain a single OK finding if every layer is silent and the file's history is below `coupling.min_sample_size`. |
+| `findings`       | array   | HOTSPOT (Warn), COUPLING (Info), HEALTH (Info, v0.4), STRUCTURE (Info, v0.5), DRIFT (Warn), BUDGET ramp (Info @ ≥50% / Warn @ ≥75%, v0.5). May contain a single OK finding if every layer is silent. The fall-through wording distinguishes (v0.6) "new file (not yet in HEAD)" from "present in HEAD but no analyzable history (file may be stale or prior touches were filtered as bulk commits)" so an agent reading silence on a wide-grain repo can't misread the latter as "no risk." |
 | `health`         | object? | (v0.4) Present when the Health adapter ran AND returned matches. See [`health` block](#health-block-v04). |
 
 ### `mmk eval`
@@ -243,7 +263,7 @@ for `mmk eval --sample N`; not on the agent edit-loop hot path.
 | `wilson_lower_buckets` | object   | (v0.4) `{ "0.00-0.20": uint, "0.20-0.40": uint, "0.40+": uint }`. Wilson 95% lower bound buckets (was `jaccard_buckets` in v0.3). |
 | `threshold`            | float    | Effective `[coupling] confidence_threshold` for context (v0.4 semantics; was jaccard threshold in v0.3). |
 | `learn_suggestions`    | array?   | (v0.4) Present only with `--learn`. Each entry: `{ partner: string, subject_count: uint, mean_inverse_conditional_probability: float }`. High-breadth, low-inverse-prob partners flagged for `[coupling] ignore_partners`. |
-| `learn_sensor_stats`   | object?  | (v0.5) Present only with `--learn`. Per-sensor distribution: `structure_dir_shapes_seen`, `structure_dir_shapes_above_floor`, `structure_commits_with_fire`, `complexity_functions_seen`, `complexity_nesting_{median,p90,p99}`, `complexity_loc_{median,p90,p99}`. |
+| `learn_sensor_stats`   | object?  | (v0.5) Present only with `--learn`. Per-sensor distribution: `structure_dir_shapes_seen`, `structure_dir_shapes_above_floor`, `structure_commits_with_fire`, `complexity_functions_seen`, `complexity_nesting_{median,p90,p99}`, `complexity_loc_{median,p90,p99}`, plus (v0.6) `cohesion_tangled_diffs_seen`, `cohesion_components_p95`. The text-mode writer additionally emits a suggested `[sensor.cohesion]` block when > 10 % of sampled commits would fire COHESION. |
 | `replay_histogram`     | object?  | (v0.5) Present only with `--replay`. `{ commits_sampled: uint, layers: [{ layer: string, commits_with_fire: uint, fire_rate: float, distinct_paths: uint, total_findings: uint, severity: { ok: uint, info: uint, warn: uint } }] }`. Designed for cross-repo aggregation. |
 | `duration_ms`          | uint     |                                                                    |
 
@@ -253,7 +273,7 @@ K snapshot labels + the climb-majority findings.
 
 | Field                       | Type     | Notes                                                                          |
 | --------------------------- | -------- | ------------------------------------------------------------------------------ |
-| `schema_version`            | string   | `"0.5.0"`.                                                                     |
+| `schema_version`            | string   | `"0.6.0"`.                                                                     |
 | `crate_version`             | string   |                                                                                |
 | `drift.base`                | string?  | Echo of `--base`.                                                              |
 | `drift.sessions`            | uint     | Echo of `--sessions K`.                                                        |
@@ -265,7 +285,7 @@ K snapshot labels + the climb-majority findings.
 
 | Field      | Type   | Notes                                                                                                |
 | ---------- | ------ | ---------------------------------------------------------------------------------------------------- |
-| `layer`    | string | One of `"hotspot"`, `"coupling"`, `"drift"`, `"budget"`, `"health"` (v0.4 — populated), `"structure"` (v0.5 — populated), `"complexity"` (v0.5 — populated), `"anchor"` (v0.5 — populated; previously reserved). |
+| `layer`    | string | One of `"hotspot"`, `"coupling"`, `"cohesion"` (v0.6 — populated), `"drift"`, `"budget"`, `"health"` (v0.4 — populated), `"structure"` (v0.5 — populated), `"complexity"` (v0.5 — populated), `"anchor"` (v0.5 — populated; previously reserved). |
 | `severity` | string | `"warn"`, `"info"`, `"ok"`. v0.4 actually populates `"ok"` (pre-edit quiet-file fall-through).      |
 | `message`  | string | Human-readable, terse, one-line. The structured detail lives in `layer` / `severity`.                |
 
@@ -288,3 +308,67 @@ The `mmk drift` envelope inlines per-finding bookkeeping fields
 (`path`, `climb_transitions`, etc.) directly into each finding object;
 review / pre-edit / session-summary keep `findings[]` to the unified
 shape above.
+
+## Hook output envelope (v0.6)
+
+When `mmk pre-edit` or `mmk review` is invoked from a Claude Code
+hook (detected by the presence of a JSON envelope on stdin with a
+non-empty `hook_event_name`), the output shape switches from the
+`--format json` envelope above to the documented Claude Code
+hook-output schema. The body of any findings flows through the
+text renderer (single source of truth with the CLI text path) and
+is wrapped in:
+
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse" | "PostToolUse" | "Stop",
+    "additionalContext": "<rendered findings text, optional>"
+  },
+  "decision": "block",
+  "reason": "<gated wording, optional>",
+  "systemMessage": "<dedup-suppress or no-findings note, optional>"
+}
+```
+
+| Field                                  | Type    | When present                                                                                                          |
+| -------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------- |
+| `hookSpecificOutput.hookEventName`     | string  | Always.                                                                                                               |
+| `hookSpecificOutput.additionalContext` | string? | Present when there is a findings body to inject and the run isn't dedup-suppressed and isn't blocking on Warn.        |
+| `decision`                             | string? | Set to `"block"` only when the caller passed `--gate warn` AND at least one Warn-severity finding fires. Hard yield to the agent. |
+| `reason`                               | string? | The block reason, including the rendered findings body. Present iff `decision = "block"`.                             |
+| `systemMessage`                        | string? | Present on dedup-suppress (`mmk: prior findings unchanged since HEAD <sha7>`) or no-findings-to-deliver.              |
+
+`PreToolUse` invocations never carry `decision: "block"` — Claude
+Code's hook contract reserves Edit-phase blocking for `PostToolUse`
+/ `Stop`, which is also where `--gate warn` takes effect.
+
+The argv-fallback path is preserved: invoking `mmk review` /
+`mmk pre-edit` without a stdin envelope produces the
+`--format text` or `--format json` shape documented above.
+
+## Schema-version history
+
+- **`0.6.0`** — Layer `"cohesion"` populated; `sensor.cohesion`
+  config block; `review.diff.budget` sub-block (gross / net BUDGET
+  accounting); `bulk.max_files` / `bulk.max_lines` honoured from
+  `mokumokuren.toml`; `learn_sensor_stats` cohesion fields; hook
+  output envelope shape; COUPLING gate defaults shifted
+  (`confidence_threshold` 0.20 → 0.30, `min_sample_size` 1 → 3);
+  empty-session WINDOW collapse (`files` key omitted).
+- **`0.5.0`** — Layers `"structure"`, `"complexity"`, `"anchor"`
+  populated; `sensor.{structure,complexity,budget_ramp}` config
+  blocks; greenfield acknowledgement
+  (`review.diff.new_file_fraction`); per-fire dedup; eval gains
+  `replay_histogram` and `learn_sensor_stats`.
+- **`0.4.0`** — Wilson-gated COUPLING: `top_couples[]` gains
+  `conditional_probability`, `wilson_lower_95`;
+  `coupling.confidence_threshold` / `min_sample_size`; Health
+  layer (TypeScript) populates `"health"` and the optional
+  `health` block; eval renames `jaccard_buckets` →
+  `wilson_lower_buckets` and gains `learn_suggestions`;
+  `Severity::Ok` populated.
+- **`0.3.0`** — Unified `findings[]` array on review / pre-edit /
+  drift / session-summary envelopes.
+- **`0.2.0`** — `schema_version` field locked; optional
+  `session` and `blast_radius` blocks.

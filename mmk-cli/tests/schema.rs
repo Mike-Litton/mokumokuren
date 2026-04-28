@@ -52,7 +52,7 @@ fn schema_version_present_and_pinned() {
     let stdout = run_in(dir.path(), json_args());
     let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
     assert_eq!(
-        v["schema_version"], "0.5.0",
+        v["schema_version"], "0.6.0",
         "schema_version should be pinned to the mmk minor release"
     );
 }
@@ -281,19 +281,19 @@ fn schema_top_couples_entry_shape_against_coupling_fixture() {
         .find(|c| c["partner"] == "core/b.rs")
         .expect("canonical core/b.rs partner");
     // Lock the populated values too — the contract is "right keys,
-    // right values," not just keys. P(B|A) = 3/5 = 0.60; jaccard = 0.60.
+    // right values," not just keys. P(B|A) = 4/5 = 0.80; jaccard = 0.80.
     let p = b_couple["conditional_probability"].as_f64().unwrap();
     assert!(
-        (p - 0.60).abs() < 1e-9,
-        "conditional_probability for canonical pair = 3/5; got {p}"
+        (p - 0.80).abs() < 1e-9,
+        "conditional_probability for canonical pair = 4/5; got {p}"
     );
     let w = b_couple["wilson_lower_95"].as_f64().unwrap();
     assert!(
-        w > 0.20 && w < 0.30,
-        "Wilson 95% lower for 3/5, n=5 should be ≈0.231; got {w}"
+        w > 0.30 && w < 0.45,
+        "Wilson 95% lower for 4/5, n=5 should be ≈0.376; got {w}"
     );
     let co = b_couple["co_change_count"].as_u64().unwrap();
-    assert_eq!(co, 3, "co_change_count of canonical pair");
+    assert_eq!(co, 4, "co_change_count of canonical pair");
 }
 
 #[test]
@@ -454,7 +454,7 @@ fn run_review_in(repo: &std::path::Path, args: ReviewArgs) -> Vec<u8> {
     std::env::set_current_dir(repo).unwrap();
     let mut stdout: Vec<u8> = Vec::new();
     let mut stderr: Vec<u8> = Vec::new();
-    let res = mokumokuren::commands::review::run(&args, &mut stdout, &mut stderr);
+    let res = mokumokuren::commands::review::run(&args, None, &mut stdout, &mut stderr);
     std::env::set_current_dir(orig).unwrap();
     res.expect("review should succeed on fixture");
     stdout
@@ -468,7 +468,7 @@ fn run_pre_edit_in(repo: &std::path::Path, args: PreEditArgs) -> Vec<u8> {
     std::env::set_current_dir(repo).unwrap();
     let mut stdout: Vec<u8> = Vec::new();
     let mut stderr: Vec<u8> = Vec::new();
-    let res = mokumokuren::commands::pre_edit::run(&args, &mut stdout, &mut stderr);
+    let res = mokumokuren::commands::pre_edit::run(&args, None, &mut stdout, &mut stderr);
     std::env::set_current_dir(orig).unwrap();
     res.expect("pre-edit should succeed on fixture");
     stdout
@@ -605,7 +605,7 @@ fn schema_pre_edit_shape() {
     build_coupling_fixture(dir.path(), now);
 
     let args = PreEditArgs {
-        path: PathBuf::from("core/a.rs"),
+        path: Some(PathBuf::from("core/a.rs")),
         since: "60days".into(),
         top: 20,
         format: Format::Json,

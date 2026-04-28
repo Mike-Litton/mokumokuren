@@ -14,7 +14,7 @@ use tempfile::TempDir;
 
 fn pre_edit_args(path: &str) -> PreEditArgs {
     PreEditArgs {
-        path: PathBuf::from(path),
+        path: Some(PathBuf::from(path)),
         since: "60days".into(),
         top: 20,
         format: Format::Json,
@@ -39,7 +39,7 @@ fn run_in(repo: &std::path::Path, args: PreEditArgs) -> Vec<u8> {
     std::env::set_current_dir(repo).unwrap();
     let mut stdout: Vec<u8> = Vec::new();
     let mut stderr: Vec<u8> = Vec::new();
-    let res = mokumokuren::commands::pre_edit::run(&args, &mut stdout, &mut stderr);
+    let res = mokumokuren::commands::pre_edit::run(&args, None, &mut stdout, &mut stderr);
     std::env::set_current_dir(orig).unwrap();
     res.expect("pre-edit should succeed on fixture");
     stdout
@@ -87,7 +87,7 @@ fn pre_edit_emits_coupling_for_partners_above_threshold() {
         .collect();
     assert!(
         !coupling.is_empty(),
-        "core/a.rs has Wilson 95% lower ≈ 0.23 with core/b.rs — must fire COUPLING informational; got: {}",
+        "core/a.rs has Wilson 95% lower ≈ 0.38 with core/b.rs — must fire COUPLING informational; got: {}",
         v["findings"]
     );
     let mentions_b = coupling
@@ -341,8 +341,8 @@ fn pre_edit_absolute_path_resolves_to_repo_relative_lookup() {
     // Hook integrations pass absolute paths via
     // `tool_input.file_path`. The analyzer keys lookups on
     // repo-relative paths, so without normalization the absolute
-    // form silently misses every layer and falls through to the OK
-    // "new file (no history)" — degrading every hook fire.
+    // form silently misses every layer and falls through to the
+    // quiet-file OK fallback — degrading every hook fire.
     //
     // Same fixture, two invocations: relative path and absolute
     // path. Both must produce the same COUPLING signal.
@@ -387,11 +387,13 @@ fn pre_edit_absolute_path_resolves_to_repo_relative_lookup() {
 
 #[test]
 fn pre_edit_says_new_file_for_untracked_subject() {
-    // Pre-edit on a file that has never appeared in history must
-    // distinguish "new file (no history)" from "no signal (N
-    // commits…)" — the former is structural, the latter
-    // statistical, and conflating them misleads agents working in
-    // greenfield slices.
+    // Pre-edit on a file that's never been committed AND isn't in
+    // HEAD's tree must surface the truly-new wording. The
+    // history-was-filtered case (which uses different wording) is
+    // covered separately because conflating them would let an
+    // agent on a wide-grain repo read "no risk" for files that
+    // actually have rich edit history that happens to be
+    // invisible to the bulk filter.
     let dir = TempDir::new().unwrap();
     let now = 1_700_000_000_i64;
     init_repo(dir.path());
@@ -410,8 +412,8 @@ fn pre_edit_says_new_file_for_untracked_subject() {
     );
     let msg = findings[0]["message"].as_str().unwrap_or("");
     assert!(
-        msg.contains("new file (no history)"),
-        "untracked subject's wording must say 'new file (no history)'; got: {msg}"
+        msg.contains("new file (not yet in HEAD)"),
+        "untracked subject's wording must say 'new file (not yet in HEAD)'; got: {msg}"
     );
     assert!(
         !msg.contains("no signal"),

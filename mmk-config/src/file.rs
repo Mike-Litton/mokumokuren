@@ -50,14 +50,45 @@ pub struct BlastRadiusFile {
     pub threshold: f64,
 }
 
-/// `[bulk]` block in `mokumokuren.toml`. Currently exposes only
-/// `greenfield_threshold`; the per-commit `max_files` / `max_lines`
-/// stay on the in-code defaults to keep the surface stable.
+/// `[bulk]` block in `mokumokuren.toml`.
+///
+/// Exposes both the per-diff guardrails and the per-commit
+/// historical filter so codebases with naturally wider commit
+/// grain (workspace projects, infrastructure repos, scaffold-heavy
+/// histories) can tune them. The defaults are calibrated for
+/// "typical" agent edits; on a repo where real feature work
+/// routinely runs ≥30 files, leaving the cap at the default
+/// renders most history invisible to the analyzer (the bulk filter
+/// drops every wide-grain commit) and reads as "no analyzable
+/// history" on files the agent edits — the wording for which is
+/// in `messages::quiet_file`.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BulkFile {
     #[serde(default)]
     pub greenfield_threshold: Option<f64>,
+    /// Glob patterns whose paths are excluded from diff-time BUDGET
+    /// accounting (only — they still appear in `review.diff.files`
+    /// and in the historical analyzer). Defaults to the in-code
+    /// `DEFAULT_BULK_IGNORE_FOR_BUDGET`.
+    #[serde(default)]
+    pub ignore_for_budget: Vec<String>,
+    /// Override the per-commit / per-diff file cap. Affects both
+    /// the historical-baseline filter (commits with > this many
+    /// files don't contribute to coupling priors) and the
+    /// working-tree bulk-self-filter (diffs over the cap silence
+    /// HOTSPOT/COUPLING). Default 15. Bump for repos whose natural
+    /// commit grain is wider; the LOC cap stays the dominant
+    /// guardrail under Cohen's review-effectiveness threshold
+    /// either way.
+    #[serde(default)]
+    pub max_files: Option<u32>,
+    /// Override the per-commit / per-diff line cap. Default 1000.
+    /// The line cap is the literature-backed half of BUDGET
+    /// (Cohen 2006 SmartBear/Cisco data); the file cap above is
+    /// an engineering heuristic.
+    #[serde(default)]
+    pub max_lines: Option<u32>,
 }
 
 /// `[coupling]` block in `mokumokuren.toml`.
@@ -110,6 +141,8 @@ pub struct SensorFile {
     pub complexity: Option<ComplexityFile>,
     #[serde(default)]
     pub budget_ramp: Option<BudgetRampFile>,
+    #[serde(default)]
+    pub cohesion: Option<CohesionFile>,
 }
 
 /// `[sensor.budget_ramp]` block. Opt-in: under-cap BUDGET ramp
@@ -160,6 +193,25 @@ pub struct ComplexityFile {
     pub loc_absolute_max: Option<u32>,
     #[serde(default)]
     pub min_directory_siblings: Option<u32>,
+}
+
+/// `[sensor.cohesion]` block.
+///
+/// Every field is optional so adopters can pin only the knob they
+/// want to tune. Missing fields fall through to the in-code
+/// defaults; the rationale for each default lives next to the
+/// constant in `lib.rs`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CohesionFile {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub confidence_threshold: Option<f64>,
+    #[serde(default)]
+    pub min_sample_size: Option<u32>,
+    #[serde(default)]
+    pub min_files_per_cluster: Option<u32>,
 }
 
 impl ConfigFile {

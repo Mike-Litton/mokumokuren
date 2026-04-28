@@ -104,7 +104,12 @@ struct SessionReport<'a> {
     config: &'a Config,
     analysis: AnalysisBlock,
     /// The full-window ranking — same shape as `analyze`'s `files`.
-    files: Vec<FileEntry<'a>>,
+    /// Suppressed (`None` → key omitted) when the session has zero
+    /// commits, so the empty-session view doesn't bury the ANCHOR
+    /// nudge under a window-wide hotspot list the user can fetch
+    /// from `mmk analyze` if they want it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    files: Option<Vec<FileEntry<'a>>>,
     /// The ranking computed only over commits since the resolved base.
     session_files: Vec<FileEntry<'a>>,
     session: SessionBlock<'a>,
@@ -218,20 +223,30 @@ pub fn write_session<W: Write>(
 ) -> Result<()> {
     let analysis = &session_out.window;
 
-    let files: Vec<FileEntry<'_>> = window_ranked
-        .iter()
-        .map(|e| FileEntry {
-            path: e.path.to_string_lossy().into_owned(),
-            loc: e.loc,
-            weighted_churn: e.weighted_churn,
-            relative_churn: e.relative_churn,
-            hotspot_score: e.hotspot_score,
-            hotspot_rank: e.hotspot_rank,
-            commits_touching: e.commits_touching,
-            last_modified: rfc3339(e.last_modified),
-            top_couples: &e.top_couples,
-        })
-        .collect();
+    let session_n = session_out.session_commits.len();
+    let files: Option<Vec<FileEntry<'_>>> = if session_n == 0 {
+        // Empty session: the WINDOW ranking is noise (locale `.po`,
+        // generated artifacts) that buries the ANCHOR nudge. Drop it
+        // entirely; the absent key signals "fetch from `mmk analyze`."
+        None
+    } else {
+        Some(
+            window_ranked
+                .iter()
+                .map(|e| FileEntry {
+                    path: e.path.to_string_lossy().into_owned(),
+                    loc: e.loc,
+                    weighted_churn: e.weighted_churn,
+                    relative_churn: e.relative_churn,
+                    hotspot_score: e.hotspot_score,
+                    hotspot_rank: e.hotspot_rank,
+                    commits_touching: e.commits_touching,
+                    last_modified: rfc3339(e.last_modified),
+                    top_couples: &e.top_couples,
+                })
+                .collect(),
+        )
+    };
     let session_files: Vec<FileEntry<'_>> = session_ranked
         .iter()
         .map(|e| FileEntry {
@@ -322,6 +337,25 @@ struct ReviewDiffBlock<'a> {
     /// the diff.
     #[serde(skip_serializing_if = "Option::is_none")]
     new_file_fraction: Option<f64>,
+    /// v0.6 BUDGET accounting block. Present only when
+    /// `bulk.ignore_for_budget` matched at least one file in the
+    /// diff — at that point gross / net diverge and the agent
+    /// needs to see both. When the globset is empty or didn't
+    /// match, this key is omitted (gross == net, redundant with
+    /// `files_changed` / `lines_added` + `lines_deleted`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    budget: Option<ReviewBudgetBlock>,
+}
+
+#[derive(Serialize)]
+struct ReviewBudgetBlock {
+    files_gross: u32,
+    files_net: u32,
+    lines_gross: u64,
+    lines_net: u64,
+    /// Globs from `bulk.ignore_for_budget` actively in effect.
+    /// Echoed for diagnostic transparency.
+    ignored_for_budget: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -383,6 +417,7 @@ pub(crate) fn write_review<W: Write>(
     health_matches: &[mmk_health::HealthFinding],
     health_patterns: &[mmk_health::HealthPattern],
     new_file_fraction: Option<f64>,
+    counts: &crate::commands::review::BudgetCounts,
 ) -> Result<()> {
     let path_strs: Vec<String> = changed
         .iter()
@@ -430,6 +465,7 @@ pub(crate) fn write_review<W: Write>(
                 lines_deleted,
                 files,
                 new_file_fraction,
+                budget: review_budget_block(counts),
             },
         },
         findings,
@@ -439,6 +475,21 @@ pub(crate) fn write_review<W: Write>(
     serde_json::to_writer_pretty(&mut *w, &report)?;
     writeln!(w)?;
     Ok(())
+}
+
+fn review_budget_block(
+    counts: &crate::commands::review::BudgetCounts,
+) -> Option<ReviewBudgetBlock> {
+    if !counts.has_ignored() {
+        return None;
+    }
+    Some(ReviewBudgetBlock {
+        files_gross: counts.files_gross,
+        files_net: counts.files_net,
+        lines_gross: counts.lines_gross,
+        lines_net: counts.lines_net,
+        ignored_for_budget: counts.ignored_for_budget.clone(),
+    })
 }
 
 #[derive(Serialize)]
@@ -640,6 +691,7 @@ pub(crate) fn write_review_bulk<W: Write>(
     w: &mut W,
     mode: crate::commands::review::ReviewMode,
     changed: &[crate::commands::review::ChangedFile],
+    counts: &crate::commands::review::BudgetCounts,
     findings: &[crate::output::findings::Finding],
     duration_ms: u64,
 ) -> Result<()> {
@@ -670,6 +722,7 @@ pub(crate) fn write_review_bulk<W: Write>(
                 lines_deleted,
                 files,
                 new_file_fraction: None,
+                budget: review_budget_block(counts),
             },
         },
         findings,

@@ -15,6 +15,12 @@ use std::io::Write;
 pub enum Layer {
     Hotspot,
     Coupling,
+    /// Tangled-diff detection (`[sensor.cohesion]`) — fires when a
+    /// working-tree diff spans multiple disjoint coupling-graph
+    /// components. Reads as "this looks like two changes carried in
+    /// one diff," the structural fingerprint Herzig & Zeller (2013)
+    /// identified as elevating revert / review cost.
+    Cohesion,
     Drift,
     Budget,
     /// Structural-pattern adapter findings (mmk-health). Populated
@@ -35,6 +41,7 @@ impl Layer {
         match self {
             Self::Hotspot => "HOTSPOT",
             Self::Coupling => "COUPLING",
+            Self::Cohesion => "COHESION",
             Self::Drift => "DRIFT",
             Self::Budget => "BUDGET",
             Self::Health => "HEALTH",
@@ -81,9 +88,16 @@ impl Finding {
     }
 }
 
-const LAYER_ORDER: [Layer; 8] = [
+// Layer rendering order. COHESION sits next to COUPLING because the
+// two answer related questions on the same co-change graph: COUPLING
+// flags a *missing* partner of one edited file; COHESION flags
+// *multiple disjoint clusters* in the diff. Reading them adjacently
+// keeps the agent's mental model of "co-change graph signals" in
+// one place.
+const LAYER_ORDER: [Layer; 9] = [
     Layer::Hotspot,
     Layer::Coupling,
+    Layer::Cohesion,
     Layer::Drift,
     Layer::Budget,
     Layer::Health,

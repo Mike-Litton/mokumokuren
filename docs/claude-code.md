@@ -59,6 +59,9 @@ emits layer-labeled findings:
 - `COUPLING` — file you edited has a historical partner you did
   not touch. Decide deliberately whether the partner needs the
   matching change.
+- `COHESION` — your diff spans multiple disjoint co-change
+  clusters. Likely a tangled change (two unrelated edits in one
+  diff); consider splitting into separate commits.
 - `STRUCTURE` — the file's directory has a convention (siblings
   share imports / export shape). Your file diverges or matches.
 - `COMPLEXITY` — function shape (nesting / LOC) is far above the
@@ -136,6 +139,14 @@ Hooks execute as shell commands when the agent uses specific tools,
 and their output is captured into the model's context. The strongest
 guarantee.
 
+mmk reads Claude Code's documented hook envelope on stdin —
+`{session_id, transcript_path, cwd, hook_event_name, tool_input:
+{file_path, ...}}` — and emits its findings back through the
+documented hook output channels (`hookSpecificOutput.
+additionalContext` for non-blocking inject; `decision: "block"` +
+`reason` when the user opts into hard-yield via `--gate warn`). No
+environment-variable plumbing required.
+
 Add to `.claude/settings.json`:
 
 ```json
@@ -143,22 +154,22 @@ Add to `.claude/settings.json`:
   "hooks": {
     "PostToolUse": [
       {
-        "matcher": "Edit",
+        "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
-            "command": "mmk review 2>/dev/null || true"
+            "command": "mmk review"
           }
         ]
       }
     ],
     "PreToolUse": [
       {
-        "matcher": "Edit",
+        "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
-            "command": "mmk pre-edit \"$CLAUDE_TOOL_INPUT_FILE_PATH\" 2>/dev/null || true"
+            "command": "mmk pre-edit"
           }
         ]
       }
@@ -170,21 +181,20 @@ Add to `.claude/settings.json`:
 The `PostToolUse:Edit` hook is the primary integration: every Edit
 fires `mmk review`, which sees the working-tree diff including the
 edit just made, and feeds findings back into the model's context
-before its next turn. The `PreToolUse:Edit` hook is optional —
-useful if you want the agent to see the historical-partner list
-*before* committing to the edit.
+through `hookSpecificOutput.additionalContext`. The
+`PreToolUse:Edit` hook is optional — useful if you want the agent
+to see the historical-partner list *before* committing to the edit.
+mmk auto-detects "I was invoked from a hook" by the presence of the
+JSON envelope on stdin, so the same binary works for manual
+invocation (no envelope → text or `--format json` output) and hook
+invocation (envelope → hook-shape JSON).
 
-**Why text mode?** `mmk review` text output is ~150 bytes (just the
-layer-prefixed finding lines). The JSON envelope is ~1.5 kB per
-fire. Across a 50-edit session that's ~8 kB vs ~75 kB of injected
-context — measurably better for any context-limited model. Use
-`--format json` only if your harness genuinely consumes structured
-output.
-
-The exact environment-variable name for the tool input may differ
-by Claude Code version; check `claude --help` for the current name.
-The `|| true` ensures the hook can't fail the tool call if `mmk`
-isn't installed.
+When mmk runs but its dedup gate has already emitted these same
+findings against the same HEAD within the TTL, hook output carries
+a top-level `systemMessage` ("mmk: prior findings unchanged since
+HEAD <sha7>") so the agent can distinguish "consulted, quiet" from
+"wasn't run." That replaces the silent no-op older `2>/dev/null ||
+true` recipes used to mask.
 
 ### CI gating with `--gate`
 
@@ -199,6 +209,12 @@ diff is clean, 1 if mmk itself errors. The exit-2 / exit-1 split
 lets a CI pipeline distinguish "policy failed" from "tool crashed."
 `--gate error` is reserved for future severity tiers and behaves
 like `none` today.
+
+Inside a hook, `--gate warn` switches the output shape: instead of
+`additionalContext`, mmk emits `decision: "block"` + `reason`,
+which Claude Code surfaces as a hard yield to the agent. This is
+the strict-deployment knob — the default hook recipe stays
+advisory.
 
 Same flag works on `mmk pre-edit` and `mmk session-summary`.
 

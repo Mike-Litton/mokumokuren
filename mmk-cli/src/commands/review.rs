@@ -23,11 +23,13 @@ use std::time::Instant;
 use crate::args::{Format, Gate, ReviewArgs};
 use crate::commands::analyze::COUPLES_PER_FILE;
 use crate::commands::common::{
-    analyze_health_for_subject, apply_coupling_file, apply_health_file, apply_sensor_file,
-    complexity_to_finding, coupling_findings, health_severity_for_review, health_to_finding,
-    list_directory_siblings, load_bodies, load_config_file, resolve_patterns, structure_to_finding,
-    CouplingEmission, CouplingProse,
+    analyze_health_for_subject, apply_coupling_file, apply_health_file, apply_monotonic_gate,
+    apply_sensor_file, complexity_to_finding, coupling_findings_with_signal,
+    health_severity_for_review, health_to_finding, list_directory_siblings, load_bodies,
+    load_config_file, resolve_patterns, structure_to_finding_with_signal, CouplingEmission,
+    CouplingProse,
 };
+use crate::hook::HookEnvelope;
 use crate::output::findings::{render_text, Finding, Layer, Severity};
 use crate::output::messages;
 use crate::Verdict;
@@ -60,6 +62,7 @@ pub(crate) struct ChangedFile {
 
 pub fn run<O: Write, E: Write>(
     args: &ReviewArgs,
+    envelope: Option<&HookEnvelope>,
     stdout: &mut O,
     stderr: &mut E,
 ) -> Result<Verdict> {
@@ -95,7 +98,7 @@ pub fn run<O: Write, E: Write>(
     // emits the envelope with empty findings so harnesses can still
     // parse a stable shape.
     if changed.is_empty() {
-        emit_empty(args, mode, stdout)?;
+        emit_empty(args, envelope, mode, stdout)?;
         return Ok(Verdict::Ok);
     }
 
@@ -118,12 +121,24 @@ pub fn run<O: Write, E: Write>(
             &mut cfg.sensor.structure,
             &mut cfg.sensor.complexity,
             &mut cfg.sensor.budget_ramp,
+            &mut cfg.sensor.cohesion,
             file_s,
         );
     }
     if let Some(file_b) = file_cfg.bulk.as_ref() {
         if let Some(t) = file_b.greenfield_threshold {
             cfg.bulk.greenfield_threshold = t;
+        }
+        if !file_b.ignore_for_budget.is_empty() {
+            cfg.bulk
+                .ignore_for_budget
+                .clone_from(&file_b.ignore_for_budget);
+        }
+        if let Some(v) = file_b.max_files {
+            cfg.bulk.max_files = v;
+        }
+        if let Some(v) = file_b.max_lines {
+            cfg.bulk.max_lines = v;
         }
     }
     // Explicit --coupling-threshold wins; fall back to the
@@ -143,19 +158,55 @@ pub fn run<O: Write, E: Write>(
     // (where the analyzer-based layers are suppressed) and the
     // normal path. The expensive-history layers (HOTSPOT/COUPLING) and
     // the analyzer-driven greenfield signal still gate on bulk below.
-    let sensor_findings = compute_sensor_findings(&cwd, &changed, &cfg);
+    let sensor_items = compute_sensor_findings(&cwd, &changed, &cfg);
 
-    // §1c bulk self-filter: if the input diff itself trips the bulk
-    // thresholds, this is a sweep / vendored snapshot — emit BUDGET
-    // and the per-file sensor findings, then skip the (expensive,
-    // noisy) HOTSPOT/COUPLING analysis. Mirrors how the analyzer
-    // drops bulk commits from history.
-    let files_n = u32::try_from(changed.len()).unwrap_or(u32::MAX);
-    let lines_n: u64 = changed.iter().map(|c| c.added + c.deleted).sum();
-    if files_n > cfg.bulk.max_files || lines_n > u64::from(cfg.bulk.max_lines) {
-        let mut findings = bulk_self_findings(files_n, lines_n, &cfg);
+    // Bulk self-filter: when the diff itself blows the BUDGET cap
+    // (default `max_files = 15`, `max_lines = 1000`), the
+    // history-graph layers (HOTSPOT, COUPLING, DRIFT, greenfield)
+    // are intentionally skipped. The reason is signal collapse,
+    // not cost:
+    //
+    // - COUPLING asks "given you edited A, you should also have
+    //   touched B." The `excluded_partners` filter drops any
+    //   partner already in the changed_set. On a diff with
+    //   hundreds of files, every historical partner of every
+    //   changed file is in the diff by construction — COUPLING's
+    //   "missed partner" question is trivially answered "no" for
+    //   nearly all pairs, and the few survivors are statistical
+    //   artifacts.
+    // - HOTSPOT degenerates symmetrically: dozens of fires per
+    //   review, each "true" but each redundant against the BUDGET
+    //   message that's the actual point. Information per finding
+    //   collapses.
+    // - The historical analyzer (`mmk_git::analyze`) already drops
+    //   commits with > `max_files` files from the *baseline* —
+    //   that's the same `bulk` filter applied to the working tree
+    //   here, so the working-tree diff isn't being scored against
+    //   a baseline that would have included it anyway.
+    //
+    // Per-file sensors (STRUCTURE, COMPLEXITY) still run — their
+    // cost scales per changed file (not with diff size) and their
+    // signal stays meaningful per-file at any total diff size.
+    //
+    // The LOC-cap framing is research-grounded (Cohen 2006
+    // SmartBear/Cisco data: defect-detection-rate degrades sharply
+    // past ~200 LOC per review and floors out past ~400 LOC). The
+    // file-count cap is an engineering heuristic — there is no
+    // peer-reviewed file-count threshold in the literature.
+    //
+    // The `ignore_for_budget` globset removes generated-file class
+    // paths from the BUDGET-trigger denominator. Both gross (full
+    // diff) and net (post-filter) counts are surfaced so silent
+    // dropping doesn't re-create the v0.4 class of bug where mmk's
+    // measurement disagreed with the user's reality.
+    let counts = budget_counts(&changed, &cfg.bulk.ignore_for_budget);
+    if counts.files_net > cfg.bulk.max_files || counts.lines_net > u64::from(cfg.bulk.max_lines) {
+        let mut findings = bulk_self_findings(&counts, &cfg);
+        let sensor_findings = apply_monotonic_gate(&cwd, None, sensor_items, args.no_dedup);
         findings.extend(sensor_findings);
-        return emit_bulk(args, mode, &changed, &findings, started, stdout);
+        return emit_bulk(
+            args, envelope, mode, &changed, &counts, &findings, started, stdout,
+        );
     }
 
     let analysis = mmk_git::analyze(&cwd, &cfg)?;
@@ -183,14 +234,25 @@ pub fn run<O: Write, E: Write>(
         cfg.hotspot.top_n,
     );
 
-    let mut findings = compute_findings(
-        &changed,
-        &ranked,
-        &analysis.commits,
-        &commits_touching,
-        &cfg,
-        args.top,
-    );
+    // History-layer findings (HOTSPOT / COUPLING / BUDGET) are
+    // signal-tagged so COUPLING repeats with neither k nor n
+    // worsening drop through the same gate that handles
+    // STRUCTURE / COMPLEXITY. Sensor + history items merge into one
+    // gate call so the LRU cap and persistence pass run once.
+    let mut tagged: Vec<(Finding, Option<crate::monotonic::MonotonicSignal>)> =
+        compute_findings_with_signals(
+            &changed,
+            &ranked,
+            &analysis.commits,
+            &commits_touching,
+            &cfg,
+            args.top,
+            &counts,
+        );
+    tagged.extend(sensor_items);
+
+    let mut findings =
+        apply_monotonic_gate(&cwd, analysis.head_sha.as_deref(), tagged, args.no_dedup);
 
     // HEALTH: structural-pattern adapter. Pattern C is **Warn**
     // when the implementation moved without its test partner; A/B
@@ -218,10 +280,6 @@ pub fn run<O: Write, E: Write>(
             }
         }
     }
-
-    // STRUCTURE + COMPLEXITY were computed before the bulk-self-filter
-    // so they're visible in both paths; reuse them here.
-    findings.extend(sensor_findings);
 
     // GREENFIELD signal: when most of the diff is paths the historical
     // analyzer hasn't seen, the HOTSPOT/COUPLING/DRIFT layers
@@ -258,11 +316,24 @@ pub fn run<O: Write, E: Write>(
     // boundaries match the agent's mental model — if the picture
     // changed since last time, show me. Hook-shape only: analyze /
     // eval / session-summary / drift are user-invoked and stay
-    // verbose.
-    if !args.no_dedup {
-        if let Some(verdict) = maybe_suppress_review(&cwd, &findings, &analysis, args.gate) {
-            return Ok(verdict);
-        }
+    // verbose. Under hook output, the agent gets an explicit
+    // `systemMessage` instead of silence.
+    let suppressed =
+        !args.no_dedup && maybe_suppress_review(&cwd, &findings, &analysis, args.gate).is_some();
+    if suppressed && envelope.is_none() {
+        return Ok(verdict_for(args.gate, &findings));
+    }
+
+    if let Some(env) = envelope_for_hook(envelope) {
+        crate::output::hook_json::write_post_tool_use(
+            stdout,
+            &env.hook_event_name,
+            if suppressed { &[] } else { &findings },
+            suppressed,
+            analysis.head_sha.as_deref(),
+            matches!(args.gate, Gate::Warn),
+        )?;
+        return Ok(verdict_for(args.gate, &findings));
     }
 
     match args.format {
@@ -278,9 +349,87 @@ pub fn run<O: Write, E: Write>(
             &health_matches,
             &health_patterns,
             Some(new_frac),
+            &counts,
         )?,
     }
     Ok(verdict_for(args.gate, &findings))
+}
+
+/// Thin alias: returns `Some(env)` when the envelope carries a
+/// non-empty `hook_event_name`. The empty-name case happens when a
+/// caller pipes some other JSON in but the field is missing — fall
+/// through to standard CLI output rather than emitting hook-shape
+/// JSON the hook harness can't parse.
+fn envelope_for_hook(env: Option<&HookEnvelope>) -> Option<&HookEnvelope> {
+    env.filter(|e| !e.hook_event_name.is_empty())
+}
+
+/// Per-diff BUDGET accounting: the gross totals (every changed
+/// file / line in the diff), the net totals (after applying the
+/// `bulk.ignore_for_budget` globset), and the count of files
+/// dropped. The struct is populated once per `mmk review`
+/// invocation and threaded through the bulk-self-filter, the
+/// over-cap trigger, the under-cap ramp, and the JSON envelope so
+/// every consumer sees the same numbers.
+#[derive(Debug, Clone)]
+pub(crate) struct BudgetCounts {
+    pub files_gross: u32,
+    pub files_net: u32,
+    pub lines_gross: u64,
+    pub lines_net: u64,
+    /// Globs from `bulk.ignore_for_budget` actively in effect. Echoed
+    /// into JSON for diagnostic transparency; absent / empty when no
+    /// globs are configured.
+    pub ignored_for_budget: Vec<String>,
+}
+
+impl BudgetCounts {
+    /// `true` when the ignore-for-budget globset matched at least one
+    /// file in the diff. Drives the JSON sub-block presence and
+    /// whether the prose carries the gross/net split.
+    pub(crate) const fn has_ignored(&self) -> bool {
+        self.files_net != self.files_gross || self.lines_net != self.lines_gross
+    }
+}
+
+/// Compute gross + net counts against the `bulk.ignore_for_budget`
+/// globset. Pure: no I/O, easy to test.
+pub(crate) fn budget_counts(changed: &[ChangedFile], globs: &[String]) -> BudgetCounts {
+    let files_gross = u32::try_from(changed.len()).unwrap_or(u32::MAX);
+    let lines_gross: u64 = changed.iter().map(|c| c.added + c.deleted).sum();
+    let globset = build_budget_ignore_globset(globs);
+    let (files_net, lines_net) = globset.as_ref().map_or((files_gross, lines_gross), |set| {
+        let mut fn_ = 0u32;
+        let mut ln = 0u64;
+        for c in changed {
+            if set.is_match(&c.path) {
+                continue;
+            }
+            fn_ = fn_.saturating_add(1);
+            ln = ln.saturating_add(c.added + c.deleted);
+        }
+        (fn_, ln)
+    });
+    BudgetCounts {
+        files_gross,
+        files_net,
+        lines_gross,
+        lines_net,
+        ignored_for_budget: globs.to_vec(),
+    }
+}
+
+fn build_budget_ignore_globset(globs: &[String]) -> Option<GlobSet> {
+    if globs.is_empty() {
+        return None;
+    }
+    let mut builder = GlobSetBuilder::new();
+    for g in globs {
+        if let Ok(glob) = Glob::new(g) {
+            builder.add(glob);
+        }
+    }
+    builder.build().ok()
 }
 
 /// Side-effecting dedup gate. Returns `Some(verdict)` if the current
@@ -320,26 +469,62 @@ fn maybe_suppress_review(
     None
 }
 
-fn emit_empty<O: Write>(args: &ReviewArgs, mode: ReviewMode, stdout: &mut O) -> Result<()> {
+fn emit_empty<O: Write>(
+    args: &ReviewArgs,
+    envelope: Option<&HookEnvelope>,
+    mode: ReviewMode,
+    stdout: &mut O,
+) -> Result<()> {
+    if let Some(env) = envelope_for_hook(envelope) {
+        return crate::output::hook_json::write_post_tool_use(
+            stdout,
+            &env.hook_event_name,
+            &[],
+            false,
+            None,
+            matches!(args.gate, Gate::Warn),
+        );
+    }
     match args.format {
         Format::Text => Ok(()),
         Format::Json => crate::output::json::write_review_empty(stdout, mode),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_bulk<O: Write>(
     args: &ReviewArgs,
+    envelope: Option<&HookEnvelope>,
     mode: ReviewMode,
     changed: &[ChangedFile],
+    counts: &BudgetCounts,
     findings: &[Finding],
     started: Instant,
     stdout: &mut O,
 ) -> Result<Verdict> {
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    if let Some(env) = envelope_for_hook(envelope) {
+        crate::output::hook_json::write_post_tool_use(
+            stdout,
+            &env.hook_event_name,
+            findings,
+            false,
+            None,
+            matches!(args.gate, Gate::Warn),
+        )?;
+        return Ok(verdict_for(args.gate, findings));
+    }
     match args.format {
         Format::Text => render_text(stdout, findings)?,
         Format::Json => {
-            crate::output::json::write_review_bulk(stdout, mode, changed, findings, duration_ms)?;
+            crate::output::json::write_review_bulk(
+                stdout,
+                mode,
+                changed,
+                counts,
+                findings,
+                duration_ms,
+            )?;
         }
     }
     Ok(verdict_for(args.gate, findings))
@@ -352,7 +537,18 @@ fn emit_bulk<O: Write>(
 /// bulk-self-filter already caps. Pulled out of the main `run` so the
 /// bulk path can also surface them: structural / per-function signal
 /// is at least as relevant on a sweep as on a normal review.
-fn compute_sensor_findings(cwd: &Path, changed: &[ChangedFile], cfg: &Config) -> Vec<Finding> {
+///
+/// Returns `(finding, Option<MonotonicSignal>)` pairs so the
+/// orchestration code can apply the monotonic-worsening gate without
+/// re-parsing finding messages. STRUCTURE findings carry `None`
+/// (per-directory-shape; the whole-set dedup already covers them);
+/// COMPLEXITY findings carry the `(path, function, kind)` key plus
+/// the metric so equal-or-improving repeats can drop.
+fn compute_sensor_findings(
+    cwd: &Path,
+    changed: &[ChangedFile],
+    cfg: &Config,
+) -> Vec<(Finding, Option<crate::monotonic::MonotonicSignal>)> {
     let mut out = Vec::new();
     if !(cfg.sensor.structure.enabled || cfg.sensor.complexity.enabled) {
         return out;
@@ -378,7 +574,7 @@ fn compute_sensor_findings(cwd: &Path, changed: &[ChangedFile], cfg: &Config) ->
                 cfg: &cfg.sensor.structure,
             };
             if let Some(sf) = mmk_core::sensors::compute_structure_finding(&input) {
-                out.push(structure_to_finding(&sf, cap, pct));
+                out.push(structure_to_finding_with_signal(&sf, cap, pct));
             }
         }
         if cfg.sensor.complexity.enabled {
@@ -389,29 +585,60 @@ fn compute_sensor_findings(cwd: &Path, changed: &[ChangedFile], cfg: &Config) ->
                 cfg: &cfg.sensor.complexity,
             };
             for cf in mmk_core::sensors::compute_complexity_findings(&input) {
-                out.push(complexity_to_finding(&cf));
+                let signal = complexity_monotonic_signal(&cf);
+                out.push((complexity_to_finding(&cf), Some(signal)));
             }
         }
     }
     out
 }
 
-pub(crate) fn bulk_self_findings(files_n: u32, lines_n: u64, cfg: &Config) -> Vec<Finding> {
+/// Build the per-finding monotonic key + axes for a COMPLEXITY
+/// finding. `kind` is encoded in the key so a Nesting finding and a
+/// Size finding on the same `(path, function)` get independent
+/// suppression — they measure different things and can move
+/// independently.
+fn complexity_monotonic_signal(
+    f: &mmk_core::sensors::ComplexityFinding,
+) -> crate::monotonic::MonotonicSignal {
+    let kind = match f.kind {
+        mmk_core::sensors::ComplexityFindingKind::Nesting => "nesting",
+        mmk_core::sensors::ComplexityFindingKind::Size => "loc",
+    };
+    let key = format!("complexity::{kind}::{}::{}", f.path.display(), f.function,);
+    crate::monotonic::MonotonicSignal {
+        key,
+        axes: vec![f.actual],
+    }
+}
+
+/// BUDGET findings emitted on the bulk-self-filter path.
+///
+/// The `suppressed = true` flag flowed into the message formatters
+/// produces wording that explicitly names the skipped layers
+/// (HOTSPOT/COUPLING) and why — without it, an agent reading the
+/// hook output would see an empty HOTSPOT/COUPLING block and could
+/// misread the silence as "all clear" rather than "uncomputed at
+/// this scale." See [`messages::budget_files`] for the full
+/// rationale on the wording choice.
+pub(crate) fn bulk_self_findings(counts: &BudgetCounts, cfg: &Config) -> Vec<Finding> {
     let mut findings = Vec::new();
     let triggers = mmk_core::budget::check_diff_budget(
         &mmk_core::budget::BudgetCheck {
-            files_changed: files_n,
-            lines_changed: lines_n,
+            files_changed: counts.files_net,
+            lines_changed: counts.lines_net,
         },
         &cfg.bulk,
     );
     for t in triggers {
         let msg = match t {
             mmk_core::budget::BudgetTrigger::FilesExceeded { actual, max } => {
-                messages::budget_files(actual, max, true)
+                let gross = counts.has_ignored().then_some(counts.files_gross);
+                messages::budget_files(actual, max, gross, true)
             }
             mmk_core::budget::BudgetTrigger::LinesExceeded { actual, max } => {
-                messages::budget_lines(actual, max, true)
+                let gross = counts.has_ignored().then_some(counts.lines_gross);
+                messages::budget_lines(actual, max, gross, true)
             }
         };
         findings.push(Finding::new(Layer::Budget, Severity::Warn, msg));
@@ -521,6 +748,7 @@ pub(crate) fn collect_diff(
     Ok(files)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compute_findings(
     changed: &[ChangedFile],
     ranked: &[mmk_core::HotspotEntry],
@@ -528,18 +756,44 @@ pub(crate) fn compute_findings(
     commits_touching: &ahash::AHashMap<PathBuf, u32>,
     cfg: &Config,
     top: usize,
+    counts: &BudgetCounts,
 ) -> Vec<Finding> {
-    let mut findings = Vec::new();
+    compute_findings_with_signals(changed, ranked, commits, commits_touching, cfg, top, counts)
+        .into_iter()
+        .map(|(f, _)| f)
+        .collect()
+}
+
+/// Same shape as [`compute_findings`] but each finding is paired with
+/// an optional [`MonotonicSignal`]. COUPLING entries carry signals
+/// (key `coupling::<subject>::<partner>`, axes `[k, n]`); HOTSPOT and
+/// BUDGET findings stay untagged — HOTSPOT today fires once per
+/// changed-and-ranked file (re-fire on every edit is *itself* the
+/// signal: the file is back in scope), BUDGET is whole-set deduped.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compute_findings_with_signals(
+    changed: &[ChangedFile],
+    ranked: &[mmk_core::HotspotEntry],
+    commits: &[mmk_core::types::Commit],
+    commits_touching: &ahash::AHashMap<PathBuf, u32>,
+    cfg: &Config,
+    top: usize,
+    counts: &BudgetCounts,
+) -> Vec<(Finding, Option<crate::monotonic::MonotonicSignal>)> {
+    let mut findings: Vec<(Finding, Option<crate::monotonic::MonotonicSignal>)> = Vec::new();
     let changed_set: AHashSet<PathBuf> = changed.iter().map(|c| c.path.clone()).collect();
 
     // HOTSPOT — changed file is ranked ≤ top.
     for c in changed {
         if let Some(entry) = ranked.iter().find(|e| e.path == c.path) {
             if (entry.hotspot_rank as usize) <= top {
-                findings.push(Finding::new(
-                    Layer::Hotspot,
-                    Severity::Warn,
-                    messages::hotspot(&c.path, entry.hotspot_rank, top),
+                findings.push((
+                    Finding::new(
+                        Layer::Hotspot,
+                        Severity::Warn,
+                        messages::hotspot(&c.path, entry.hotspot_rank, top),
+                    ),
+                    None,
                 ));
             }
         }
@@ -557,7 +811,7 @@ pub(crate) fn compute_findings(
             let Some(partners) = couples_map.get(&c.path) else {
                 continue;
             };
-            findings.extend(coupling_findings(CouplingEmission {
+            findings.extend(coupling_findings_with_signal(CouplingEmission {
                 subject: &c.path,
                 n,
                 partners,
@@ -570,14 +824,81 @@ pub(crate) fn compute_findings(
         }
     }
 
+    // COHESION — sits next to COUPLING because both walk the same
+    // co-change graph. COUPLING flags missing partners of ONE
+    // changed file; COHESION flags whether the changed files
+    // *together* form a single cluster or split into multiple
+    // disjoint ones (the structural fingerprint of a tangled diff).
+    // Severity is Info — pattern-naming, not gating; promotion to
+    // Warn waits for replay-grade evidence that tangled diffs
+    // measurably predict revert.
+    if cfg.sensor.cohesion.enabled && !changed_set.is_empty() {
+        let components = coupling::connected_components_by_wilson(
+            commits,
+            &changed_set,
+            cfg.sensor.cohesion.confidence_threshold,
+            cfg.sensor.cohesion.min_sample_size,
+        );
+        // Drop singleton greenfield files: a 1-file component on a
+        // path the analyzer has never seen carries no historical
+        // signal either way, so counting it as "another cluster"
+        // would over-report tangled diffs on legitimate
+        // additions-alongside-changes. Multi-file singletons
+        // (real-but-isolated edits) still count.
+        let qualifying: Vec<&Vec<PathBuf>> = components
+            .iter()
+            .filter(|c| {
+                let n_files = u32::try_from(c.len()).unwrap_or(u32::MAX);
+                if n_files < cfg.sensor.cohesion.min_files_per_cluster {
+                    let all_greenfield = c
+                        .iter()
+                        .all(|p| !commits_touching.contains_key(p.as_path()));
+                    return !all_greenfield && n_files >= 1;
+                }
+                true
+            })
+            .filter(|c| {
+                u32::try_from(c.len()).unwrap_or(u32::MAX)
+                    >= cfg.sensor.cohesion.min_files_per_cluster
+            })
+            .collect();
+        if qualifying.len() >= 2 {
+            let total_files: usize = qualifying.iter().map(|c| c.len()).sum();
+            let cluster_sizes: Vec<usize> = qualifying.iter().map(|c| c.len()).collect();
+            // Cap on detail-form rendering: when the total cluster
+            // path count exceeds 8 the path enumeration blows the
+            // line length without adding signal — the cluster
+            // sizes already convey the structural picture.
+            let detail_paths: Option<Vec<Vec<String>>> = if total_files <= 8 {
+                Some(
+                    qualifying
+                        .iter()
+                        .map(|c| c.iter().map(|p| p.display().to_string()).collect())
+                        .collect(),
+                )
+            } else {
+                None
+            };
+            findings.push((
+                Finding::new(
+                    Layer::Cohesion,
+                    Severity::Info,
+                    messages::cohesion_tangled(&cluster_sizes, detail_paths.as_deref()),
+                ),
+                None,
+            ));
+        }
+    }
+
     // BUDGET — over-cap triggers via check_diff_budget; under-cap
     // ramp via budget_progress so the meter is visible from 50%
-    // upward instead of snapping at 100%.
-    let files_n = u32::try_from(changed.len()).unwrap_or(u32::MAX);
-    let lines_n: u64 = changed.iter().map(|c| c.added + c.deleted).sum();
+    // upward instead of snapping at 100%. Both gates evaluate the
+    // *net* counts (after `bulk.ignore_for_budget`); the prose
+    // surfaces the gross totals when they differ so the agent can
+    // see what was excluded.
     let check = mmk_core::budget::BudgetCheck {
-        files_changed: files_n,
-        lines_changed: lines_n,
+        files_changed: counts.files_net,
+        lines_changed: counts.lines_net,
     };
     let triggers = mmk_core::budget::check_diff_budget(&check, &cfg.bulk);
     if triggers.is_empty() {
@@ -590,29 +911,35 @@ pub(crate) fn compute_findings(
             let progress = mmk_core::budget::budget_progress(&check, &cfg.bulk);
             match mmk_core::budget::budget_tier(&progress) {
                 mmk_core::budget::BudgetTier::Approaching => {
-                    findings.push(Finding::new(
-                        Layer::Budget,
-                        Severity::Info,
-                        messages::budget_ramp(
-                            progress.files.0,
-                            progress.files.1,
-                            progress.lines.0,
-                            progress.lines.1,
-                            false,
+                    findings.push((
+                        Finding::new(
+                            Layer::Budget,
+                            Severity::Info,
+                            messages::budget_ramp(
+                                progress.files.0,
+                                progress.files.1,
+                                progress.lines.0,
+                                progress.lines.1,
+                                false,
+                            ),
                         ),
+                        None,
                     ));
                 }
                 mmk_core::budget::BudgetTier::Near => {
-                    findings.push(Finding::new(
-                        Layer::Budget,
-                        Severity::Warn,
-                        messages::budget_ramp(
-                            progress.files.0,
-                            progress.files.1,
-                            progress.lines.0,
-                            progress.lines.1,
-                            true,
+                    findings.push((
+                        Finding::new(
+                            Layer::Budget,
+                            Severity::Warn,
+                            messages::budget_ramp(
+                                progress.files.0,
+                                progress.files.1,
+                                progress.lines.0,
+                                progress.lines.1,
+                                true,
+                            ),
                         ),
+                        None,
                     ));
                 }
                 mmk_core::budget::BudgetTier::Quiet | mmk_core::budget::BudgetTier::Over => {}
@@ -622,13 +949,15 @@ pub(crate) fn compute_findings(
         for t in triggers {
             let msg = match t {
                 mmk_core::budget::BudgetTrigger::FilesExceeded { actual, max } => {
-                    messages::budget_files(actual, max, false)
+                    let gross = counts.has_ignored().then_some(counts.files_gross);
+                    messages::budget_files(actual, max, gross, false)
                 }
                 mmk_core::budget::BudgetTrigger::LinesExceeded { actual, max } => {
-                    messages::budget_lines(actual, max, false)
+                    let gross = counts.has_ignored().then_some(counts.lines_gross);
+                    messages::budget_lines(actual, max, gross, false)
                 }
             };
-            findings.push(Finding::new(Layer::Budget, Severity::Warn, msg));
+            findings.push((Finding::new(Layer::Budget, Severity::Warn, msg), None));
         }
     }
 

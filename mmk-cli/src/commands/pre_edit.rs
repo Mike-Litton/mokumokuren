@@ -15,24 +15,44 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::args::{Format, PreEditArgs};
+use crate::args::{Format, Gate, PreEditArgs};
 use crate::commands::analyze::COUPLES_PER_FILE;
 use crate::commands::common::{
-    analyze_health_for_subject, apply_coupling_file, apply_health_file, apply_sensor_file,
-    coupling_findings, health_to_finding, list_directory_siblings, load_bodies, load_config_file,
-    resolve_patterns, structure_to_finding, CouplingEmission, CouplingProse,
+    analyze_health_for_subject, apply_coupling_file, apply_health_file, apply_monotonic_gate,
+    apply_sensor_file, coupling_findings_with_signal, health_to_finding, list_directory_siblings,
+    load_bodies, load_config_file, resolve_patterns, structure_to_finding_with_signal,
+    CouplingEmission, CouplingProse,
 };
 use crate::commands::review::{build_partner_globset, collect_working_tree_diff, verdict_for};
+use crate::hook::HookEnvelope;
+use crate::monotonic::MonotonicSignal;
 use crate::output::findings::{render_text, Finding, Layer, Severity};
 use crate::output::messages;
 use crate::Verdict;
 
 pub fn run<O: Write, E: Write>(
     args: &PreEditArgs,
+    envelope: Option<&HookEnvelope>,
     stdout: &mut O,
     stderr: &mut E,
 ) -> Result<Verdict> {
     let cwd = std::env::current_dir().context("failed to determine current directory")?;
+
+    // Argv path is optional so a stdin hook envelope can supply it
+    // instead. The envelope wins when present — Claude Code's
+    // `tool_input.file_path` is the authoritative source under a
+    // hook recipe, and falling back to argv would surface a stale
+    // path if both happened to be set.
+    let raw_path = envelope
+        .and_then(HookEnvelope::file_path)
+        .map(std::path::Path::to_path_buf)
+        .or_else(|| args.path.clone())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "mmk pre-edit: no path supplied (argv empty and stdin envelope had no \
+                 tool_input.file_path)"
+            )
+        })?;
 
     // Hook integrations (Claude Code's PreToolUse) pass
     // `tool_input.file_path` as an absolute path. The analyzer keys
@@ -41,7 +61,7 @@ pub fn run<O: Write, E: Write>(
     // history)" — silently degrading the hook output. Normalize
     // here so manual relative-path invocations and hook
     // absolute-path invocations produce identical signal.
-    let path = normalize_repo_relative(&cwd, &args.path);
+    let path = normalize_repo_relative(&cwd, &raw_path);
 
     let window = humantime::parse_duration(&args.since)
         .with_context(|| format!("invalid --since value: {}", args.since))?;
@@ -75,8 +95,30 @@ pub fn run<O: Write, E: Write>(
             &mut cfg.sensor.structure,
             &mut cfg.sensor.complexity,
             &mut cfg.sensor.budget_ramp,
+            &mut cfg.sensor.cohesion,
             file_s,
         );
+    }
+    // The bulk filter governs which historical commits enter the
+    // coupling/hotspot baseline. pre-edit's analyze pass needs the
+    // same override review applies — without it, repos with wide
+    // commit grain see "no analyzable history" wording on files
+    // their own contributors edit routinely.
+    if let Some(file_b) = file_cfg.bulk.as_ref() {
+        if let Some(t) = file_b.greenfield_threshold {
+            cfg.bulk.greenfield_threshold = t;
+        }
+        if !file_b.ignore_for_budget.is_empty() {
+            cfg.bulk
+                .ignore_for_budget
+                .clone_from(&file_b.ignore_for_budget);
+        }
+        if let Some(v) = file_b.max_files {
+            cfg.bulk.max_files = v;
+        }
+        if let Some(v) = file_b.max_lines {
+            cfg.bulk.max_lines = v;
+        }
     }
     if let Some(t) = args.coupling_threshold.or(args.blast_radius_threshold) {
         cfg.coupling.threshold = t;
@@ -109,7 +151,7 @@ pub fn run<O: Write, E: Write>(
         cfg.hotspot.top_n,
     );
 
-    let mut findings = compute_findings(
+    let mut tagged = compute_findings(
         &path,
         &ranked,
         &analysis.commits,
@@ -117,6 +159,37 @@ pub fn run<O: Write, E: Write>(
         &cfg,
         args.top,
     );
+
+    // STRUCTURE: directory-convention sensor. Pre-edit fires
+    // informationally — the agent reads the convention and conforms
+    // before writing. Computed early so it joins the rest through
+    // one monotonic-gate pass.
+    if cfg.sensor.structure.enabled {
+        let abs = cwd.join(&path);
+        let mode = if abs.exists() {
+            mmk_core::sensors::StructureMode::PreEditExisting
+        } else {
+            mmk_core::sensors::StructureMode::PreEditNew
+        };
+        let siblings = list_directory_siblings(&cwd, &path);
+        let bodies = load_bodies(&cwd, &siblings);
+        let input = mmk_core::sensors::StructureInput {
+            path: &path,
+            siblings: &siblings,
+            bodies: &bodies,
+            subject_body: None,
+            mode,
+            cfg: &cfg.sensor.structure,
+        };
+        if let Some(sf) = mmk_core::sensors::compute_structure_finding(&input) {
+            let cap = cfg.sensor.structure.top_imports_to_show;
+            let pct = (cfg.sensor.structure.import_majority * 100.0).round() as u32;
+            tagged.push(structure_to_finding_with_signal(&sf, cap, pct));
+        }
+    }
+
+    let mut findings =
+        apply_monotonic_gate(&cwd, analysis.head_sha.as_deref(), tagged, args.no_dedup);
 
     // HEALTH: structural-pattern adapter. Pre-edit treats every
     // Health finding as informational (the agent hasn't acted yet
@@ -139,11 +212,16 @@ pub fn run<O: Write, E: Write>(
     // review's ramp; single source of truth in messages::budget_ramp.
     if cfg.sensor.budget_ramp.enabled {
         if let Ok(working_changed) = collect_working_tree_diff(&cwd, &cfg.ignores) {
-            let files_n = u32::try_from(working_changed.len()).unwrap_or(u32::MAX);
-            let lines_n: u64 = working_changed.iter().map(|c| c.added + c.deleted).sum();
+            // v0.6: read net counts so a generated-file regeneration
+            // doesn't keep the pre-edit ramp pinned at high% across
+            // every edit in the session.
+            let counts = crate::commands::review::budget_counts(
+                &working_changed,
+                &cfg.bulk.ignore_for_budget,
+            );
             let check = mmk_core::budget::BudgetCheck {
-                files_changed: files_n,
-                lines_changed: lines_n,
+                files_changed: counts.files_net,
+                lines_changed: counts.lines_net,
             };
             let progress = mmk_core::budget::budget_progress(&check, &cfg.bulk);
             match mmk_core::budget::budget_tier(&progress) {
@@ -178,35 +256,6 @@ pub fn run<O: Write, E: Write>(
                 // is the noise floor.
                 mmk_core::budget::BudgetTier::Quiet | mmk_core::budget::BudgetTier::Over => {}
             }
-        }
-    }
-
-    // STRUCTURE: directory-convention sensor. Pre-edit fires
-    // informationally — the agent reads the convention and conforms
-    // before writing. If the path doesn't yet exist on disk, we
-    // surface the new-file wording; if it does, the existing-file
-    // wording — both surface the same convention.
-    if cfg.sensor.structure.enabled {
-        let abs = cwd.join(&path);
-        let mode = if abs.exists() {
-            mmk_core::sensors::StructureMode::PreEditExisting
-        } else {
-            mmk_core::sensors::StructureMode::PreEditNew
-        };
-        let siblings = list_directory_siblings(&cwd, &path);
-        let bodies = load_bodies(&cwd, &siblings);
-        let input = mmk_core::sensors::StructureInput {
-            path: &path,
-            siblings: &siblings,
-            bodies: &bodies,
-            subject_body: None,
-            mode,
-            cfg: &cfg.sensor.structure,
-        };
-        if let Some(sf) = mmk_core::sensors::compute_structure_finding(&input) {
-            let cap = cfg.sensor.structure.top_imports_to_show;
-            let pct = (cfg.sensor.structure.import_majority * 100.0).round() as u32;
-            findings.push(structure_to_finding(&sf, cap, pct));
         }
     }
 
@@ -271,10 +320,16 @@ pub fn run<O: Write, E: Write>(
             .iter()
             .find(|e| e.path == path)
             .map(|e| e.hotspot_rank);
+        // `loc.contains_key` answers "is this file in HEAD's tree?"
+        // — distinguishing the truly-new case from the
+        // history-was-filtered case. See `messages::quiet_file`
+        // doc-comment for why conflating those two reads
+        // dangerously.
+        let present_in_head = analysis.loc.contains_key(path.as_path());
         findings.push(Finding::new(
             Layer::Coupling,
             Severity::Ok,
-            messages::quiet_file(&path, n, cfg.window.days, rank),
+            messages::quiet_file(&path, n, cfg.window.days, rank, present_in_head),
         ));
     }
 
@@ -282,11 +337,39 @@ pub fn run<O: Write, E: Write>(
 
     // DEDUP: same shape as `mmk review`. Same baseline + same
     // findings + within TTL → silent. Any of the three changing
-    // re-emits the full output.
-    if !args.no_dedup {
-        if let Some(verdict) = maybe_suppress_pre_edit(&cwd, &findings, &analysis, args.gate) {
-            return Ok(verdict);
+    // re-emits the full output. Hook callers see the suppression
+    // through a `systemMessage` instead of empty stdout.
+    let suppressed =
+        !args.no_dedup && maybe_suppress_pre_edit(&cwd, &findings, &analysis, args.gate).is_some();
+    if suppressed && envelope.is_none() {
+        return Ok(verdict_for(args.gate, &findings));
+    }
+
+    if let Some(env) = envelope_for_hook(envelope) {
+        let block = matches!(args.gate, Gate::Warn);
+        // PreToolUse cannot block in the Edit phase by Claude
+        // Code's contract; that's a strategic-deployment choice
+        // surfaced via PostToolUse. Pre-edit is always
+        // `additionalContext`-only. Stop / PostToolUse honor
+        // `--gate warn` per the plan.
+        if env.hook_event_name == "PreToolUse" {
+            crate::output::hook_json::write_pre_tool_use(
+                stdout,
+                if suppressed { &[] } else { &findings },
+                suppressed,
+                analysis.head_sha.as_deref(),
+            )?;
+        } else {
+            crate::output::hook_json::write_post_tool_use(
+                stdout,
+                &env.hook_event_name,
+                if suppressed { &[] } else { &findings },
+                suppressed,
+                analysis.head_sha.as_deref(),
+                block,
+            )?;
         }
+        return Ok(verdict_for(args.gate, &findings));
     }
 
     match args.format {
@@ -303,6 +386,10 @@ pub fn run<O: Write, E: Write>(
         )?,
     }
     Ok(verdict_for(args.gate, &findings))
+}
+
+fn envelope_for_hook(env: Option<&HookEnvelope>) -> Option<&HookEnvelope> {
+    env.filter(|e| !e.hook_event_name.is_empty())
 }
 
 fn maybe_suppress_pre_edit(
@@ -362,17 +449,20 @@ fn compute_findings(
     commits_touching: &ahash::AHashMap<PathBuf, u32>,
     cfg: &Config,
     top: usize,
-) -> Vec<Finding> {
-    let mut findings = Vec::new();
+) -> Vec<(Finding, Option<MonotonicSignal>)> {
+    let mut findings: Vec<(Finding, Option<MonotonicSignal>)> = Vec::new();
 
     // HOTSPOT — surface the rank if the file is in the top-N. Same
     // threshold semantics as `mmk review`.
     if let Some(entry) = ranked.iter().find(|e| e.path == target) {
         if (entry.hotspot_rank as usize) <= top {
-            findings.push(Finding::new(
-                Layer::Hotspot,
-                Severity::Warn,
-                messages::hotspot(target, entry.hotspot_rank, top),
+            findings.push((
+                Finding::new(
+                    Layer::Hotspot,
+                    Severity::Warn,
+                    messages::hotspot(target, entry.hotspot_rank, top),
+                ),
+                None,
             ));
         }
     }
@@ -388,7 +478,7 @@ fn compute_findings(
     if let Some(partners) = couples.remove(target) {
         let ignore_set = build_partner_globset(&cfg.coupling.ignore_partners);
         let no_excluded: AHashSet<PathBuf> = AHashSet::new();
-        findings.extend(coupling_findings(CouplingEmission {
+        findings.extend(coupling_findings_with_signal(CouplingEmission {
             subject: target,
             n,
             partners: &partners,

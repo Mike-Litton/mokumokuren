@@ -6,6 +6,66 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-04-28
+
+Calibration plus the COHESION sensor and a documented Claude Code
+hook contract.
+
+### Added
+
+- COHESION sensor — tangled-diff detection on the co-change graph.
+  Default on. See [`docs/metrics.md`](docs/metrics.md) and
+  [`docs/configuration.md`](docs/configuration.md).
+- Claude Code stdin-JSON hook contract on `mmk pre-edit` /
+  `mmk review`; output through `hookSpecificOutput`,
+  `decision`/`reason` (under `--gate warn`), and `systemMessage`.
+  See [`docs/claude-code.md`](docs/claude-code.md) and
+  [`docs/schema.md`](docs/schema.md).
+- `bulk.max_files` / `bulk.max_lines` overridable from
+  `mokumokuren.toml` so wide-grain repos can tune the
+  per-commit / per-diff cap. See
+  [`docs/configuration.md`](docs/configuration.md).
+- `bulk.ignore_for_budget` glob list excluded from diff-time BUDGET
+  accounting; surfaces gross / net via optional
+  `review.diff.budget` JSON sub-block.
+- Per-key monotonic-worsening dedup generalized from COMPLEXITY to
+  COUPLING and STRUCTURE; LRU cap at 10 000 entries on save.
+- `mmk eval --learn` cohesion calibration:
+  `cohesion_tangled_diffs_seen` / `cohesion_components_p95` and a
+  suggested `[sensor.cohesion]` block when fire rate > 10 %.
+
+### Changed
+
+- COUPLING gate defaults: `confidence_threshold` 0.20 → 0.30,
+  `min_sample_size` 1 → 3. Opt back in via explicit
+  `[coupling]` settings.
+- BUDGET wording on the bulk-self path now names the skipped
+  layers ("HOTSPOT/COUPLING skipped (partners co-touched by
+  construction)") instead of "analysis suppressed".
+- `quiet_file` fall-through distinguishes "new file (not yet in
+  HEAD)" from "present in HEAD but no analyzable history (file may
+  be stale or prior touches were filtered as bulk commits)" so
+  wide-grain repos don't read filtered-history as "no risk".
+- Empty-session WINDOW collapse on `mmk session-summary` (JSON
+  `files` key omitted; text emits a suppression notice).
+- Schema bumped to `0.6.0`.
+
+### Schema (0.6.0)
+
+See [`docs/schema.md`](docs/schema.md) for the full envelope
+contract. Additive changes:
+
+- `findings[].layer = "cohesion"` populated.
+- `mmk session-summary`: `files` key now optional (empty session).
+- `mmk review`: optional `review.diff.budget` sub-block.
+- `config.bulk.{max_files, max_lines, ignore_for_budget}` honoured
+  from `mokumokuren.toml`.
+- `config.sensor.cohesion` block in the `config` echo.
+- `learn_sensor_stats` adds cohesion fields.
+- Hook output envelope (`hookSpecificOutput.*` plus optional
+  top-level `decision` / `reason` / `systemMessage`).
+- COUPLING firing thresholds shift with the new defaults.
+
 ## [0.5.0] - 2026-04-27
 
 Two new sensors (STRUCTURE, COMPLEXITY), a continuous BUDGET ramp,

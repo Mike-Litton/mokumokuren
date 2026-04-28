@@ -8,6 +8,8 @@ use std::process::ExitCode;
 pub mod args;
 pub mod commands;
 pub mod dedup;
+pub mod hook;
+pub mod monotonic;
 pub mod output;
 
 /// Parse `std::env::args` and dispatch. Prints any error to stderr and
@@ -20,6 +22,19 @@ pub fn run() -> ExitCode {
     let mut out = stdout.lock();
     let mut err = stderr.lock();
 
+    // Hook envelope is read once, before subcommand dispatch. Only
+    // review / pre-edit consume it (those are the hooked subcommands
+    // — analyze / drift / eval / session-summary are all explicit
+    // user commands). On parse failure we surface loudly: silently
+    // falling back to argv mode would aim mmk at the wrong path.
+    let envelope = match hook::read_envelope_from_stdin() {
+        Ok(env) => env,
+        Err(e) => {
+            let _ = writeln!(err, "error: {e:#}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     // Verdict::GateTriggered → exit 2 (distinct from 1 = mmk error).
     // 2 is conventional for "policy failure" (lint exit codes,
     // pre-commit). Lets CI distinguish "mmk crashed" from "mmk found
@@ -29,8 +44,12 @@ pub fn run() -> ExitCode {
             commands::analyze::run(&a, &mut out, &mut err).map(|()| Verdict::Ok)
         }
         args::Command::SessionSummary(a) => commands::session::run(&a, &mut out, &mut err),
-        args::Command::Review(a) => commands::review::run(&a, &mut out, &mut err),
-        args::Command::PreEdit(a) => commands::pre_edit::run(&a, &mut out, &mut err),
+        args::Command::Review(a) => {
+            commands::review::run(&a, envelope.as_ref(), &mut out, &mut err)
+        }
+        args::Command::PreEdit(a) => {
+            commands::pre_edit::run(&a, envelope.as_ref(), &mut out, &mut err)
+        }
         args::Command::Drift(a) => {
             commands::drift::run(&a, &mut out, &mut err).map(|()| Verdict::Ok)
         }

@@ -108,10 +108,10 @@ fn run_cmd_against_fixture(cmd: &[String]) -> Result<(), String> {
             mokumokuren::commands::session::run(&a, &mut stdout, &mut stderr).map(|_| ())
         }
         Command::Review(a) => {
-            mokumokuren::commands::review::run(&a, &mut stdout, &mut stderr).map(|_| ())
+            mokumokuren::commands::review::run(&a, None, &mut stdout, &mut stderr).map(|_| ())
         }
         Command::PreEdit(a) => {
-            mokumokuren::commands::pre_edit::run(&a, &mut stdout, &mut stderr).map(|_| ())
+            mokumokuren::commands::pre_edit::run(&a, None, &mut stdout, &mut stderr).map(|_| ())
         }
         Command::Drift(a) => mokumokuren::commands::drift::run(&a, &mut stdout, &mut stderr),
         Command::Init(_) | Command::Eval(_) | Command::Cache(_) => {

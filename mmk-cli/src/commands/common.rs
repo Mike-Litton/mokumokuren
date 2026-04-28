@@ -11,13 +11,14 @@
 use anyhow::{Context, Result};
 use globset::GlobSet;
 use mmk_config::{
-    BudgetRampCfg, ComplexityCfg, ConfigFile, CouplingCfg, CouplingFile, HealthFile, HealthTsCfg,
-    SensorFile, StructureCfg,
+    BudgetRampCfg, CohesionCfg, ComplexityCfg, ConfigFile, CouplingCfg, CouplingFile, HealthFile,
+    HealthTsCfg, SensorFile, StructureCfg,
 };
 use mmk_core::CouplingEntry;
 use mmk_health::{HealthFinding, HealthPattern};
 use std::path::{Path, PathBuf};
 
+use crate::monotonic::MonotonicSignal;
 use crate::output::findings::{Finding, Layer, Severity};
 use crate::output::messages;
 
@@ -156,6 +157,24 @@ pub struct CouplingEmission<'a> {
 /// unit-test surface small.
 #[must_use]
 pub fn coupling_findings(input: CouplingEmission<'_>) -> Vec<Finding> {
+    coupling_findings_with_signal(input)
+        .into_iter()
+        .map(|(f, _)| f)
+        .collect()
+}
+
+/// Same as [`coupling_findings`] but tagged for the monotonic gate.
+///
+/// Each finding is paired with a [`MonotonicSignal`] whose key
+/// encodes `(subject, partner)` and whose axes are `[k, n]`
+/// (`k = co_change_count`, `n = commits_touching(subject)`). Lets
+/// the per-key gate suppress re-fires where neither axis worsened
+/// — the COUPLING analogue of COMPLEXITY's nesting / LOC monotonic
+/// dedup.
+#[must_use]
+pub fn coupling_findings_with_signal(
+    input: CouplingEmission<'_>,
+) -> Vec<(Finding, Option<MonotonicSignal>)> {
     if input.n < input.cfg.min_sample_size {
         return Vec::new();
     }
@@ -181,7 +200,18 @@ pub fn coupling_findings(input: CouplingEmission<'_>) -> Vec<Finding> {
                 messages::coupling_pre_edit(input.subject, &p.partner, p.co_change_count, input.n)
             }
         };
-        out.push(Finding::new(Layer::Coupling, input.severity, message));
+        let signal = MonotonicSignal {
+            key: format!(
+                "coupling::{}::{}",
+                input.subject.display(),
+                p.partner.display()
+            ),
+            axes: vec![p.co_change_count, input.n],
+        };
+        out.push((
+            Finding::new(Layer::Coupling, input.severity, message),
+            Some(signal),
+        ));
     }
     out
 }
@@ -194,6 +224,7 @@ pub fn apply_sensor_file(
     structure: &mut StructureCfg,
     complexity: &mut ComplexityCfg,
     budget_ramp: &mut BudgetRampCfg,
+    cohesion: &mut CohesionCfg,
     file_s: &SensorFile,
 ) {
     if let Some(b) = file_s.budget_ramp.as_ref() {
@@ -245,6 +276,20 @@ pub fn apply_sensor_file(
         }
         if let Some(v) = c.min_directory_siblings {
             complexity.min_directory_siblings = v;
+        }
+    }
+    if let Some(co) = file_s.cohesion.as_ref() {
+        if let Some(v) = co.enabled {
+            cohesion.enabled = v;
+        }
+        if let Some(v) = co.confidence_threshold {
+            cohesion.confidence_threshold = v;
+        }
+        if let Some(v) = co.min_sample_size {
+            cohesion.min_sample_size = v;
+        }
+        if let Some(v) = co.min_files_per_cluster {
+            cohesion.min_files_per_cluster = v;
         }
     }
 }
@@ -398,6 +443,22 @@ pub fn structure_to_finding(
     cap: usize,
     majority_pct: u32,
 ) -> Finding {
+    structure_to_finding_with_signal(f, cap, majority_pct).0
+}
+
+/// Same as [`structure_to_finding`] but tagged for the monotonic gate.
+///
+/// `ReviewDivergent` findings carry a signal keyed
+/// `structure::<path>` with axes
+/// `[missing_imports_count, missing_templates_count]`. Other kinds
+/// (PreEdit / Conforming) carry `None` — they don't repeat-fire
+/// across edits, so the whole-set dedup is enough.
+#[must_use]
+pub fn structure_to_finding_with_signal(
+    f: &mmk_core::sensors::StructureFinding,
+    cap: usize,
+    majority_pct: u32,
+) -> (Finding, Option<MonotonicSignal>) {
     use mmk_core::sensors::StructureFindingKind as K;
     let dir = f
         .path
@@ -424,15 +485,21 @@ pub fn structure_to_finding(
         majority_pct,
         common_templates: &templates,
     };
-    let (severity, message) = match &f.kind {
-        K::PreEditNew => (Severity::Info, messages::structure_pre_edit_new(&bundle)),
+    let (severity, message, signal) = match &f.kind {
+        K::PreEditNew => (
+            Severity::Info,
+            messages::structure_pre_edit_new(&bundle),
+            None,
+        ),
         K::PreEditExisting => (
             Severity::Info,
             messages::structure_pre_edit_existing(&bundle),
+            None,
         ),
         K::ReviewConforming => (
             Severity::Ok,
             messages::structure_review_conforming(&f.path, &dir, f.convention.sibling_count),
+            None,
         ),
         K::ReviewDivergent {
             missing_imports,
@@ -440,6 +507,9 @@ pub fn structure_to_finding(
         } => {
             let missing_sources: Vec<String> =
                 missing_imports.iter().map(|i| i.source.clone()).collect();
+            let imports_count = u32::try_from(missing_imports.len()).unwrap_or(u32::MAX);
+            let templates_count = u32::try_from(missing_templates.len()).unwrap_or(u32::MAX);
+            let key = format!("structure::{}", f.path.display());
             (
                 Severity::Warn,
                 messages::structure_review_divergent(
@@ -448,10 +518,14 @@ pub fn structure_to_finding(
                     total,
                     missing_templates,
                 ),
+                Some(MonotonicSignal {
+                    key,
+                    axes: vec![imports_count, templates_count],
+                }),
             )
         }
     };
-    Finding::new(Layer::Structure, severity, message)
+    (Finding::new(Layer::Structure, severity, message), signal)
 }
 
 /// Translate a [`mmk_core::sensors::ComplexityFinding`] into a CLI
@@ -472,6 +546,52 @@ pub fn complexity_to_finding(f: &mmk_core::sensors::ComplexityFinding) -> Findin
         }
     };
     Finding::new(Layer::Complexity, Severity::Warn, message)
+}
+
+/// Apply the per-key monotonic-worsening gate to a list of findings
+/// paired with optional signals.
+///
+/// Findings tagged with a [`MonotonicSignal`] are dropped when the
+/// prior emission for the same key is within TTL AND no axis has
+/// strictly worsened since. Findings without a signal pass through
+/// unchanged. `no_dedup = true` (the `--no-dedup` flag) bypasses the
+/// gate entirely so eval / replay runs see every fire.
+///
+/// Lives in `common.rs` so review and pre-edit share one home for
+/// the git-dir discovery + load/save plumbing — the per-fire dedup
+/// shape is the same in both.
+#[must_use]
+pub fn apply_monotonic_gate(
+    cwd: &Path,
+    head_sha: Option<&str>,
+    items: Vec<(Finding, Option<MonotonicSignal>)>,
+    no_dedup: bool,
+) -> Vec<Finding> {
+    if no_dedup {
+        return items.into_iter().map(|(f, _)| f).collect();
+    }
+    let git_dir = mmk_git::discover_work_dir(cwd).and_then(|wd| {
+        let g = wd.join(".git");
+        g.exists().then_some(g)
+    });
+    let Some(git_dir) = git_dir else {
+        return items.into_iter().map(|(f, _)| f).collect();
+    };
+    let Some(path) = crate::monotonic::store_path(&git_dir) else {
+        return items.into_iter().map(|(f, _)| f).collect();
+    };
+    let now = crate::dedup::now_unix();
+    let ttl = crate::monotonic::ttl_seconds();
+    let mut store = crate::monotonic::load(&path, now, ttl);
+    let (kept, recorded) = crate::monotonic::apply(items, &store, now, ttl);
+    if !recorded.is_empty() {
+        for sig in recorded {
+            crate::monotonic::record(&mut store, sig.key, sig.axes, now, head_sha.unwrap_or(""));
+        }
+        crate::monotonic::cap_lru(&mut store);
+        crate::monotonic::save(&path, &store);
+    }
+    kept
 }
 
 #[cfg(test)]

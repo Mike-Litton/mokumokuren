@@ -214,6 +214,193 @@ pub struct NeighborhoodNode {
     pub hops: u32,
 }
 
+/// Group `changed_set` into connected components by historical
+/// co-change strength.
+///
+/// Edges connect two paths when their pairwise co-change clears the
+/// confidence + sample-size gate. Components are returned sorted by
+/// size descending; paths within each component are sorted
+/// lexicographically so output is stable across runs.
+///
+/// ## Edge metric: symmetrized Wilson on conditional probability
+///
+/// Given two paths A and B, the edge weight is
+///
+/// ```text
+/// w(A, B) = max(
+///     wilson_lower_95(co_change, commits_touching(A)),
+///     wilson_lower_95(co_change, commits_touching(B)),
+/// )
+/// ```
+///
+/// — the larger of the two directional Wilson lower bounds on
+/// `P(other | this)`. An edge is admitted when `w(A, B) ≥
+/// confidence_threshold` AND `max(commits_touching(A),
+/// commits_touching(B)) ≥ min_sample_size`.
+///
+/// Why not raw Jaccard:
+/// - Jaccard collapses small-sample cases: two files sharing a
+///   single commit each yields jaccard = 1.0, which the obvious
+///   "above threshold 0.10" gate would treat as load-bearing
+///   coupling. This is the same failure mode that motivated
+///   COUPLING's migration from raw jaccard to Wilson on the
+///   conditional in v0.6 calibration.
+///
+/// Why not symmetric Wilson on jaccard (Wilson treating co-change as
+/// binomial trials over the union):
+/// - "Wilson-corrected jaccard" is an ad-hoc construction; the
+///   binomial model on union counts misrepresents the underlying
+///   process (commits aren't independent Bernoulli trials over the
+///   union). No published precedent for the technique.
+///
+/// Why max-symmetrize the conditional (not min, not average):
+/// - Graph clustering has to admit *satellite* membership: a path B
+///   whose entire history sits inside A's history belongs in A's
+///   cluster, even though jaccard is small (B's history is a small
+///   slice of A∪B). The directional `wilson_lower(P(A|B))` captures
+///   this — every commit touching B also touched A, so the lower
+///   bound is high. The reverse direction `wilson_lower(P(B|A))` is
+///   correctly low (most A-commits are solo). Taking `max` keeps
+///   the edge; taking `min` or symmetric jaccard would drop it.
+///   For COUPLING ("did the agent miss B?") the satellite case is
+///   uninteresting; for cohesion clustering it's central.
+///
+/// Why not the same `confidence_threshold` as COUPLING:
+/// - COUPLING's bar (default 0.30) is "actionable miss" — strong
+///   enough to demand a re-edit. Cohesion's bar is graph
+///   connectivity — strong enough to plausibly belong in the same
+///   cluster. The looser bar produces fewer disconnected components
+///   on legitimate refactors and tighter ones on tangled diffs;
+///   adopters tune via `mmk eval --learn`.
+///
+/// Lineage: the symmetrized Wilson construction follows
+/// Goutte & Gaussier (2005) "A Probabilistic Interpretation of
+/// Precision, Recall and F-score" for the IR-side prior art. The
+/// cohesion-graph proxy for tangled-change detection itself is
+/// looser than Herzig & Zeller (2013) — they untangle at AST /
+/// dependency granularity; mmk approximates with co-change-graph
+/// cohesion at diff time.
+#[must_use]
+pub fn connected_components_by_wilson(
+    commits: &[Commit],
+    changed_set: &AHashSet<PathBuf>,
+    confidence_threshold: f64,
+    min_sample_size: u32,
+) -> Vec<Vec<PathBuf>> {
+    if changed_set.len() < 2 {
+        return changed_set.iter().cloned().map(|p| vec![p]).collect();
+    }
+    // `collect_couples_for` walks every commit once and counts pair
+    // touches restricted to `changed_set`; reusing it keeps the
+    // cohesion path on a single shared revwalk with the COUPLING
+    // gate.
+    let by_target = collect_couples_for(commits, changed_set);
+
+    // Sorted vec for stable union-find indexing — output ordering
+    // depends on root-of-component identity, which depends on union
+    // order, which depends on iteration order over partners. With
+    // unsorted indices the output would be HashMap-iteration-order
+    // dependent and break across builds.
+    let paths: Vec<PathBuf> = {
+        let mut v: Vec<PathBuf> = changed_set.iter().cloned().collect();
+        v.sort();
+        v
+    };
+    let index: AHashMap<&PathBuf, usize> = paths.iter().enumerate().map(|(i, p)| (p, i)).collect();
+
+    // commits_touching(p) for each p in changed_set, used as the
+    // denominator of the directional conditional probability. Built
+    // from the partner records in `by_target`: every entry shares
+    // the same `commits_touching(subject)` count, so we can derive
+    // it as `co_change_count + (1/conditional - 1) * co_change_count`
+    // — but since collect_couples_for already publishes
+    // conditional_probability, walk that.
+    let touches = touches_from_couples(&by_target);
+
+    let mut parent: Vec<usize> = (0..paths.len()).collect();
+    for (subject, partners) in &by_target {
+        let Some(&i) = index.get(subject) else {
+            continue;
+        };
+        let n_subject = touches.get(subject).copied().unwrap_or(0);
+        for entry in partners {
+            if !changed_set.contains(&entry.partner) {
+                continue;
+            }
+            let n_partner = touches.get(&entry.partner).copied().unwrap_or(0);
+            if n_subject.max(n_partner) < min_sample_size {
+                continue;
+            }
+            let w_forward = entry.wilson_lower_95;
+            let w_reverse = wilson_lower_95(entry.co_change_count, n_partner);
+            if w_forward.max(w_reverse) < confidence_threshold {
+                continue;
+            }
+            if let Some(&j) = index.get(&entry.partner) {
+                union_find_union(&mut parent, i, j);
+            }
+        }
+    }
+
+    let mut by_root: AHashMap<usize, Vec<PathBuf>> = AHashMap::new();
+    for (i, p) in paths.iter().enumerate() {
+        let r = union_find_root(&mut parent, i);
+        by_root.entry(r).or_default().push(p.clone());
+    }
+    let mut out: Vec<Vec<PathBuf>> = by_root
+        .into_values()
+        .map(|mut v| {
+            v.sort();
+            v
+        })
+        .collect();
+    out.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+    out
+}
+
+/// Recover `commits_touching(p)` for every `p` appearing as a
+/// subject in the partner map. `collect_couples_for` doesn't expose
+/// the touches table directly; this rebuild is fine because each
+/// partner record carries `co_change_count` and
+/// `conditional_probability = co / commits_touching(subject)`.
+fn touches_from_couples(
+    by_target: &AHashMap<PathBuf, Vec<CouplingEntry>>,
+) -> AHashMap<PathBuf, u32> {
+    let mut out: AHashMap<PathBuf, u32> = AHashMap::new();
+    for (subject, partners) in by_target {
+        // The first partner is enough to derive the denominator
+        // (every entry under one subject shares `commits_touching
+        // (subject)`). Empty partner lists mean the subject was
+        // never co-touched; we infer a baseline of zero, which the
+        // sample-floor will reject anyway.
+        if let Some(entry) = partners.first() {
+            let n = if entry.conditional_probability > 0.0 {
+                (f64::from(entry.co_change_count) / entry.conditional_probability).round() as u32
+            } else {
+                entry.co_change_count
+            };
+            out.insert(subject.clone(), n);
+        }
+    }
+    out
+}
+
+fn union_find_root(parent: &mut [usize], mut x: usize) -> usize {
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
+}
+
+fn union_find_union(parent: &mut [usize], a: usize, b: usize) {
+    let ra = union_find_root(parent, a);
+    let rb = union_find_root(parent, b);
+    if ra != rb {
+        parent[rb] = ra;
+    }
+}
+
 /// 1-hop blast radius: every partner of `root` whose jaccard ≥ `threshold`.
 ///
 /// `hops` is currently fixed at 1. Other values return `Err` so

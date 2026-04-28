@@ -12,3 +12,23 @@ ignore = [
     # whole file — that's a tooling event, not engineering work.
     ".github/workflows/release.yml",
 ]
+
+# This repo's natural feature-commit grain is wider than the
+# defaults. Real substantive work (workspace scaffold, schema
+# bumps, tranche-grade refactors, the v0.6 calibration set) routinely
+# touches 30–50 files in a single commit. The default `max_files = 15`
+# drops every one of those from the historical baseline, leaving
+# pre-edit on docs/configuration.md, README.md, and similar
+# cross-cutting files reading as "no analyzable history" even though
+# they're edited every release. The line cap is bumped in the same
+# spirit — 1000 LOC clears typical agent-edit work but not the
+# tranche-grade commits this repo lands.
+#
+# These overrides are repo-specific; the in-code defaults remain
+# correct for "typical" agent-edited codebases. If you adopt mmk on
+# a similarly wide-grain workspace project, copy the [bulk] block
+# and tune to your repo's actual commit grain (see
+# docs/configuration.md).
+[bulk]
+max_files = 50
+max_lines = 5000

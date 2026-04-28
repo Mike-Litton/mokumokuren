@@ -332,3 +332,114 @@ fn eval_text_mode_emits_firing_rate_line() {
         "text report must include layer mix line: {text}"
     );
 }
+
+/// Tangled-history fixture: two well-coupled clusters, then a
+/// series of late commits that touch one file in each cluster
+/// together. Sampling those late commits puts the cohesion
+/// component count at ≥2 on most samples, so `--learn` must
+/// produce a non-zero `cohesion_tangled_diffs_seen`.
+fn build_cohesion_tangled_fixture(repo: &std::path::Path, now: i64) {
+    init_repo(repo);
+
+    // Cluster A: auth files co-change 4 times together.
+    for round in 0..4_i64 {
+        write(
+            repo,
+            "auth/login.ts",
+            &format!("export const a = {round};\n"),
+        );
+        write(
+            repo,
+            "auth/session.ts",
+            &format!("export const b = {round};\n"),
+        );
+        write(
+            repo,
+            "auth/token.ts",
+            &format!("export const c = {round};\n"),
+        );
+        commit_all(
+            repo,
+            &format!("auth round {round}"),
+            now - (60 - round) * DAY,
+        );
+    }
+
+    // Cluster B: billing files co-change 4 times together.
+    for round in 0..4_i64 {
+        write(
+            repo,
+            "billing/invoice.ts",
+            &format!("export const d = {round};\n"),
+        );
+        write(
+            repo,
+            "billing/plan.ts",
+            &format!("export const e = {round};\n"),
+        );
+        commit_all(
+            repo,
+            &format!("billing round {round}"),
+            now - (40 - round) * DAY,
+        );
+    }
+
+    // Tangled commits at the head of history: each touches ≥2
+    // files from each cluster. ≥2 files-per-cluster matches the
+    // default `min_files_per_cluster` so each tangled commit
+    // partitions into 2 qualifying clusters under --learn.
+    for round in 0..3_i64 {
+        write(
+            repo,
+            "auth/login.ts",
+            &format!("export const a = tangled{round};\n"),
+        );
+        write(
+            repo,
+            "auth/session.ts",
+            &format!("export const b = tangled{round};\n"),
+        );
+        write(
+            repo,
+            "billing/invoice.ts",
+            &format!("export const d = tangled{round};\n"),
+        );
+        write(
+            repo,
+            "billing/plan.ts",
+            &format!("export const e = tangled{round};\n"),
+        );
+        commit_all(
+            repo,
+            &format!("tangled {round}"),
+            now - (20 - round * 2) * DAY,
+        );
+    }
+}
+
+#[test]
+fn eval_learn_records_cohesion_tangled_diffs_when_present() {
+    // The tangled fixture is constructed so the late commits each
+    // partition into ≥2 cohesion clusters under default thresholds.
+    // --learn must surface that signal in the JSON shape.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_cohesion_tangled_fixture(dir.path(), now);
+
+    let mut args = eval_args();
+    args.learn = true;
+    args.sample = 50;
+    let stdout = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON report");
+
+    let stats = &v["learn_sensor_stats"];
+    assert!(stats.is_object(), "learn_sensor_stats must be present");
+    let tangled = stats["cohesion_tangled_diffs_seen"]
+        .as_u64()
+        .expect("cohesion_tangled_diffs_seen present");
+    assert!(
+        tangled >= 1,
+        "tangled fixture must surface at least one COHESION fire \
+         in --learn stats; got: {stats}"
+    );
+}

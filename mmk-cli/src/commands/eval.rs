@@ -22,7 +22,7 @@ use crate::commands::common::{
     load_bodies, load_config_file,
 };
 use crate::commands::review::{
-    bulk_self_findings, collect_diff, compute_findings, ChangedFile, ReviewMode,
+    budget_counts, bulk_self_findings, collect_diff, compute_findings, ChangedFile, ReviewMode,
 };
 use crate::output::findings::{Finding, Layer};
 
@@ -59,8 +59,31 @@ pub fn run<O: Write, E: Write>(args: &EvalArgs, stdout: &mut O, stderr: &mut E) 
             &mut cfg.sensor.structure,
             &mut cfg.sensor.complexity,
             &mut cfg.sensor.budget_ramp,
+            &mut cfg.sensor.cohesion,
             file_s,
         );
+    }
+    // Eval samples real commits and runs review against each.
+    // `bulk.max_files` / `max_lines` decide which of the sampled
+    // commits go through the full analyzer path vs which fire as
+    // bulk-self-filter findings; the toml override has to be
+    // honored or eval mis-reports the firing-rate baseline on
+    // wide-grain repos.
+    if let Some(file_b) = file_cfg.bulk.as_ref() {
+        if let Some(t) = file_b.greenfield_threshold {
+            cfg.bulk.greenfield_threshold = t;
+        }
+        if !file_b.ignore_for_budget.is_empty() {
+            cfg.bulk
+                .ignore_for_budget
+                .clone_from(&file_b.ignore_for_budget);
+        }
+        if let Some(v) = file_b.max_files {
+            cfg.bulk.max_files = v;
+        }
+        if let Some(v) = file_b.max_lines {
+            cfg.bulk.max_lines = v;
+        }
     }
 
     if args.verbose {
@@ -115,10 +138,11 @@ pub fn run<O: Write, E: Write>(args: &EvalArgs, stdout: &mut O, stderr: &mut E) 
             continue;
         }
 
-        let files_n = u32::try_from(changed.len()).unwrap_or(u32::MAX);
-        let lines_n: u64 = changed.iter().map(|c| c.added + c.deleted).sum();
-        let findings = if files_n > cfg.bulk.max_files || lines_n > u64::from(cfg.bulk.max_lines) {
-            bulk_self_findings(files_n, lines_n, &cfg)
+        let counts = budget_counts(&changed, &cfg.bulk.ignore_for_budget);
+        let findings = if counts.files_net > cfg.bulk.max_files
+            || counts.lines_net > u64::from(cfg.bulk.max_lines)
+        {
+            bulk_self_findings(&counts, &cfg)
         } else {
             compute_findings(
                 &changed,
@@ -127,11 +151,12 @@ pub fn run<O: Write, E: Write>(args: &EvalArgs, stdout: &mut O, stderr: &mut E) 
                 &commits_touching,
                 &cfg,
                 args.top,
+                &counts,
             )
         };
         report.absorb(&findings);
         if args.learn {
-            report.absorb_sensor_stats(&cwd, &changed, &cfg);
+            report.absorb_sensor_stats(&cwd, &changed, &analysis.commits, &cfg);
         }
         if args.replay {
             report.absorb_replay(&findings, &changed);
@@ -263,10 +288,16 @@ struct AggregateReport {
     /// diffs.
     #[serde(skip)]
     complexity_loc_samples: Vec<u32>,
+    /// Internal accumulator: number of components per sampled
+    /// commit whose diff had ≥ 2 changed files. Sorted at finalize
+    /// time and read at p95 for the threshold-bump heuristic.
+    #[serde(skip)]
+    cohesion_component_samples: Vec<u32>,
     duration_ms: u64,
 }
 
-/// Distribution data for the structure / complexity sensors.
+/// Distribution data for the structure / complexity / cohesion
+/// sensors.
 ///
 /// Gathered from the sampled-commit diffs. The output threshold
 /// suggestions are conservative: they don't pretend to be optimal,
@@ -290,6 +321,17 @@ pub struct LearnSensorStats {
     pub complexity_loc_median: u32,
     pub complexity_loc_p90: u32,
     pub complexity_loc_p99: u32,
+    /// Sampled commits where COHESION's clustering would have
+    /// produced ≥ 2 qualifying clusters under the configured
+    /// thresholds. The fire-rate is the headline calibration
+    /// signal — high rates mean the threshold is letting noise
+    /// through; low rates on a repo with known tangled work mean
+    /// the threshold is too tight.
+    pub cohesion_tangled_diffs_seen: usize,
+    /// 95th-percentile of the per-commit component count across
+    /// commits with ≥ 2 changed files. Drives the suggested
+    /// threshold bump heuristic.
+    pub cohesion_components_p95: u32,
 }
 
 /// Replay histogram aggregated across `--replay`'s sampled commits.
@@ -356,6 +398,7 @@ impl AggregateReport {
         &mut self,
         cwd: &std::path::Path,
         changed: &[ChangedFile],
+        commits: &[mmk_core::types::Commit],
         cfg: &mmk_config::Config,
     ) {
         let stats = self
@@ -443,12 +486,46 @@ impl AggregateReport {
             self.complexity_loc_samples.append(&mut locs);
         }
         stats.complexity_functions_seen = self.complexity_nesting_samples.len();
+
+        // Cohesion is a per-commit signal: distribution data is the
+        // *number of components* into which each multi-file diff
+        // partitions, not per-file metrics. Skip single-file
+        // commits — they're always one component and would dilute
+        // the p95.
+        if changed.len() >= 2 {
+            let changed_set: std::collections::HashSet<std::path::PathBuf, ahash::RandomState> =
+                changed.iter().map(|c| c.path.clone()).collect();
+            let changed_set: ahash::AHashSet<std::path::PathBuf> =
+                changed_set.into_iter().collect();
+            let components = mmk_core::coupling::connected_components_by_wilson(
+                commits,
+                &changed_set,
+                cfg.sensor.cohesion.confidence_threshold,
+                cfg.sensor.cohesion.min_sample_size,
+            );
+            let qualifying = components
+                .iter()
+                .filter(|c| {
+                    u32::try_from(c.len()).unwrap_or(u32::MAX)
+                        >= cfg.sensor.cohesion.min_files_per_cluster
+                })
+                .count();
+            self.cohesion_component_samples
+                .push(u32::try_from(components.len()).unwrap_or(u32::MAX));
+            if qualifying >= 2 {
+                stats.cohesion_tangled_diffs_seen += 1;
+            }
+        }
     }
 
     fn finalize_sensor_percentiles(&mut self) {
         let Some(stats) = self.learn_sensor_stats.as_mut() else {
             return;
         };
+        if !self.cohesion_component_samples.is_empty() {
+            self.cohesion_component_samples.sort_unstable();
+            stats.cohesion_components_p95 = percentile(&self.cohesion_component_samples, 95);
+        }
         if !self.complexity_nesting_samples.is_empty() {
             self.complexity_nesting_samples.sort_unstable();
             stats.complexity_nesting_median = percentile(&self.complexity_nesting_samples, 50);
@@ -584,6 +661,7 @@ const fn layer_label(l: Layer) -> &'static str {
     match l {
         Layer::Hotspot => "hotspot",
         Layer::Coupling => "coupling",
+        Layer::Cohesion => "cohesion",
         Layer::Drift => "drift",
         Layer::Budget => "budget",
         Layer::Health => "health",
@@ -651,9 +729,11 @@ fn percentile(samples: &[u32], pct: u32) -> u32 {
 }
 
 /// Bucket a Wilson 95 % lower bound into a coarse band. Boundaries
-/// land on the default `confidence_threshold = 0.20` and the next
-/// round step at 0.40 — gives a "below firing threshold / just
-/// above / well above" visualization.
+/// at 0.20 / 0.40 are kept stable since v0.4 so cross-version replay
+/// histograms remain comparable; v0.6's `confidence_threshold = 0.30`
+/// default falls inside the middle bucket. Reads as "below 0.20 /
+/// 0.20–0.40 / well above" — calibration-grade resolution rather
+/// than a per-version tracking of the firing threshold.
 const fn wilson_lower_bucket(w: f64) -> &'static str {
     if w < 0.20 {
         "0.00-0.20"
@@ -913,6 +993,48 @@ fn write_text<W: Write>(w: &mut W, r: &AggregateReport) -> Result<()> {
         writeln!(w, "nesting_absolute_max = {nesting_suggested}")?;
         writeln!(w, "loc_absolute_max = {loc_suggested}")?;
         writeln!(w)?;
+
+        // Cohesion calibration is suggested only when COHESION
+        // would have fired on a meaningful share of the sample. The
+        // 10% gate is the same noise-floor reasoning the COUPLING
+        // `--learn` heuristic uses: below it, the sample is
+        // dominated by clean diffs and the suggestion adds noise to
+        // the report.
+        let tangled_share = if r.commits_sampled == 0 {
+            0.0
+        } else {
+            stats.cohesion_tangled_diffs_seen as f64 / r.commits_sampled as f64
+        };
+        if tangled_share > 0.10 {
+            writeln!(w, "# Suggested [sensor.cohesion] for this repo:")?;
+            writeln!(
+                w,
+                "# {} of {} sampled commits would have fired COHESION ({:.0}%).",
+                stats.cohesion_tangled_diffs_seen,
+                r.commits_sampled,
+                100.0 * tangled_share,
+            )?;
+            writeln!(
+                w,
+                "# 95th percentile per-commit component count: {}.",
+                stats.cohesion_components_p95
+            )?;
+            // Heuristic: when p95 component count is high (>4) the
+            // graph is splitting into more clusters than a typical
+            // commit really represents, which usually means the
+            // edge gate is too tight. Bump the confidence floor up
+            // so weaker (noisier) edges admit and clusters merge.
+            // Below that, leave the default; the user pastes the
+            // suggestion and decides.
+            let suggested_threshold = if stats.cohesion_components_p95 > 4 {
+                mmk_config::DEFAULT_COHESION_CONFIDENCE_THRESHOLD + 0.05
+            } else {
+                mmk_config::DEFAULT_COHESION_CONFIDENCE_THRESHOLD
+            };
+            writeln!(w, "[sensor.cohesion]")?;
+            writeln!(w, "confidence_threshold = {suggested_threshold}")?;
+            writeln!(w)?;
+        }
     }
 
     Ok(())

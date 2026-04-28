@@ -69,6 +69,76 @@ fn session_summary_nudges_toward_review_when_session_empty() {
 }
 
 #[test]
+fn empty_session_omits_window_files_block_and_emits_text_one_liner() {
+    // v0.6: when `session_commits.len() == 0` the WINDOW ranking is
+    // suppressed. The locale `.po` / generated-artifact noise that
+    // dominates a window-wide top-N buries the ANCHOR nudge that
+    // *is* the empty-session signal. The contract:
+    //   - JSON: `files` key absent (Option::None → skip serialization).
+    //   - Text: a one-line suppression notice mentioning `mmk analyze`.
+    //   - ANCHOR Info finding still present (the redirect to `mmk review`).
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    write(dir.path(), "seed.rs", "x\n");
+    commit_all(dir.path(), "seed", now - DAY);
+
+    let mut args = json_args();
+    args.base = Some("HEAD".into());
+    let (stdout, _) = run_session(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+    assert!(
+        v.get("files").is_none(),
+        "empty session must omit the window `files` key; got: {v}"
+    );
+    assert!(
+        v["session_files"].is_array(),
+        "session_files key must remain (possibly empty) for shape stability; got: {v}"
+    );
+    let anchor_count = v["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .filter(|f| f["layer"] == "anchor")
+        .count();
+    assert_eq!(
+        anchor_count, 1,
+        "ANCHOR Info nudge must still fire when session is empty; got: {:?}",
+        v["findings"]
+    );
+
+    let mut args = json_args();
+    args.base = Some("HEAD".into());
+    args.format = Format::Text;
+    let (stdout, _) = run_session(dir.path(), args);
+    let text = String::from_utf8(stdout).unwrap();
+    assert!(
+        text.contains("WINDOW ranking suppressed") && text.contains("mmk analyze"),
+        "text mode must include the WINDOW-suppression one-liner pointing at \
+         `mmk analyze`; got: {text}"
+    );
+}
+
+#[test]
+fn non_empty_session_keeps_window_files_block() {
+    // Negative: when the session has commits, the WINDOW `files` key
+    // must still be present. Locks the suppression to the empty-session
+    // case only — no accidental scope creep.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_session_fixture(dir.path(), now);
+
+    let mut args = json_args();
+    args.base = Some("main".into());
+    let (stdout, _) = run_session(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+    assert!(
+        v["files"].is_array(),
+        "non-empty session must keep the WINDOW `files` array; got: {v}"
+    );
+}
+
+#[test]
 fn session_summary_diff_budget_finding_fires_on_oversize_session() {
     use std::fmt::Write as _;
     let dir = TempDir::new().unwrap();
