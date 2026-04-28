@@ -138,8 +138,8 @@ the topology layer in depth.
 
 | Audience | Command |
 |---|---|
-| macOS / Linux | `curl -LsSf https://github.com/mlitton/mmk/releases/latest/download/mokumokuren-installer.sh \| sh` |
-| Windows | `iwr https://github.com/mlitton/mmk/releases/latest/download/mokumokuren-installer.ps1 \| iex` |
+| macOS / Linux | `curl -LsSf https://github.com/Mike-Litton/mokumokuren/releases/latest/download/mokumokuren-installer.sh \| sh` |
+| Windows | `iwr https://github.com/Mike-Litton/mokumokuren/releases/latest/download/mokumokuren-installer.ps1 \| iex` |
 | From source | clone the repo, then `cargo install --path mmk-cli --locked` |
 
 Both `mokumokuren` and `mmk` land on `$PATH`.

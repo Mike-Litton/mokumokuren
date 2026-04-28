@@ -605,7 +605,7 @@ fn complexity_monotonic_signal(
         mmk_core::sensors::ComplexityFindingKind::Nesting => "nesting",
         mmk_core::sensors::ComplexityFindingKind::Size => "loc",
     };
-    let key = format!("complexity::{kind}::{}::{}", f.path.display(), f.function,);
+    let key = format!("complexity::{kind}::{}::{}", f.path.display(), f.function);
     crate::monotonic::MonotonicSignal {
         key,
         axes: vec![f.actual],

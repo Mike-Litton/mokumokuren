@@ -70,8 +70,7 @@ fn run_session_summary<O: Write, E: Write>(
     let now_ts = session_out.window.head_timestamp.unwrap_or_else(|| {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0)
+            .map_or(0, |d| d.as_secs() as i64)
     });
 
     // Window ranking — the baseline "what's hot in the full window".

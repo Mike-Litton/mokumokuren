@@ -586,7 +586,6 @@ fn compute_session_split(
     mut window: AnalyzeOutput,
     loc_cache_mu: &Mutex<cache::LocCache>,
 ) -> Result<(SessionAnalyzeOutput, bool)> {
-
     let walker = walker::RepoWalker::open(path)?;
     let resolution = walker.resolve_base(base_hint, since_commit_sha)?;
 

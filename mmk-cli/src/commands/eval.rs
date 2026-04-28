@@ -865,7 +865,7 @@ fn write_text<W: Write>(w: &mut W, r: &AggregateReport) -> Result<()> {
             )
         })
         .collect();
-    layer_pcts.sort_by(|a, b| b.1.cmp(&a.1));
+    layer_pcts.sort_by_key(|b| std::cmp::Reverse(b.1));
     let mix = layer_pcts
         .iter()
         .map(|(s, _)| s.clone())

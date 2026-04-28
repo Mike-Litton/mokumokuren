@@ -305,9 +305,10 @@ ecosystem-neutral right answer.
 - 685 ms on a ~650-commit reference repo, 1.7 s on a ~3.1k-commit
   reference repo, 442 ms on a ~1.8k-commit (in-window) reference repo.
 
-[Unreleased]: https://github.com/mlitton/mmk/compare/v0.5.0...HEAD
-[0.5.0]: https://github.com/mlitton/mmk/compare/v0.4.0...v0.5.0
-[0.4.0]: https://github.com/mlitton/mmk/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/mlitton/mmk/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/mlitton/mmk/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/mlitton/mmk/releases/tag/v0.1.0
+[Unreleased]: https://github.com/Mike-Litton/mokumokuren/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Mike-Litton/mokumokuren/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/Mike-Litton/mokumokuren/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/Mike-Litton/mokumokuren/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/Mike-Litton/mokumokuren/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/Mike-Litton/mokumokuren/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/Mike-Litton/mokumokuren/releases/tag/v0.1.0

@@ -7,8 +7,8 @@ version = "0.6.0"
 edition = "2021"
 authors = ["Mike Litton"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/mlitton/mmk"
-homepage = "https://github.com/mlitton/mmk"
+repository = "https://github.com/Mike-Litton/mokumokuren"
+homepage = "https://github.com/Mike-Litton/mokumokuren"
 rust-version = "1.80"
 
 [workspace.dependencies]

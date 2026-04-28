@@ -32,7 +32,7 @@ under ~200 lines for adherence):
 ```markdown
 ## Using mmk for editing decisions
 
-This project uses [mmk](https://github.com/mlitton/mmk) — a
+This project uses [mmk](https://github.com/Mike-Litton/mokumokuren) — a
 deterministic Git-history sensor that catches LLM slop the linter
 and tests can't see (hotspot blindness, hallucinated coupling,
 thrashing). The agent edit loop wires to it like this:
