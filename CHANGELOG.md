@@ -48,6 +48,10 @@ hook contract.
   wide-grain repos don't read filtered-history as "no risk".
 - Empty-session WINDOW collapse on `mmk session-summary` (JSON
   `files` key omitted; text emits a suppression notice).
+- `mmk cache` adds a `loc` scope for the per-blob LOC cache
+  (`loc.bincode.v1`), shared by analyze / review / pre-edit /
+  session-summary / drift. The prior `loc` scope, which targeted
+  head-tree enumeration, is renamed `head-tree`.
 - Schema bumped to `0.6.0`.
 
 ### Schema (0.6.0)
