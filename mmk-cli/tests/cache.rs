@@ -52,12 +52,13 @@ fn run_analyze(repo: &Path) {
     res.expect("analyze should succeed");
 }
 
-fn cache_files(repo: &Path) -> [std::path::PathBuf; 3] {
+fn cache_files(repo: &Path) -> [std::path::PathBuf; 4] {
     let git_dir = repo.join(".git");
     [
         mmk_git::cache::cache_path(&git_dir).expect("deltas path"),
         mmk_git::cache::revwalk_cache_path(&git_dir).expect("revwalk path"),
         mmk_git::cache::head_tree_cache_path(&git_dir).expect("head_tree path"),
+        mmk_git::cache::loc_cache_path(&git_dir).expect("loc path"),
     ]
 }
 
@@ -100,12 +101,16 @@ fn cache_info_on_fresh_repo_reports_no_cache_yet() {
         "fresh repo should report no deltas cache; got: {info}"
     );
     assert!(
-        info.contains("revwalk:") && info.matches("no cache yet").count() >= 3,
-        "fresh repo should report no cache yet on all three caches; got: {info}"
+        info.contains("revwalk:") && info.matches("no cache yet").count() >= 4,
+        "fresh repo should report no cache yet on all four caches; got: {info}"
     );
     assert!(
         info.contains("head-tree:"),
         "info should list head-tree cache; got: {info}"
+    );
+    assert!(
+        info.contains("loc (per-blob):"),
+        "info should list loc cache; got: {info}"
     );
 }
 
@@ -146,8 +151,8 @@ fn cache_clear_all_removes_every_cache_file() {
     build_canonical_fixture(dir.path(), 1_700_000_000);
 
     run_analyze(dir.path());
-    let [deltas, revwalk, head_tree] = cache_files(dir.path());
-    assert!(deltas.exists() && revwalk.exists() && head_tree.exists());
+    let [deltas, revwalk, head_tree, loc] = cache_files(dir.path());
+    assert!(deltas.exists() && revwalk.exists() && head_tree.exists() && loc.exists());
 
     let out = run_cache(
         dir.path(),
@@ -164,6 +169,7 @@ fn cache_clear_all_removes_every_cache_file() {
     assert!(!deltas.exists(), "deltas cache must be gone");
     assert!(!revwalk.exists(), "revwalk cache must be gone");
     assert!(!head_tree.exists(), "head-tree cache must be gone");
+    assert!(!loc.exists(), "loc cache must be gone");
 }
 
 #[serial(cwd)]
@@ -178,7 +184,7 @@ fn cache_clear_scoped_only_removes_targeted_cache() {
     build_canonical_fixture(dir.path(), 1_700_000_000);
 
     run_analyze(dir.path());
-    let [deltas, revwalk, head_tree] = cache_files(dir.path());
+    let [deltas, revwalk, head_tree, loc] = cache_files(dir.path());
 
     let _ = run_cache(
         dir.path(),
@@ -191,8 +197,8 @@ fn cache_clear_scoped_only_removes_targeted_cache() {
     assert!(!deltas.exists(), "deltas cache must be removed");
     assert!(revwalk.exists(), "revwalk must remain");
     assert!(head_tree.exists(), "head-tree must remain");
+    assert!(loc.exists(), "loc must remain");
 
-    // Now clear revwalk; head-tree should still survive.
     let _ = run_cache(
         dir.path(),
         CacheArgs {
@@ -203,9 +209,19 @@ fn cache_clear_scoped_only_removes_targeted_cache() {
     );
     assert!(!revwalk.exists(), "revwalk must be removed");
     assert!(head_tree.exists(), "head-tree must remain");
+    assert!(loc.exists(), "loc must remain");
 
-    // Clear head-tree (scope `Loc` because cache-clear naming uses
-    // "loc" for the head-tree LOC enumeration cache).
+    let _ = run_cache(
+        dir.path(),
+        CacheArgs {
+            command: CacheCommand::Clear(CacheClearArgs {
+                scope: CacheScope::HeadTree,
+            }),
+        },
+    );
+    assert!(!head_tree.exists(), "head-tree must be removed");
+    assert!(loc.exists(), "loc must remain");
+
     let _ = run_cache(
         dir.path(),
         CacheArgs {
@@ -214,7 +230,7 @@ fn cache_clear_scoped_only_removes_targeted_cache() {
             }),
         },
     );
-    assert!(!head_tree.exists(), "head-tree must be removed");
+    assert!(!loc.exists(), "loc cache must be removed");
 }
 
 #[serial(cwd)]

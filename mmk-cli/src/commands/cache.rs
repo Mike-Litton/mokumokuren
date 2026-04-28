@@ -7,7 +7,8 @@
 
 use anyhow::{Context, Result};
 use mmk_git::cache::{
-    cache_path, head_tree_cache_path, revwalk_cache_path, Cache, HeadTreeCache, RevwalkCache,
+    cache_path, head_tree_cache_path, loc_cache_path, revwalk_cache_path, Cache, HeadTreeCache,
+    LocCache, RevwalkCache,
 };
 use std::io::Write;
 use std::path::Path;
@@ -21,6 +22,7 @@ pub fn run<O: Write, E: Write>(args: &CacheArgs, stdout: &mut O, _stderr: &mut E
     let deltas = cache_path(&git_dir)?;
     let revwalk = revwalk_cache_path(&git_dir)?;
     let head_tree = head_tree_cache_path(&git_dir)?;
+    let loc = loc_cache_path(&git_dir)?;
 
     match &args.command {
         CacheCommand::Info => {
@@ -29,16 +31,20 @@ pub fn run<O: Write, E: Write>(args: &CacheArgs, stdout: &mut O, _stderr: &mut E
             report_revwalk(stdout, &revwalk)?;
             writeln!(stdout)?;
             report_head_tree(stdout, &head_tree)?;
+            writeln!(stdout)?;
+            report_loc(stdout, &loc)?;
         }
         CacheCommand::Clear(clear_args) => match clear_args.scope {
             CacheScope::All => {
                 clear_path(stdout, &deltas)?;
                 clear_path(stdout, &revwalk)?;
                 clear_path(stdout, &head_tree)?;
+                clear_path(stdout, &loc)?;
             }
             CacheScope::Deltas => clear_path(stdout, &deltas)?,
             CacheScope::Revwalk => clear_path(stdout, &revwalk)?,
-            CacheScope::Loc => clear_path(stdout, &head_tree)?,
+            CacheScope::HeadTree => clear_path(stdout, &head_tree)?,
+            CacheScope::Loc => clear_path(stdout, &loc)?,
         },
     }
     Ok(())
@@ -85,6 +91,21 @@ fn report_head_tree<O: Write>(stdout: &mut O, path: &Path) -> Result<()> {
     let cache = HeadTreeCache::load(path)?;
     writeln!(stdout, "  size:    {} bytes", meta.len())?;
     writeln!(stdout, "  entries: {} keys", cache.entries.len())?;
+    writeln!(stdout, "  schema:  v{}", cache.version)?;
+    Ok(())
+}
+
+fn report_loc<O: Write>(stdout: &mut O, path: &Path) -> Result<()> {
+    writeln!(stdout, "loc (per-blob):")?;
+    writeln!(stdout, "  file:    {}", path.display())?;
+    if !path.exists() {
+        writeln!(stdout, "  status:  no cache yet")?;
+        return Ok(());
+    }
+    let meta = std::fs::metadata(path).with_context(|| format!("stat {}", path.display()))?;
+    let cache = LocCache::load(path)?;
+    writeln!(stdout, "  size:    {} bytes", meta.len())?;
+    writeln!(stdout, "  entries: {} blobs", cache.entries.len())?;
     writeln!(stdout, "  schema:  v{}", cache.version)?;
     Ok(())
 }

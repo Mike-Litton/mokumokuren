@@ -16,6 +16,13 @@
 //!   is immutable once the tree exists; ignore globs filter
 //!   deterministically. Saves the head-path-enum phase (~12 ms) +
 //!   feeds the LOC-at-HEAD count without re-walking.
+//! - `loc.bincode.v<N>` — per-blob line counts keyed by blob OID.
+//!   `count_loc` calls `repo.find_blob` which returns the raw
+//!   zlib-inflated blob (no CRLF / gitattributes filter pipeline runs
+//!   on `find_blob`), so the same OID always yields the same byte
+//!   sequence and therefore the same line count. Saves the
+//!   `loc (touched only)` phase (~28 ms warm on a 150k-commit repo)
+//!   on every analyze/review/pre-edit/session-summary/drift call.
 //!
 //! Layout: `<cache-root>/<repo-id>/<filename>` where
 //! - `<cache-root>` is the OS user cache dir (`~/Library/Caches/mmk` on
@@ -54,11 +61,20 @@ pub const REVWALK_CACHE_VERSION: u32 = 1;
 /// on-disk shape changes.
 pub const HEAD_TREE_CACHE_VERSION: u32 = 1;
 
+/// Per-blob LOC cache version. Bumped if `LocCache`'s on-disk shape
+/// changes.
+pub const LOC_CACHE_VERSION: u32 = 1;
+
 /// Soft cap on revwalk cache entries; least-recently-inserted evicted on overflow.
 pub const REVWALK_CACHE_MAX_ENTRIES: usize = 32;
 
 /// Soft cap on head-tree cache entries; same eviction rule as revwalk.
 pub const HEAD_TREE_CACHE_MAX_ENTRIES: usize = 32;
+
+/// Soft cap on LOC cache entries; LRI eviction. 16k is sized to cover
+/// the entire HEAD blob set of the largest fixture in our perf
+/// baseline (vscode at ~13k blobs); shrink later if pressure emerges.
+pub const LOC_CACHE_MAX_ENTRIES: usize = 16_384;
 
 /// Cached deltas + side-data for a single commit.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -233,6 +249,68 @@ impl HeadTreeCache {
     }
 }
 
+/// One per-blob line-count entry.
+///
+/// `lines` is `None` for binary blobs (preserves `count_loc`'s
+/// "binary → not in map" semantic — storing a number for binary
+/// would conflate with text-blobs that happen to have zero newlines
+/// and shift `rank()`'s `loc.contains_key` filter).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocEntry {
+    pub lines: Option<u32>,
+    pub last_used: i64,
+}
+
+impl HasLastUsed for LocEntry {
+    fn last_used(&self) -> i64 {
+        self.last_used
+    }
+}
+
+/// On-disk per-blob LOC cache. Keyed by blob OID (`[u8; 20]` — 20 raw
+/// bytes vs ~80 bytes/key for hex strings; OIDs are uniformly random
+/// so hash distribution is identical).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocCache {
+    pub version: u32,
+    pub entries: HashMap<[u8; 20], LocEntry>,
+}
+
+impl LocCache {
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            version: LOC_CACHE_VERSION,
+            entries: HashMap::new(),
+        }
+    }
+
+    pub fn load(path: &Path) -> Result<Self> {
+        match read_bincode::<Self>(path)? {
+            Some(cache) if cache.version == LOC_CACHE_VERSION => Ok(cache),
+            _ => Ok(Self::empty()),
+        }
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        write_bincode(self, path)
+    }
+
+    /// Insert and prune to `LOC_CACHE_MAX_ENTRIES` by evicting the
+    /// smallest `last_used` first. Stamps the new entry with the
+    /// current wall-clock second.
+    pub fn insert(&mut self, key: [u8; 20], lines: Option<u32>) {
+        self.entries.insert(
+            key,
+            LocEntry {
+                lines,
+                last_used: now_secs(),
+            },
+        );
+        prune_lri(&mut self.entries, LOC_CACHE_MAX_ENTRIES);
+    }
+}
+
 /// Per-repo cache directory. Worktrees of the same repo (same canonical
 /// `.git` path) share this directory.
 pub fn repo_cache_dir(git_dir: &Path) -> Result<PathBuf> {
@@ -259,6 +337,11 @@ pub fn revwalk_cache_path(git_dir: &Path) -> Result<PathBuf> {
 /// Resolve the head-tree cache file path.
 pub fn head_tree_cache_path(git_dir: &Path) -> Result<PathBuf> {
     Ok(repo_cache_dir(git_dir)?.join(format!("head_tree.bincode.v{HEAD_TREE_CACHE_VERSION}")))
+}
+
+/// Resolve the per-blob LOC cache file path.
+pub fn loc_cache_path(git_dir: &Path) -> Result<PathBuf> {
+    Ok(repo_cache_dir(git_dir)?.join(format!("loc.bincode.v{LOC_CACHE_VERSION}")))
 }
 
 /// Stable hash of the ignore-glob set. Sorting first means
@@ -463,6 +546,56 @@ mod tests {
             entry.entries[0].oid_hex,
             "0123456789abcdef0123456789abcdef01234567"
         );
+    }
+
+    #[test]
+    fn loc_cache_roundtrip_text_and_binary() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("loc.bincode.v1");
+        let mut cache = LocCache::empty();
+        let oid_text = [0xa1; 20];
+        let oid_binary = [0xb2; 20];
+        cache.insert(oid_text, Some(42));
+        cache.insert(oid_binary, None);
+        cache.save(&path).unwrap();
+        let loaded = LocCache::load(&path).unwrap();
+        assert_eq!(loaded.version, LOC_CACHE_VERSION);
+        assert_eq!(loaded.entries[&oid_text].lines, Some(42));
+        assert_eq!(loaded.entries[&oid_binary].lines, None);
+    }
+
+    #[test]
+    fn loc_cache_lri_caps() {
+        let mut cache = LocCache::empty();
+        for i in 0..(LOC_CACHE_MAX_ENTRIES + 25) {
+            let mut oid = [0u8; 20];
+            // Spread across all 20 bytes so we get distinct keys past 256.
+            oid[0] = (i & 0xff) as u8;
+            oid[1] = ((i >> 8) & 0xff) as u8;
+            oid[2] = ((i >> 16) & 0xff) as u8;
+            cache.insert(oid, Some(i as u32));
+        }
+        assert_eq!(cache.entries.len(), LOC_CACHE_MAX_ENTRIES);
+    }
+
+    #[test]
+    fn loc_cache_version_mismatch_yields_empty() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("loc.bincode.v1");
+        let bad = LocCache {
+            version: LOC_CACHE_VERSION + 1,
+            entries: std::iter::once((
+                [0u8; 20],
+                LocEntry {
+                    lines: Some(7),
+                    last_used: 0,
+                },
+            ))
+            .collect(),
+        };
+        bad.save(&path).unwrap();
+        let loaded = LocCache::load(&path).unwrap();
+        assert!(loaded.entries.is_empty());
     }
 
     #[test]

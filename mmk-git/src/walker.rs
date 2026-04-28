@@ -244,10 +244,9 @@ impl RepoWalker {
         let mut merges: Vec<gix::ObjectId> = Vec::new();
         for info in walk {
             let info = info.context("boundary walk error")?;
-            let commit = info.object().context("failed to load boundary commit")?;
             let oid = info.id;
             all.push(oid);
-            if commit.parent_ids().count() > 1 {
+            if info.parent_ids.len() > 1 {
                 merges.push(oid);
                 if merges.len() >= k {
                     // K merges found — the linear-chunk fallback below

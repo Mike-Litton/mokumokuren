@@ -430,12 +430,14 @@ pub struct CacheClearArgs {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum CacheScope {
-    /// All caches: per-commit deltas, revwalk, head-tree.
+    /// All caches: per-commit deltas, revwalk, head-tree, per-blob LOC.
     All,
     /// Per-commit `(added, deleted)` deltas.
     Deltas,
     /// Cached revwalk results, keyed by `(anchor_sha, since_ts)`.
     Revwalk,
     /// Cached HEAD/anchor tree enumeration, keyed by `(commit_sha, ignores_hash)`.
+    HeadTree,
+    /// Cached per-blob line counts, keyed by blob OID.
     Loc,
 }

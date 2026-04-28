@@ -6,19 +6,22 @@ optimising anything; it's the starting point for the next pass.
 
 ## Fixture conventions
 
-Numbers below are measured against four reference repositories, kept
+Numbers below are measured against five reference repositories, kept
 out of the repo by name to avoid implying endorsement. They span a
 useful range of scales:
 
 | label | window commits | notes |
 | ----- | -------------: | ----- |
-| A     |       ~1.4 k   | small TS/JS app |
-| B     |       ~1.9 k   | small-medium TS app |
-| C     |       ~3.1 k   | medium-large TS monorepo |
-| D     |       ~14.7 k  | large monorepo (~150 k total commits in full history) |
+| A     |        ~5 k    | small TS/JS app |
+| B     |       ~10 k    | small-medium TS app |
+| C     |       ~16 k    | medium-large TS monorepo |
+| D     |       ~19 k    | large TS monorepo |
+| E     |      ~156 k    | very large monorepo |
 
 Cold = first call with all caches cleared. Warm = median-of-N with
-caches populated.
+caches populated. Round 3 re-baselined the fixture set; pre-round-3
+tables below referenced an older A-D set sized at ~1.4-15 k commits,
+left in place for historical lineage.
 
 ## Where the time goes — cache miss
 
@@ -70,6 +73,22 @@ warm:
 
 A PreToolUse + PostToolUse pair on D is now ~170 ms of mmk overhead,
 down from ~600 ms in round 1.
+
+After round 3 (per-blob LOC cache), warm wall on the round-3 fixture
+set:
+
+| fixture | analyze | review | pre-edit | session-summary | drift (5) |
+| ------- | ------: | -----: | -------: | --------------: | --------: |
+| A       |  0.00s  |  0.01s |   0.01s  |          0.00s  |    0.01s  |
+| B       |  0.01s  |  0.02s |   0.02s  |          0.02s  |    0.12s  |
+| C       |  0.01s  |  0.06s |   0.06s  |          0.04s  |    0.15s  |
+| D       |  0.03s  |  0.11s |   0.11s  |          0.07s  |    0.16s  |
+| E       |  0.05s  |  0.12s |   0.12s  |          0.20s  |    0.26s  |
+
+Stage 2 (per-blob LOC cache) accounts for most of the round-3 warm
+saving: the `loc (touched only)` phase on E_156k drops from 28 ms to
+4 ms on every cache hit, and drift's 5 snapshots inherit the saving
+multiplied through.
 
 JSON output is byte-identical to the cold-path baseline; the caches
 only change timing.
@@ -195,7 +214,7 @@ Deliberately *not* set:
 
 ## Persistent caches (kept)
 
-Three caches share `<cache-root>/<repo-id>/` (`MMK_CACHE_DIR`
+Four caches share `<cache-root>/<repo-id>/` (`MMK_CACHE_DIR`
 overrides; `<repo-id>` = SHA-256 of the canonical `.git` path):
 
 | file                       | shape                                  | invariant |
@@ -203,15 +222,20 @@ overrides; `<repo-id>` = SHA-256 of the canonical `.git` path):
 | `cache.bincode.v<N>`       | per-commit `(added, deleted)` deltas, keyed by SHA | a commit's deltas are immutable once the commit exists |
 | `revwalk.bincode.v<N>`     | revwalk results, keyed by `(anchor_sha, since_ts)`  | the set of commits reachable from a fixed anchor with committer-time ≥ a fixed cutoff is immutable |
 | `head_tree.bincode.v<N>`   | tree-walk entries + `head_paths_ignored`, keyed by `(commit_sha, ignores_hash)` | a tree's blob list is immutable; ignore globs filter deterministically |
+| `loc.bincode.v<N>`         | per-blob `(line_count or binary)`, keyed by 20-byte blob OID | a blob's line count is a property of its bytes; `find_blob` returns raw inflated bytes (no CRLF/text-attribute filter), so same OID = same count |
 
 The revwalk and head-tree caches are bounded by a least-recently-
-*inserted* eviction policy (default cap: 32 entries each). LRU on
-hit (instead of LRU on insert) was rejected because touching on hit
-forces a save on every warm call, which defeats the "skip rewrites
-when nothing changed" optimisation.
+*inserted* eviction policy (default cap: 32 entries each); the LOC
+cache uses the same eviction with a 16k-entry cap (sized to cover the
+full HEAD blob set of the largest fixture in the perf baseline). LRU
+on hit (instead of LRU on insert) was rejected because touching on
+hit forces a save on every warm call, which defeats the "skip
+rewrites when nothing changed" optimisation.
 
-`mmk cache info` now reports all three caches. `mmk cache clear`
-takes `--scope all|deltas|revwalk|loc` (default `all`).
+`mmk cache info` reports all four caches. `mmk cache clear` takes
+`--scope all|deltas|revwalk|head-tree|loc` (default `all`). The
+`loc` scope was previously aliased to head-tree; round 3 split them
+because the per-blob LOC cache is the actual line-count cache.
 
 What this changes about the perf shape:
 - The "where the time goes" picture above describes the *cold* path.
@@ -225,6 +249,28 @@ What this changes about the perf shape:
   the head-tree key automatically (via `ignores_hash`); they don't
   invalidate the per-commit delta cache (filtering is applied at
   aggregation time, not stored in the cache).
+
+## Round 3 outcomes
+
+Re-baselined against five fixtures sized by in-window commit count:
+A (~5k), B (~10k), C (~16k), D (~19k), E (~156k). Numbers below are
+warm-2 wall on E unless noted; cold path on E remains gix-LCS-bound
+and was not the round-3 target.
+
+**Per-blob LOC cache (Stage 2). Landed.** Sibling cache to the
+existing three, keyed by 20-byte blob OID, capped at 16k entries with
+LRI eviction. Hot path on calls 2-N: `count_loc` is now hash-lookup
+instead of zlib-inflate per touched blob.
+
+| phase                         | baseline (E warm) | after | saving |
+| ----------------------------- | ----------------: | ----: | -----: |
+| `loc (touched only)` analyze  |          28.4 ms  | 4.5 ms |  84% |
+| `loc (touched only)` review   |          28.8 ms  | 4.6 ms |  84% |
+| `mmk drift --sessions 5` wall |           390 ms  | 260 ms |  33% |
+| `mmk session-summary` wall    |           230 ms  | 200 ms |  13% |
+
+JSON output byte-identical (modulo `duration_ms`) on all five
+fixtures × five commands.
 
 ## Tried and reverted — don't redo without new evidence
 
@@ -252,40 +298,92 @@ Worth doing for cleanliness; won't move the needle.
 per worker; the bottleneck is the LCS algorithm, not blob fetch
 latency.
 
-## Deferred — round 3 candidates
+**`bytecount` for newline counting** *(2026-04, round 3)*. Drop-in
+replacement for `bytes.iter().filter(==b'\n').count()` in
+`mmk-git/src/binary.rs::count_lines`. Measured warm `loc (touched
+only)` on E_156k: 28.4 → 26.2 ms (-2.2 ms, ~8% — below the round-3
+≥3 ms / ≥30 % verification floor). Reverted. Worth retrying only if
+a future change makes `count_lines` itself the dominant cost.
 
-Ranked by ms-saved-per-effort on the warm path. After round 2 +
-drift + session-bound, D warm `mmk analyze` is ~80 ms; the per-phase
-headroom is:
+**Path interning in `coupling::collect_couples_for`** *(2026-04, round
+3)*. Replaced `(PathBuf, PathBuf)` keys with `(u32, u32)` interned
+ids. Measured warm `coupling::top_couples_for` on E_156k: 10.1 →
+7.5 ms (-2.6 ms, 26% — just under the 30% floor; ≥3 ms also missed).
+Reverted. The interior added ~10 LOC and one `mut intern` closure for
+no statistically meaningful win on the reference set; the perf shape
+was hashmap-bound *behind* the path-clone cost rather than dominated
+by it.
 
-| phase                            | warm D | candidate                                          | est. saving |
-| -------------------------------- | -----: | -------------------------------------------------- | ----------: |
-| `loc (touched only)`             |  28 ms | content-addressed `(blob_oid) → loc` cache         |     ~25 ms  |
-| `coupling::top_couples_for`      |  13 ms | path interning (PathId integers) in the inner loop |      ~8 ms  |
-| `mmk review` git-diff subprocess |  30 ms | replace with gix `index → tree` diff               |     ~25 ms  |
-| `cache materialize`              |   4 ms | borrow cached deltas instead of cloning            |      ~2 ms  |
-| aggregation total                |  10 ms | hygiene; capped by Amdahl                          |      ~3 ms  |
+**`walk_commits_from` skip-time-decode** *(2026-04, round 3)*.
+Replaced `commit.time()?.seconds` with `info.commit_time.unwrap_or(0)`
+on the assumption that the sort populates `info.commit_time` and
+`commit.time()` would re-decode. Cold revwalk on E_156k regressed
+~12% (326 → 365 ms — `info.commit_time` is populated eagerly by
+`Sorting::ByCommitTimeCutoff` while `commit.time()` is lazy and may
+share cache state with later `commit.author()`). Reverted.
 
-**Content-addressed LOC cache.** The biggest single warm-path win.
-Key on `blob_oid` only (not `(commit_sha, blob_oid)`) — line count is
-a property of the blob bytes, identical across every commit that
-references that blob. Fits in the existing `<repo-id>/loc.bincode.v1`
-shape. Benefits drift snapshots too (each snapshot pays the same
-~28 ms loc phase today).
+**`find_session_boundaries` `.sorting()` pin** *(2026-04, round 3)*.
+The early `break` after observing K merges relies on the walk
+surfacing commits in newest-first order; gix's default is BFS, which
+isn't *guaranteed* to be newest-first on multi-parent histories.
+Added an explicit `Sorting::ByCommitTimeCutoff { NewestFirst, 0 }`
+plus a regression test. Reverted: on the five reference fixtures BFS
+happens to produce newest-first, drift JSON was byte-identical
+pre/post, and the synthesized adversarial topology I built didn't
+trigger the misordering either. The change pinned gix internals for
+no observed bug. Reintroduce only with a topology that actually
+demonstrates the misordering. (The `info.parent_ids.len()` part of
+the same commit — replacing `info.object()` + `commit.parent_ids().
+count()` — was kept; it's a hygiene win, not a bugfix.)
 
-**Path interning in coupling.** `pair_counts` is keyed by
-`(PathBuf, PathBuf)`; on D the inner loop allocates millions of
-`PathBuf` clones. Intern paths to `u32` IDs at the entry to
-`top_couples_for`, key by `(u32, u32)`, materialize the original
-`PathBuf` only at finalisation. Round-2 path interning was rejected
-for the *aggregation* maps (capped at 0.6 % wall); coupling is a
-distinct site with much higher allocation pressure.
+**`Cow<'_, [FileDelta]>` at cache materialize (Stage 3a candidate).**
+Predicted ~2 ms saving on E_156k warm; threading `Cow` through the
+`Commit` type (in `mmk-core/types`) and every downstream consumer
+(`weighted_churn`, `coupling`, etc.) is a real structural change.
+Skipped per the round-3 default-to-drop stance for sub-floor wins.
 
-**`mmk review` subprocess swap.** `Command::new("git").arg("diff")
-.arg("--numstat")` in `commands/review.rs` is ~30 ms warm just for
-process fork + binary load + parse. gix can produce the same numstat
-via `repo.index_to_tree_diff` or equivalent. Drops review warm on D
-~25 ms, putting it below `pre-edit`.
+**Fused churn aggregation (Stage 3b candidate).** `weighted_churn`,
+`commits_touching`, and `last_modified` each walk commits
+independently — together ~9 ms warm on E_156k. Fusing three of them
+(`relative_churn` must come after `weighted_churn`) would save ~6 ms
+but collapses three small pure functions with discrete unit tests
+into one fused function with a struct return. Skipped per the
+round-3 default-to-drop stance — the maintainability cost outweighs
+the win after Stage 2 already moved the warm floor by 24 ms.
+
+**`mmk review` gix in-process diff (Stage 4 candidate).** Targeted
+the ~30 ms `git diff --numstat` subprocess on every review. Has
+three known parity corners (`gix::status` vs stitched
+`worktree_to_index + index_to_tree`; rename detection passing
+`Rewrites { copies: None, percentage: None }` to match
+git-numstat-without-`-M`; binary handling via the resource cache
+since gix returns `(0, 0)` not the `- -` sentinel). Deferred: the
+implementation cost is high, parity risk is real (any non-empty
+fixture diff blocks the merge), and Stage 2 already brought review
+warm on E_156k from 150 ms to 120 ms. The trait abstraction
+(`ChangedFileSource`) was also dropped — a single-impl trait adds no
+value on its own; reintroduce together with the gix impl when the
+parity work is funded.
+
+## Deferred — round 4 candidates
+
+After round 3, E_156k warm `mmk analyze` is ~50 ms (was 70 ms);
+`mmk review` is ~120 ms (was 150 ms). The remaining headroom on the
+warm path is small and dominated by process startup + the
+`git diff` subprocess.
+
+| phase                            | warm E | candidate                                       | est. saving |
+| -------------------------------- | -----: | ----------------------------------------------- | ----------: |
+| `mmk review` git-diff subprocess |  30 ms | replace with gix in-process diff (Stage 4)      |     ~25 ms  |
+| process startup                  |  18 ms | long-lived daemon (see "streaming" below)       |       all   |
+| `gix::open` per call             |   4 ms | reuse `gix::Repository` across calls            |       all   |
+| aggregation total                |  10 ms | hygiene; capped by Amdahl                       |      ~3 ms  |
+
+**`mmk review` subprocess swap.** Detailed analysis lives in the
+"Tried and reverted" section above — the parity work was scoped but
+deferred. Reintroduce together with the daemon (below); the same
+`gix::Repository` reuse that the daemon needs makes the in-process
+diff effectively free.
 
 **`imara-diff` direct, inside gix's filtered-blob pipeline.** Cold-
 path attack: gix LCS is still 95 % of cold wall, ~4.7 s on D
@@ -310,6 +408,46 @@ memoisation (the round-2 shape) is the right granularity.
 **PGO / BOLT.** Not Cargo-native; complex pipeline; modest gain.
 Reconsider only if everything above lands and the warm floor still
 needs to come down.
+
+## Streaming on live edits — future work
+
+The forward-looking ambition is sub-millisecond review fires on every
+keystroke. Process startup is the floor: `mmk` spawns at ~18 ms even
+on a fully-cached call, and `gix::open` adds 3-5 ms per invocation.
+Below ~40 ms warm on E_156k is unreachable through any in-process
+optimisation; only a long-lived process erases it.
+
+The natural shape: `mmk-web` (currently empty) hosts a
+sidecar daemon that holds:
+
+- one `gix::Repository` per worktree (loaded once, reused across
+  fires);
+- the four persistent caches in memory (deltas, revwalk, head-tree,
+  loc) — write-through to disk on the same triggers the current CLI
+  uses;
+- an IPC surface (Unix socket or named pipe) that accepts the same
+  args shape as the CLI and returns the same JSON envelope.
+
+What the round-3 work already prepared:
+- The per-blob LOC cache means the only computational work per
+  keystroke is the diff itself (~5 ms with gix in-process from
+  Stage 4) plus a HEAD-tree-relative re-walk only when HEAD moves.
+- The cache structures already use the `<cache-root>/<repo-id>/`
+  layout, which a daemon can simply mmap or hold by reference.
+- `gix::Repository` reuse is already safe: the analyze pipeline
+  threads a `ThreadSafeRepository` and converts to thread-local
+  copies inside parallel sections.
+
+What was *not* scaffolded in round 3, deliberately:
+- No IPC code, protocol, or socket plumbing.
+- No `ChangedFileSource` trait — single-impl traits would have been
+  dead weight; reintroduce together with the gix in-process diff
+  when both land.
+- No `mmk-web` content; the crate stays as a placeholder.
+
+The Stage 4 `git diff` → gix work is a precondition: every fork+exec
+in the warm path is a daemon-killer. Sequence Stage 4 before any
+daemon work.
 
 ## Discipline
 

@@ -7,6 +7,7 @@ use mmk_config::Config;
 use mmk_core::types::Commit;
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 pub mod binary;
 pub mod cache;
@@ -64,7 +65,7 @@ pub struct AnalyzeOutput {
 }
 
 pub fn analyze(path: &Path, cfg: &Config) -> Result<AnalyzeOutput> {
-    analyze_inner(path, cfg, None)
+    with_owned_loc_cache(path, |mu| analyze_inner(path, cfg, None, mu))
 }
 
 /// Run the analyze pipeline anchored at `anchor_oid` instead of HEAD.
@@ -75,14 +76,47 @@ pub fn analyze(path: &Path, cfg: &Config) -> Result<AnalyzeOutput> {
 /// time, not wall-clock now — so each snapshot's churn is weighted
 /// against its own historical "present."
 pub fn analyze_at(path: &Path, cfg: &Config, anchor_oid: gix::ObjectId) -> Result<AnalyzeOutput> {
-    analyze_inner(path, cfg, Some(anchor_oid))
+    with_owned_loc_cache(path, |mu| analyze_inner(path, cfg, Some(anchor_oid), mu))
+}
+
+/// Helper that loads the per-blob LOC cache, runs `f`, and saves it
+/// iff `f` reports the cache was dirtied. The closure form keeps
+/// `analyze`, `analyze_at`, and `analyze_session` sharing the same
+/// load-once / save-iff-dirty discipline; `analyze_session` reuses
+/// the same mutex across two calls into this layer.
+fn with_owned_loc_cache<F>(path: &Path, f: F) -> Result<AnalyzeOutput>
+where
+    F: FnOnce(&Mutex<cache::LocCache>) -> Result<(AnalyzeOutput, bool)>,
+{
+    let walker = walker::RepoWalker::open(path)?;
+    let loc_cache_path = cache::loc_cache_path(walker.repo.git_dir())?;
+    drop(walker);
+    let trace = std::env::var_os("MMK_TRACE").is_some();
+    let initial = cache::LocCache::load(&loc_cache_path).unwrap_or_else(|err| {
+        if trace {
+            eprintln!("[mmk] loc cache load failed: {err:#}; starting empty");
+        }
+        cache::LocCache::empty()
+    });
+    let mu = Mutex::new(initial);
+    let (out, dirty) = f(&mu)?;
+    if dirty {
+        let owned = mu.into_inner().expect("loc cache poisoned");
+        if let Err(err) = owned.save(&loc_cache_path) {
+            if trace {
+                eprintln!("[mmk] loc cache save failed: {err:#}; continuing");
+            }
+        }
+    }
+    Ok(out)
 }
 
 fn analyze_inner(
     path: &Path,
     cfg: &Config,
     anchor_oid: Option<gix::ObjectId>,
-) -> Result<AnalyzeOutput> {
+    loc_cache: &Mutex<cache::LocCache>,
+) -> Result<(AnalyzeOutput, bool)> {
     // Phase timing: set MMK_TRACE=1 to print per-phase wall times to
     // stderr. Useful for perf investigation; off by default.
     let trace = std::env::var_os("MMK_TRACE").is_some();
@@ -402,7 +436,13 @@ fn analyze_inner(
         .filter(|e| touched.contains(&e.path))
         .cloned()
         .collect();
-    let loc = loc::count_loc(&ts_repo, &touched_entries)?;
+    // Per-blob LOC cache: hot path on calls 2-N, where every touched
+    // blob's OID is already known. Same blob bytes → same line count
+    // (gix's `find_blob` returns the raw zlib-inflated bytes; no
+    // CRLF/text-attribute filter pipeline runs for blob lookups), so
+    // the cached value is byte-for-byte equivalent to recomputing it.
+    let (loc, loc_cache_dirty) =
+        loc::count_loc_cached(&ts_repo, &touched_entries, Some(loc_cache))?;
     phase("loc (touched only)", t);
 
     let t = std::time::Instant::now();
@@ -428,15 +468,18 @@ fn analyze_inner(
         );
     }
 
-    Ok(AnalyzeOutput {
-        commits,
-        loc,
-        counts,
-        is_shallow,
-        head_sha,
-        head_timestamp: head_ts,
-        warnings,
-    })
+    Ok((
+        AnalyzeOutput {
+            commits,
+            loc,
+            counts,
+            is_shallow,
+            head_sha,
+            head_timestamp: head_ts,
+            warnings,
+        },
+        loc_cache_dirty,
+    ))
 }
 
 /// Result of `analyze_session`.
@@ -484,7 +527,65 @@ pub fn analyze_session(
     base_hint: Option<&str>,
     since_commit_sha: Option<&str>,
 ) -> Result<SessionAnalyzeOutput> {
-    let mut window = analyze(path, cfg)?;
+    // The LOC cache is shared across the analyze pass (HEAD-LOC) and
+    // the count_loc_at pass (session-base LOC). Same blob OID, same
+    // line count regardless of which tree referenced it — so the
+    // session-base lookup hits whatever the analyze pass just
+    // populated, and the file is loaded + saved once per call.
+    analyze_session_inner(path, cfg, base_hint, since_commit_sha)
+}
+
+fn analyze_session_inner(
+    path: &Path,
+    cfg: &Config,
+    base_hint: Option<&str>,
+    since_commit_sha: Option<&str>,
+) -> Result<SessionAnalyzeOutput> {
+    let walker_for_path = walker::RepoWalker::open(path)?;
+    let loc_cache_path = cache::loc_cache_path(walker_for_path.repo.git_dir())?;
+    drop(walker_for_path);
+    let trace = std::env::var_os("MMK_TRACE").is_some();
+    let initial = cache::LocCache::load(&loc_cache_path).unwrap_or_else(|err| {
+        if trace {
+            eprintln!("[mmk] loc cache load failed: {err:#}; starting empty");
+        }
+        cache::LocCache::empty()
+    });
+    let loc_cache_mu = Mutex::new(initial);
+
+    let (window, window_dirty) = analyze_inner(path, cfg, None, &loc_cache_mu)?;
+    let session = compute_session_split(
+        path,
+        cfg,
+        base_hint,
+        since_commit_sha,
+        window,
+        &loc_cache_mu,
+    );
+    let dirty_after_session = match &session {
+        Ok((_, d)) => *d,
+        Err(_) => false,
+    };
+    if window_dirty || dirty_after_session {
+        let owned = loc_cache_mu.into_inner().expect("loc cache poisoned");
+        if let Err(err) = owned.save(&loc_cache_path) {
+            if trace {
+                eprintln!("[mmk] loc cache save failed: {err:#}; continuing");
+            }
+        }
+    }
+    let (out, _) = session?;
+    Ok(out)
+}
+
+fn compute_session_split(
+    path: &Path,
+    cfg: &Config,
+    base_hint: Option<&str>,
+    since_commit_sha: Option<&str>,
+    mut window: AnalyzeOutput,
+    loc_cache_mu: &Mutex<cache::LocCache>,
+) -> Result<(SessionAnalyzeOutput, bool)> {
 
     let walker = walker::RepoWalker::open(path)?;
     let resolution = walker.resolve_base(base_hint, since_commit_sha)?;
@@ -494,12 +595,15 @@ pub fn analyze_session(
         // to compute LOC against; consumers should treat session_loc
         // as empty (which means session ranking will be empty too,
         // since rank() filters by loc.contains_key()).
-        return Ok(SessionAnalyzeOutput {
-            session_commits: window.commits.clone(),
-            window,
-            base: None,
-            session_loc: ahash::AHashMap::new(),
-        });
+        return Ok((
+            SessionAnalyzeOutput {
+                session_commits: window.commits.clone(),
+                window,
+                base: None,
+                session_loc: ahash::AHashMap::new(),
+            },
+            false,
+        ));
     };
 
     if resolution.via.is_synthetic() {
@@ -535,8 +639,9 @@ pub fn analyze_session(
         .flat_map(|c| c.deltas.iter().map(|d| d.path.clone()))
         .collect();
     let ts_repo = walker.repo.into_sync();
-    let mut session_loc = loc::count_loc_at(&ts_repo, resolution.oid, &session_paths)
-        .context("failed to compute session-base LOC")?;
+    let (mut session_loc, base_dirty) =
+        loc::count_loc_at_cached(&ts_repo, resolution.oid, &session_paths, Some(loc_cache_mu))
+            .context("failed to compute session-base LOC")?;
     for path in &session_paths {
         if !session_loc.contains_key(path) {
             if let Some(&head_loc) = window.loc.get(path) {
@@ -545,12 +650,15 @@ pub fn analyze_session(
         }
     }
 
-    Ok(SessionAnalyzeOutput {
-        window,
-        session_commits,
-        base: Some(resolution),
-        session_loc,
-    })
+    Ok((
+        SessionAnalyzeOutput {
+            window,
+            session_commits,
+            base: Some(resolution),
+            session_loc,
+        },
+        base_dirty,
+    ))
 }
 
 fn walk_ancestors(
