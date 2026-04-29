@@ -135,6 +135,168 @@ fn two_cluster_diff_fires_cohesion() {
 
 #[serial(cwd)]
 #[test]
+fn cohesion_finding_is_warn_severity() {
+    // v0.7: COHESION is Warn (was Info pre-v0.7). Empirical
+    // grounding: MSR 2026 LGTM — auto-merged PRs are smaller and
+    // more focused than non-auto-merged ones across the AIDev
+    // corpus.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_two_cluster_fixture(dir.path(), now);
+
+    write(dir.path(), "auth/login.ts", "export const a = 99;\n");
+    write(dir.path(), "auth/session.ts", "export const b = 99;\n");
+    write(dir.path(), "billing/invoice.ts", "export const d = 99;\n");
+    write(dir.path(), "billing/plan.ts", "export const e = 99;\n");
+
+    let stdout = run_review(dir.path(), review_args());
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+    let cohesion: Vec<&Value> = v["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .filter(|f| f["layer"] == "cohesion")
+        .collect();
+    assert!(!cohesion.is_empty(), "no COHESION fired: {v:#}");
+    for f in &cohesion {
+        assert_eq!(
+            f["severity"], "warn",
+            "COHESION must be Warn in v0.7; got {f:#}"
+        );
+    }
+}
+
+#[serial(cwd)]
+#[test]
+fn cohesion_warn_triggers_gate_warn_exit_code() {
+    use mokumokuren::Verdict;
+
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_two_cluster_fixture(dir.path(), now);
+
+    write(dir.path(), "auth/login.ts", "export const a = 99;\n");
+    write(dir.path(), "auth/session.ts", "export const b = 99;\n");
+    write(dir.path(), "billing/invoice.ts", "export const d = 99;\n");
+    write(dir.path(), "billing/plan.ts", "export const e = 99;\n");
+
+    let mut args = review_args();
+    args.gate = Gate::Warn;
+    let (verdict, _stdout, _stderr) = common::with_cwd(dir.path(), |so, se| {
+        mokumokuren::commands::review::run(&args, None, so, se)
+    });
+    assert_eq!(
+        verdict.expect("review run"),
+        Verdict::GateTriggered,
+        "Gate::Warn must trip on a COHESION Warn",
+    );
+}
+
+#[serial(cwd)]
+#[test]
+fn cohesion_json_block_carries_full_cluster_split() {
+    // v0.7: structured `cohesion.tangles[].clusters[]` block with
+    // the full per-cluster decomposition. Order is deterministic
+    // (within-cluster: lex; cluster list: by smallest path).
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_two_cluster_fixture(dir.path(), now);
+
+    write(dir.path(), "auth/login.ts", "export const a = 99;\n");
+    write(dir.path(), "auth/session.ts", "export const b = 99;\n");
+    write(dir.path(), "billing/invoice.ts", "export const d = 99;\n");
+    write(dir.path(), "billing/plan.ts", "export const e = 99;\n");
+
+    let stdout = run_review(dir.path(), review_args());
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+    let block = v["cohesion"]
+        .as_object()
+        .expect("cohesion block must be present when COHESION fires");
+    let tangles = block["tangles"].as_array().expect("tangles array");
+    assert_eq!(tangles.len(), 1, "one cohesion fire → one tangle entry");
+    let clusters = tangles[0]["clusters"]
+        .as_array()
+        .expect("clusters array")
+        .iter()
+        .map(|c| {
+            c.as_array()
+                .expect("cluster")
+                .iter()
+                .map(|p| p.as_str().expect("path string").to_owned())
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(clusters.len(), 2, "two clusters expected; got {clusters:?}");
+    // Sort-by-smallest-path: auth/* < billing/*.
+    assert!(
+        clusters[0][0].starts_with("auth/"),
+        "first cluster should start with auth/; got {clusters:?}"
+    );
+    assert!(
+        clusters[1][0].starts_with("billing/"),
+        "second cluster should start with billing/; got {clusters:?}"
+    );
+}
+
+#[serial(cwd)]
+#[test]
+fn cohesion_block_absent_when_no_tangle() {
+    // Single-cluster diff: structured `cohesion` block must be
+    // entirely absent (additive shape — Option::is_none skips
+    // serialization).
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_two_cluster_fixture(dir.path(), now);
+
+    write(dir.path(), "auth/login.ts", "export const a = 99;\n");
+    write(dir.path(), "auth/session.ts", "export const b = 99;\n");
+
+    let stdout = run_review(dir.path(), review_args());
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+    assert!(
+        v.get("cohesion").is_none(),
+        "cohesion block must be absent when no tangle qualifies; got: {v:#}"
+    );
+}
+
+#[serial(cwd)]
+#[test]
+fn cohesion_repeat_fire_is_deduped_by_monotonic_signal() {
+    // v0.7: COHESION carries a MonotonicSignal keyed by canonical
+    // cluster signature with axes [cluster_count, total_files]. A
+    // second run against the *same* tangled diff with dedup ON
+    // must not re-fire (no axis worsened, key unchanged).
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_two_cluster_fixture(dir.path(), now);
+
+    write(dir.path(), "auth/login.ts", "export const a = 99;\n");
+    write(dir.path(), "auth/session.ts", "export const b = 99;\n");
+    write(dir.path(), "billing/invoice.ts", "export const d = 99;\n");
+    write(dir.path(), "billing/plan.ts", "export const e = 99;\n");
+
+    let mut a1 = review_args();
+    a1.no_dedup = false;
+    let mut a2 = review_args();
+    a2.no_dedup = false;
+    let stdout1 = run_review(dir.path(), a1);
+    assert!(
+        cohesion_count(&stdout1) >= 1,
+        "first run must fire COHESION; got: {}",
+        String::from_utf8_lossy(&stdout1)
+    );
+    let stdout2 = run_review(dir.path(), a2);
+    assert_eq!(
+        cohesion_count(&stdout2),
+        0,
+        "repeat fire of identical cluster signature must be \
+         suppressed by MonotonicSignal; got: {}",
+        String::from_utf8_lossy(&stdout2)
+    );
+}
+
+#[serial(cwd)]
+#[test]
 fn one_cluster_diff_does_not_fire_cohesion() {
     // The cluster-A files are *all* in the diff but no cluster-B
     // file is touched. The graph has one component on the

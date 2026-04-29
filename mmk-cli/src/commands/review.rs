@@ -25,9 +25,9 @@ use crate::commands::analyze::COUPLES_PER_FILE;
 use crate::commands::common::{
     analyze_health_for_subject, apply_coupling_file, apply_health_file, apply_monotonic_gate,
     apply_sensor_file, complexity_to_finding, coupling_findings_with_signal,
-    health_severity_for_review, health_to_finding, list_directory_siblings, load_bodies,
-    load_config_file, resolve_patterns, structure_to_finding_with_signal, CouplingEmission,
-    CouplingProse,
+    health_severity_for_review, health_to_finding, is_health_eligible_path,
+    list_directory_siblings, load_bodies, load_config_file, resolve_patterns,
+    structure_to_finding_with_signal, CouplingEmission, CouplingProse,
 };
 use crate::hook::HookEnvelope;
 use crate::output::findings::{render_text, Finding, Layer, Severity};
@@ -158,7 +158,13 @@ pub fn run<O: Write, E: Write>(
     // (where the analyzer-based layers are suppressed) and the
     // normal path. The expensive-history layers (HOTSPOT/COUPLING) and
     // the analyzer-driven greenfield signal still gate on bulk below.
-    let sensor_items = compute_sensor_findings(&cwd, &changed, &cfg);
+    //
+    // HEAD bodies are fetched once and shared between COMPLEXITY's
+    // delta-vs-HEAD filter (suppress findings where the function's
+    // metric didn't worsen vs. HEAD) and the EVASION sensor (its
+    // working-vs-HEAD broad-handler comparison).
+    let head_bodies = fetch_head_bodies(&cwd, &changed);
+    let sensor_items = compute_sensor_findings(&cwd, &changed, &cfg, &head_bodies);
 
     // Bulk self-filter: when the diff itself blows the BUDGET cap
     // (default `max_files = 15`, `max_lines = 1000`), the
@@ -201,9 +207,14 @@ pub fn run<O: Write, E: Write>(
     // measurement disagreed with the user's reality.
     let counts = budget_counts(&changed, &cfg.bulk.ignore_for_budget);
     if counts.files_net > cfg.bulk.max_files || counts.lines_net > u64::from(cfg.bulk.max_lines) {
-        let mut findings = bulk_self_findings(&counts, &cfg);
-        let sensor_findings = apply_monotonic_gate(&cwd, None, sensor_items, args.no_dedup);
-        findings.extend(sensor_findings);
+        // Bulk-self path BUDGET findings are tagged with
+        // MonotonicSignal so re-fires on the same cap breach
+        // suppress (see `bulk_self_findings` doc). Merge with the
+        // per-file sensor findings and apply the gate once so the
+        // dedup state is recorded consistently across both sources.
+        let mut tagged = bulk_self_findings(&counts, &cfg);
+        tagged.extend(sensor_items);
+        let findings = apply_monotonic_gate(&cwd, None, tagged, args.no_dedup);
         return emit_bulk(
             args, envelope, mode, &changed, &counts, &findings, started, stdout,
         );
@@ -239,33 +250,55 @@ pub fn run<O: Write, E: Write>(
     // worsening drop through the same gate that handles
     // STRUCTURE / COMPLEXITY. Sensor + history items merge into one
     // gate call so the LRU cap and persistence pass run once.
-    let mut tagged: Vec<(Finding, Option<crate::monotonic::MonotonicSignal>)> =
-        compute_findings_with_signals(
-            &changed,
-            &ranked,
-            &analysis.commits,
-            &commits_touching,
-            &cfg,
-            args.top,
-            &counts,
-        );
+    let (mut tagged, cohesion_tangles) = compute_findings_with_signals(
+        &changed,
+        &ranked,
+        &analysis.commits,
+        &commits_touching,
+        &cfg,
+        args.top,
+        &counts,
+    );
     tagged.extend(sensor_items);
 
-    let mut findings =
-        apply_monotonic_gate(&cwd, analysis.head_sha.as_deref(), tagged, args.no_dedup);
-
-    // HEALTH: structural-pattern adapter. Pattern C is **Warn**
-    // when the implementation moved without its test partner; A/B
-    // stay Info. The existing peer-touched filter for COUPLING
-    // applies analogously: if the test partner is in the changed
-    // set, suppress the Warn (the agent did touch it).
+    // HEALTH: structural-pattern adapter. Pattern C and EVASION
+    // (BroadException) are **Warn** in review; A/B stay Info. The
+    // existing peer-touched filter for COUPLING applies analogously
+    // to TestPair: if the test partner is in the changed set,
+    // suppress the Warn (the agent did touch it).
+    //
+    // EVASION needs a working-vs-HEAD diff (head_bodies fetched
+    // earlier and shared with COMPLEXITY's filter); the
+    // substring-pre-gate avoids parsing when neither side touches
+    // error-handling code.
+    //
+    // Each HEALTH finding carries a MonotonicSignal keyed on the
+    // (pattern, subject) pair with constant axes [1]. DP#4 failure
+    // mode: an agent doing 6 Edits in a row sees the same TestPair
+    // warning 6 times because envelope-level dedup keys on the
+    // whole findings hash, which changes whenever the broader
+    // diff grows (BUDGET ramp tier moves, COMPLEXITY actuals shift,
+    // etc.). Per-key dedup with constant axes fires once and stays
+    // silent until TTL expires or the partner is touched (which
+    // drops the finding entirely via the peer-touched filter
+    // above). Same dedup discipline already applied to BUDGET /
+    // COUPLING / COHESION / COMPLEXITY / STRUCTURE.
     let health_patterns = resolve_patterns(&cfg.health.ts.patterns);
     let mut health_matches: Vec<mmk_health::HealthFinding> = Vec::new();
     if cfg.health.ts.enabled {
         let peer_paths: Vec<PathBuf> = analysis.loc.keys().cloned().collect();
         let changed_set: AHashSet<PathBuf> = changed.iter().map(|c| c.path.clone()).collect();
         for c in &changed {
-            for h in analyze_health_for_subject(&cwd, &c.path, &peer_paths, &health_patterns) {
+            let head_body = head_bodies.get(&c.path).map(String::as_str);
+            let patterns_for_subject =
+                patterns_for_subject(&cwd, &c.path, head_body, &health_patterns);
+            for h in analyze_health_for_subject(
+                &cwd,
+                &c.path,
+                head_body,
+                &peer_paths,
+                &patterns_for_subject,
+            ) {
                 if h.pattern == mmk_health::HealthPattern::TestPair
                     && h.related.iter().all(|p| changed_set.contains(p))
                 {
@@ -275,11 +308,22 @@ pub fn run<O: Write, E: Write>(
                     continue;
                 }
                 let severity = health_severity_for_review(h.pattern);
-                findings.push(health_to_finding(&h, severity));
+                let signal = crate::monotonic::MonotonicSignal {
+                    key: format!(
+                        "health::{}::review::{}",
+                        h.pattern.token(),
+                        h.subject.display()
+                    ),
+                    axes: vec![1],
+                };
+                tagged.push((health_to_finding(&h, severity), Some(signal)));
                 health_matches.push(h);
             }
         }
     }
+
+    let mut findings =
+        apply_monotonic_gate(&cwd, analysis.head_sha.as_deref(), tagged, args.no_dedup);
 
     // GREENFIELD signal: when most of the diff is paths the historical
     // analyzer hasn't seen, the HOTSPOT/COUPLING/DRIFT layers
@@ -350,6 +394,7 @@ pub fn run<O: Write, E: Write>(
             &health_patterns,
             Some(new_frac),
             &counts,
+            &cohesion_tangles,
         )?,
     }
     Ok(verdict_for(args.gate, &findings))
@@ -548,6 +593,7 @@ fn compute_sensor_findings(
     cwd: &Path,
     changed: &[ChangedFile],
     cfg: &Config,
+    head_bodies: &ahash::AHashMap<PathBuf, String>,
 ) -> Vec<(Finding, Option<crate::monotonic::MonotonicSignal>)> {
     let mut out = Vec::new();
     if !(cfg.sensor.structure.enabled || cfg.sensor.complexity.enabled) {
@@ -584,7 +630,16 @@ fn compute_sensor_findings(
                 bodies: &bodies,
                 cfg: &cfg.sensor.complexity,
             };
-            for cf in mmk_core::sensors::compute_complexity_findings(&input) {
+            // Delta-vs-HEAD filter: suppress findings whose
+            // (path, function-name) pair was already at or above the
+            // working-tree metric at HEAD. The agent didn't worsen
+            // it, so re-firing would be first-contact noise without
+            // new signal. New files / new functions / strict
+            // worsening still fire.
+            let raw = mmk_core::sensors::compute_complexity_findings(&input);
+            let head_body = head_bodies.get(&c.path).map(String::as_str);
+            let filtered = filter_complexity_by_head_baseline(&c.path, raw, head_body);
+            for cf in filtered {
                 let signal = complexity_monotonic_signal(&cf);
                 out.push((complexity_to_finding(&cf), Some(signal)));
             }
@@ -621,7 +676,16 @@ fn complexity_monotonic_signal(
 /// misread the silence as "all clear" rather than "uncomputed at
 /// this scale." See [`messages::budget_files`] for the full
 /// rationale on the wording choice.
-pub(crate) fn bulk_self_findings(counts: &BudgetCounts, cfg: &Config) -> Vec<Finding> {
+///
+/// Returns tagged findings (with `MonotonicSignal`) so re-fires on
+/// the same cap breach get suppressed by the per-key gate. Real-world
+/// failure mode that motivated this: drizzle generates a 3.5k-line
+/// `snapshot.json` once; subsequent Edit/Write hooks repeated the
+/// same BUDGET warning ~12 times with no new information. Per-key
+/// dedup keyed on `budget::files` / `budget::lines` with axes
+/// `[actual]` re-fires only when the offending count strictly
+/// worsens.
+pub(crate) fn bulk_self_findings(counts: &BudgetCounts, cfg: &Config) -> Vec<TaggedFinding> {
     let mut findings = Vec::new();
     let triggers = mmk_core::budget::check_diff_budget(
         &mmk_core::budget::BudgetCheck {
@@ -631,17 +695,26 @@ pub(crate) fn bulk_self_findings(counts: &BudgetCounts, cfg: &Config) -> Vec<Fin
         &cfg.bulk,
     );
     for t in triggers {
-        let msg = match t {
+        let (msg, key, axis) = match t {
             mmk_core::budget::BudgetTrigger::FilesExceeded { actual, max } => {
                 let gross = counts.has_ignored().then_some(counts.files_gross);
-                messages::budget_files(actual, max, gross, true)
+                let msg = messages::budget_files(actual, max, gross, true);
+                (msg, "budget::files", actual)
             }
             mmk_core::budget::BudgetTrigger::LinesExceeded { actual, max } => {
                 let gross = counts.has_ignored().then_some(counts.lines_gross);
-                messages::budget_lines(actual, max, gross, true)
+                let msg = messages::budget_lines(actual, max, gross, true);
+                let axis = u32::try_from(actual).unwrap_or(u32::MAX);
+                (msg, "budget::lines", axis)
             }
         };
-        findings.push(Finding::new(Layer::Budget, Severity::Warn, msg));
+        findings.push((
+            Finding::new(Layer::Budget, Severity::Warn, msg),
+            Some(crate::monotonic::MonotonicSignal {
+                key: key.to_string(),
+                axes: vec![axis],
+            }),
+        ));
     }
     findings
 }
@@ -758,18 +831,35 @@ pub(crate) fn compute_findings(
     top: usize,
     counts: &BudgetCounts,
 ) -> Vec<Finding> {
-    compute_findings_with_signals(changed, ranked, commits, commits_touching, cfg, top, counts)
-        .into_iter()
-        .map(|(f, _)| f)
-        .collect()
+    let (tagged, _tangles) =
+        compute_findings_with_signals(changed, ranked, commits, commits_touching, cfg, top, counts);
+    tagged.into_iter().map(|(f, _)| f).collect()
 }
 
+/// One element of `compute_findings_with_signals`'s findings vec —
+/// a finding paired with its optional dedup signal. Aliased to keep
+/// the function signature legible and silence
+/// `clippy::type_complexity`.
+pub(crate) type TaggedFinding = (Finding, Option<crate::monotonic::MonotonicSignal>);
+
+/// One COHESION fire: vec of clusters, each cluster a vec of paths.
+/// `compute_findings_with_signals` returns a vec of these (one per
+/// fire) so JSON output can render the full per-cluster split.
+pub(crate) type CohesionTangle = Vec<Vec<PathBuf>>;
+
 /// Same shape as [`compute_findings`] but each finding is paired with
-/// an optional [`MonotonicSignal`]. COUPLING entries carry signals
-/// (key `coupling::<subject>::<partner>`, axes `[k, n]`); HOTSPOT and
-/// BUDGET findings stay untagged — HOTSPOT today fires once per
-/// changed-and-ranked file (re-fire on every edit is *itself* the
-/// signal: the file is back in scope), BUDGET is whole-set deduped.
+/// an optional [`MonotonicSignal`]. Returns the tagged findings plus
+/// the qualifying COHESION cluster decompositions (an outer vec of
+/// fires; each fire's inner vec is the per-cluster path lists). The
+/// cluster decompositions feed the structured `cohesion` block in
+/// JSON output without needing to re-parse `findings[].message`.
+///
+/// COUPLING entries carry signals (key `coupling::<subject>::<partner>`,
+/// axes `[k, n]`); HOTSPOT and BUDGET findings stay untagged —
+/// HOTSPOT today fires once per changed-and-ranked file (re-fire on
+/// every edit is *itself* the signal: the file is back in scope),
+/// BUDGET is whole-set deduped. COHESION carries a signal keyed by
+/// canonical cluster signature with axes `[cluster_count, total_files]`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn compute_findings_with_signals(
     changed: &[ChangedFile],
@@ -779,8 +869,9 @@ pub(crate) fn compute_findings_with_signals(
     cfg: &Config,
     top: usize,
     counts: &BudgetCounts,
-) -> Vec<(Finding, Option<crate::monotonic::MonotonicSignal>)> {
-    let mut findings: Vec<(Finding, Option<crate::monotonic::MonotonicSignal>)> = Vec::new();
+) -> (Vec<TaggedFinding>, Vec<CohesionTangle>) {
+    let mut findings: Vec<TaggedFinding> = Vec::new();
+    let mut cohesion_tangles: Vec<CohesionTangle> = Vec::new();
     let changed_set: AHashSet<PathBuf> = changed.iter().map(|c| c.path.clone()).collect();
 
     // HOTSPOT — changed file is ranked ≤ top.
@@ -829,9 +920,14 @@ pub(crate) fn compute_findings_with_signals(
     // changed file; COHESION flags whether the changed files
     // *together* form a single cluster or split into multiple
     // disjoint ones (the structural fingerprint of a tangled diff).
-    // Severity is Info — pattern-naming, not gating; promotion to
-    // Warn waits for replay-grade evidence that tangled diffs
-    // measurably predict revert.
+    //
+    // Severity is **Warn** as of v0.7. Empirical grounding: the MSR
+    // 2026 LGTM mining-challenge paper *"LGTM! Characteristics of
+    // Auto-Merged LLM-based Agentic PRs"* (Canelas et al.) shows
+    // across the AIDev corpus that auto-merged PRs are smaller and
+    // more focused than non-auto-merged ones — peer-reviewed
+    // evidence that focus correlates with merge success, which is
+    // the direction COHESION already detects.
     if cfg.sensor.cohesion.enabled && !changed_set.is_empty() {
         let components = coupling::connected_components_by_wilson(
             commits,
@@ -879,14 +975,32 @@ pub(crate) fn compute_findings_with_signals(
             } else {
                 None
             };
+            // MonotonicSignal: re-fire only when cluster count or
+            // total_files changes. Adding an unrelated file to one
+            // cluster updates `total_files` and re-fires; merely
+            // re-saving the same files does not.
+            let signature = canonical_cluster_signature(&qualifying);
+            let total_files_u32 = u32::try_from(total_files).unwrap_or(u32::MAX);
+            let qualifying_count_u32 = u32::try_from(qualifying.len()).unwrap_or(u32::MAX);
+            let signal = crate::monotonic::MonotonicSignal {
+                key: format!("cohesion::{signature}"),
+                axes: vec![qualifying_count_u32, total_files_u32],
+            };
             findings.push((
                 Finding::new(
                     Layer::Cohesion,
-                    Severity::Info,
+                    Severity::Warn,
                     messages::cohesion_tangled(&cluster_sizes, detail_paths.as_deref()),
                 ),
-                None,
+                Some(signal),
             ));
+            // Capture the per-cluster path lists for the structured
+            // `cohesion` block in JSON output. The text rendering caps
+            // at 8 paths for legibility; the structured form has no
+            // cap so harnesses can render the full split.
+            let owned_clusters: Vec<Vec<PathBuf>> =
+                qualifying.iter().map(|c| (*c).clone()).collect();
+            cohesion_tangles.push(owned_clusters);
         }
     }
 
@@ -909,6 +1023,14 @@ pub(crate) fn compute_findings_with_signals(
         // whether ramp findings correlate with course-correction.
         if cfg.sensor.budget_ramp.enabled {
             let progress = mmk_core::budget::budget_progress(&check, &cfg.bulk);
+            // Ramp signals: per-key dedup so re-saves at the same
+            // tier don't re-fire. Axes track the gating quantities
+            // (file count + line count) so a strict worsening
+            // re-fires; reverts and equal repeats stay silent.
+            let ramp_axes = vec![
+                counts.files_net,
+                u32::try_from(counts.lines_net).unwrap_or(u32::MAX),
+            ];
             match mmk_core::budget::budget_tier(&progress) {
                 mmk_core::budget::BudgetTier::Approaching => {
                     findings.push((
@@ -923,7 +1045,10 @@ pub(crate) fn compute_findings_with_signals(
                                 false,
                             ),
                         ),
-                        None,
+                        Some(crate::monotonic::MonotonicSignal {
+                            key: "budget::ramp::approaching".into(),
+                            axes: ramp_axes,
+                        }),
                     ));
                 }
                 mmk_core::budget::BudgetTier::Near => {
@@ -939,29 +1064,48 @@ pub(crate) fn compute_findings_with_signals(
                                 true,
                             ),
                         ),
-                        None,
+                        Some(crate::monotonic::MonotonicSignal {
+                            key: "budget::ramp::near".into(),
+                            axes: ramp_axes,
+                        }),
                     ));
                 }
                 mmk_core::budget::BudgetTier::Quiet | mmk_core::budget::BudgetTier::Over => {}
             }
         }
     } else {
+        // Over-cap fires get per-trigger MonotonicSignal dedup keyed
+        // on `budget::files` / `budget::lines`. Re-fires only when
+        // the same axis strictly worsens past the prior emission —
+        // a reverted-then-re-added diff at the same numbers stays
+        // silent. Files-vs-lines triggers dedup independently so a
+        // diff that crosses one axis but not the other still re-fires
+        // when it crosses the second.
         for t in triggers {
-            let msg = match t {
+            let (msg, key, axis) = match t {
                 mmk_core::budget::BudgetTrigger::FilesExceeded { actual, max } => {
                     let gross = counts.has_ignored().then_some(counts.files_gross);
-                    messages::budget_files(actual, max, gross, false)
+                    let msg = messages::budget_files(actual, max, gross, false);
+                    (msg, "budget::files", actual)
                 }
                 mmk_core::budget::BudgetTrigger::LinesExceeded { actual, max } => {
                     let gross = counts.has_ignored().then_some(counts.lines_gross);
-                    messages::budget_lines(actual, max, gross, false)
+                    let msg = messages::budget_lines(actual, max, gross, false);
+                    let axis = u32::try_from(actual).unwrap_or(u32::MAX);
+                    (msg, "budget::lines", axis)
                 }
             };
-            findings.push((Finding::new(Layer::Budget, Severity::Warn, msg), None));
+            findings.push((
+                Finding::new(Layer::Budget, Severity::Warn, msg),
+                Some(crate::monotonic::MonotonicSignal {
+                    key: key.to_string(),
+                    axes: vec![axis],
+                }),
+            ));
         }
     }
 
-    findings
+    (findings, cohesion_tangles)
 }
 
 /// Pre-edit's hook to read the *current working-tree* diff vs
@@ -1002,4 +1146,195 @@ pub(crate) fn build_partner_globset(globs: &[String]) -> Option<GlobSet> {
         }
     }
     builder.build().ok()
+}
+
+/// Pre-fetch HEAD bodies for the changed health-eligible files in
+/// one batched pass over the changed-set.
+///
+/// Two consumers share this map: EVASION (working-vs-HEAD broad
+/// handler delta) and COMPLEXITY (HEAD-baseline filter so a
+/// pre-existing over-cap function whose shape didn't change
+/// doesn't re-fire). Single fetch keeps the per-changed-file cost
+/// to one HEAD-blob read regardless of how many sensors consume it.
+///
+/// Skips files whose extension isn't health-eligible (no point
+/// reading the HEAD blob for a `.lock` file). The mmk-git helper
+/// drops UTF-8 decode failures (binary files surfacing under a JS
+/// extension) silently.
+fn fetch_head_bodies(cwd: &Path, changed: &[ChangedFile]) -> ahash::AHashMap<PathBuf, String> {
+    let Some(work_dir) = mmk_git::discover_work_dir(cwd) else {
+        return ahash::AHashMap::new();
+    };
+    let paths: Vec<PathBuf> = changed
+        .iter()
+        .filter(|c| is_health_eligible_path(&c.path))
+        .map(|c| c.path.clone())
+        .collect();
+    if paths.is_empty() {
+        return ahash::AHashMap::new();
+    }
+    mmk_git::read_head_bodies(&work_dir, &paths)
+}
+
+/// Cheap pre-gate: drop EVASION from this subject's pattern set when
+/// neither the working tree nor HEAD contains the substring `catch`.
+/// Saves the per-file tree-sitter parse on diffs that don't touch
+/// error-handling code at all (the common case).
+fn patterns_for_subject(
+    cwd: &Path,
+    subject: &Path,
+    head_body: Option<&str>,
+    enabled: &[mmk_health::HealthPattern],
+) -> Vec<mmk_health::HealthPattern> {
+    if !enabled.contains(&mmk_health::HealthPattern::BroadException) {
+        return enabled.to_vec();
+    }
+    if !is_health_eligible_path(subject) {
+        return enabled
+            .iter()
+            .copied()
+            .filter(|p| *p != mmk_health::HealthPattern::BroadException)
+            .collect();
+    }
+    let working = std::fs::read_to_string(cwd.join(subject)).unwrap_or_default();
+    let working_has_catch = working.contains("catch");
+    let head_has_catch = head_body.is_some_and(|b| b.contains("catch"));
+    if !working_has_catch && !head_has_catch {
+        return enabled
+            .iter()
+            .copied()
+            .filter(|p| *p != mmk_health::HealthPattern::BroadException)
+            .collect();
+    }
+    enabled.to_vec()
+}
+
+/// Drop COMPLEXITY findings whose function exists at HEAD with the
+/// same-or-better metric value. Keeps findings on:
+/// - new files (no HEAD body to compare against),
+/// - newly-added functions (no matching name at HEAD),
+/// - functions whose metric strictly worsened vs. HEAD.
+///
+/// Function-name matching is by literal string equality on
+/// `FunctionFact.name`. Known weakness: a rename (`parse` →
+/// `parseV4`) leaves the working-tree function with no HEAD match,
+/// so it fires as if it were newly added — even though the body is
+/// structurally identical. This false-fire is acceptable because
+/// renames are rare in feature work and the resulting finding is
+/// still factually true (the renamed function *is* over the cap);
+/// the cost is one extra Warn per rename. A tighter check would
+/// require structural matching across renames, which costs more
+/// than the false-fire it prevents.
+///
+/// HEAD-parse failures (rare — tree-sitter is error-tolerant) are
+/// treated conservatively: keep the finding rather than silently
+/// drop a real over-cap signal because we couldn't compute a
+/// baseline.
+fn filter_complexity_by_head_baseline(
+    subject: &Path,
+    findings: Vec<mmk_core::sensors::ComplexityFinding>,
+    head_body: Option<&str>,
+) -> Vec<mmk_core::sensors::ComplexityFinding> {
+    let Some(body) = head_body else {
+        // New file: every finding is genuinely new signal.
+        return findings;
+    };
+    let Some(head_facts) = mmk_health::extract(subject, body) else {
+        // HEAD parse failed: be conservative, keep findings.
+        return findings;
+    };
+    findings
+        .into_iter()
+        .filter_map(|mut f| {
+            let Some(hf) = head_facts.functions.iter().find(|hf| hf.name == f.function) else {
+                // Newly-added function: fire (no HEAD baseline to
+                // populate; head_actual stays None).
+                return Some(f);
+            };
+            let head_actual = match f.kind {
+                mmk_core::sensors::ComplexityFindingKind::Nesting => hf.max_nesting_depth,
+                mmk_core::sensors::ComplexityFindingKind::Size => hf.loc,
+            };
+            if f.actual > head_actual {
+                // Worsened: keep, and populate head_actual so the
+                // formatter can render `+N vs HEAD`. Lets the agent
+                // see how much they grew a pre-existing function vs.
+                // inheriting the bulk of an existing problem.
+                f.head_actual = Some(head_actual);
+                Some(f)
+            } else {
+                // Same-or-better: suppress.
+                None
+            }
+        })
+        .collect()
+}
+
+/// Canonical signature for a cohesion-fire's qualifying clusters.
+///
+/// Sort within each cluster (lex by path), sort the cluster list by
+/// the smallest path in each cluster, then join with stable
+/// separators. Two fires with the same set of paths in the same
+/// partition produce the same signature regardless of internal
+/// ordering — what the MonotonicSignal needs to suppress identical
+/// re-fires across keystrokes.
+fn canonical_cluster_signature(qualifying: &[&Vec<PathBuf>]) -> String {
+    let mut clusters: Vec<Vec<String>> = qualifying
+        .iter()
+        .map(|c| {
+            let mut paths: Vec<String> = c.iter().map(|p| p.display().to_string()).collect();
+            paths.sort();
+            paths
+        })
+        .collect();
+    clusters.sort_by(|a, b| a.first().cmp(&b.first()));
+    let parts: Vec<String> = clusters.iter().map(|c| c.join(",")).collect();
+    parts.join("|")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::canonical_cluster_signature;
+    use std::path::PathBuf;
+
+    #[test]
+    fn canonical_signature_is_order_insensitive() {
+        let c1 = vec![PathBuf::from("a/x.ts"), PathBuf::from("a/y.ts")];
+        let c2 = vec![PathBuf::from("b/x.ts"), PathBuf::from("b/y.ts")];
+
+        let q_ab = vec![&c1, &c2];
+        let q_ba = vec![&c2, &c1];
+        assert_eq!(
+            canonical_cluster_signature(&q_ab),
+            canonical_cluster_signature(&q_ba),
+            "cluster-order swap must not change signature",
+        );
+
+        let c1_rev = vec![PathBuf::from("a/y.ts"), PathBuf::from("a/x.ts")];
+        let q_within = vec![&c1_rev, &c2];
+        assert_eq!(
+            canonical_cluster_signature(&q_ab),
+            canonical_cluster_signature(&q_within),
+            "intra-cluster order swap must not change signature",
+        );
+    }
+
+    #[test]
+    fn canonical_signature_changes_on_membership_change() {
+        let c1 = vec![PathBuf::from("a/x.ts"), PathBuf::from("a/y.ts")];
+        let c2 = vec![PathBuf::from("b/x.ts"), PathBuf::from("b/y.ts")];
+        let c2_extra = vec![
+            PathBuf::from("b/x.ts"),
+            PathBuf::from("b/y.ts"),
+            PathBuf::from("b/z.ts"),
+        ];
+
+        let before = vec![&c1, &c2];
+        let after = vec![&c1, &c2_extra];
+        assert_ne!(
+            canonical_cluster_signature(&before),
+            canonical_cluster_signature(&after),
+            "new file in a cluster must change the signature",
+        );
+    }
 }

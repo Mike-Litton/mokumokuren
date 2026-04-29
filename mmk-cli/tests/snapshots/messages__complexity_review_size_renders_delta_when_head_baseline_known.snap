@@ -1,0 +1,5 @@
+---
+source: mmk-cli/tests/messages.rs
+expression: s
+---
+src/integrations/import/reactive-resume-v4-json.tsx::parse: 366 LOC exceeds cap 80 (+3 vs HEAD); correlates with slower comprehension and issue resolution

@@ -376,6 +376,12 @@ struct ReviewReport<'a> {
     findings: &'a [crate::output::findings::Finding],
     #[serde(skip_serializing_if = "Option::is_none")]
     health: Option<HealthBlock<'a>>,
+    /// `cohesion` block — present only when COHESION fired with the
+    /// full per-cluster file split. The structured form lets a
+    /// harness render the split as a commit-split proposal without
+    /// parsing `findings[].message`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cohesion: Option<CohesionBlock>,
 }
 
 #[derive(Serialize)]
@@ -402,7 +408,9 @@ struct ReviewEmptyDiff {
 
 /// Write a `mmk review` JSON envelope: standard `repo`/`config`/
 /// `analysis` blocks plus a `review` block (mode + per-file diff
-/// numstat), the `findings` array, and the optional `health` block.
+/// numstat), the `findings` array, the optional `health` block, and
+/// the optional `cohesion` block.
+///
 /// Used when there are changes to review; clean-tree calls go
 /// through [`write_review_empty`].
 #[allow(clippy::too_many_arguments)]
@@ -418,6 +426,7 @@ pub(crate) fn write_review<W: Write>(
     health_patterns: &[mmk_health::HealthPattern],
     new_file_fraction: Option<f64>,
     counts: &crate::commands::review::BudgetCounts,
+    cohesion_tangles: &[crate::commands::review::CohesionTangle],
 ) -> Result<()> {
     let path_strs: Vec<String> = changed
         .iter()
@@ -470,6 +479,7 @@ pub(crate) fn write_review<W: Write>(
         },
         findings,
         health: health_block(health_matches, health_patterns),
+        cohesion: cohesion_block(cohesion_tangles),
     };
 
     serde_json::to_writer_pretty(&mut *w, &report)?;
@@ -538,6 +548,52 @@ fn health_block<'a>(
             })
             .collect(),
     })
+}
+
+/// `cohesion` block — surfaces the COHESION cluster decomposition.
+/// Always carries the *full* qualifying split (the prose text caps
+/// at 8 paths to stay legible; the structured form has no cap so
+/// harnesses can render it as a commit-split proposal).
+#[derive(Serialize)]
+pub(crate) struct CohesionBlock {
+    pub(crate) tangles: Vec<TangleEntry>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct TangleEntry {
+    /// One vec per qualifying cluster; paths are sorted within each
+    /// cluster (lex by path) and clusters are sorted by their
+    /// smallest path. Deterministic ordering matches the
+    /// canonical_cluster_signature used for monotonic dedup.
+    pub(crate) clusters: Vec<Vec<String>>,
+}
+
+/// Build the cohesion block from the qualifying clusters.
+/// Returns `None` when no tangle qualified — keeps the JSON shape
+/// additive (`cohesion` field is absent rather than empty).
+pub(crate) fn cohesion_block(
+    tangles: &[crate::commands::review::CohesionTangle],
+) -> Option<CohesionBlock> {
+    if tangles.is_empty() {
+        return None;
+    }
+    let entries: Vec<TangleEntry> = tangles
+        .iter()
+        .map(|qualifying| {
+            let mut clusters: Vec<Vec<String>> = qualifying
+                .iter()
+                .map(|c| {
+                    let mut paths: Vec<String> =
+                        c.iter().map(|p| p.display().to_string()).collect();
+                    paths.sort();
+                    paths
+                })
+                .collect();
+            clusters.sort_by(|a, b| a.first().cmp(&b.first()));
+            TangleEntry { clusters }
+        })
+        .collect();
+    Some(CohesionBlock { tangles: entries })
 }
 
 #[derive(Serialize)]

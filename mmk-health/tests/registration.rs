@@ -32,6 +32,7 @@ fn registration_surfaces_nearby_contribution_peers() {
     let findings = analyze_ts(
         &subject,
         REGISTRATION_BODY,
+        None,
         &peers,
         &[HealthPattern::Registration],
     );
@@ -54,7 +55,13 @@ fn registration_silent_when_body_lacks_triggers() {
     let subject = p("src/contrib/feat-a/feat-a.contribution.ts");
     let peers = vec![p("src/contrib/feat-b/feat-b.contribution.ts")];
     let plain = "function helper(): number { return 42; }";
-    let findings = analyze_ts(&subject, plain, &peers, &[HealthPattern::Registration]);
+    let findings = analyze_ts(
+        &subject,
+        plain,
+        None,
+        &peers,
+        &[HealthPattern::Registration],
+    );
     assert!(
         findings.is_empty(),
         "no registration trigger → no finding; got {findings:?}"
@@ -68,6 +75,7 @@ fn registration_silent_when_no_peers_exist() {
     let findings = analyze_ts(
         &subject,
         REGISTRATION_BODY,
+        None,
         &peers,
         &[HealthPattern::Registration],
     );
@@ -89,6 +97,7 @@ fn registration_caps_related_at_three() {
     let findings = analyze_ts(
         &subject,
         REGISTRATION_BODY,
+        None,
         &peers,
         &[HealthPattern::Registration],
     );

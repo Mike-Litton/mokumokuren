@@ -193,11 +193,18 @@ pub fn run<O: Write, E: Write>(
 
     // HEALTH: structural-pattern adapter. Pre-edit treats every
     // Health finding as informational (the agent hasn't acted yet
-    // — surfaces neighbors but doesn't demand edits).
-    let health_patterns = resolve_patterns(&cfg.health.ts.patterns);
+    // — surfaces neighbors but doesn't demand edits). EVASION
+    // requires a working-vs-HEAD diff; pre-edit fires *before* the
+    // agent's edit, so the working tree and HEAD are identical for
+    // this subject — passing `head_body: None` keeps the detector
+    // dormant under pre-edit semantics.
+    let health_patterns: Vec<mmk_health::HealthPattern> = resolve_patterns(&cfg.health.ts.patterns)
+        .into_iter()
+        .filter(|p| !matches!(p, mmk_health::HealthPattern::BroadException))
+        .collect();
     let health_matches: Vec<mmk_health::HealthFinding> = if cfg.health.ts.enabled {
         let peer_paths: Vec<PathBuf> = analysis.loc.keys().cloned().collect();
-        analyze_health_for_subject(&cwd, &path, &peer_paths, &health_patterns)
+        analyze_health_for_subject(&cwd, &path, None, &peer_paths, &health_patterns)
     } else {
         Vec::new()
     };

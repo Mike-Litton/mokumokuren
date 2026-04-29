@@ -2,4 +2,4 @@
 source: mmk-cli/tests/messages.rs
 expression: s
 ---
-a.ts::longFn: 120 LOC, directory median 20 LOC (ratio 6.0); correlates with slower comprehension and issue resolution
+a.ts::longFn: 120 LOC exceeds cap 80, directory median 20 LOC (ratio 6.0); correlates with slower comprehension and issue resolution

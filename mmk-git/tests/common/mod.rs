@@ -9,6 +9,12 @@
 //! drifted across three releases. Re-evaluate if a third crate needs
 //! the same surface.
 
+// `DAY` and `build_canonical_fixture` are used by `tests/analyze.rs`
+// but not by every integration-test binary that pulls in this
+// shared module. cargo's test-binary linking flags any unused-here
+// item as dead code per-binary, so allow it at module scope.
+#![allow(dead_code)]
+
 use std::path::Path;
 use std::process::Command;
 

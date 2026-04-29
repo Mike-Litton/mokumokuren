@@ -190,6 +190,23 @@ pub fn health_test_pair<P: AsRef<Path>>(subject: &Path, related: &[P]) -> String
     )
 }
 
+/// `<subject>: adds N broad exception handler[s] not in HEAD (catch
+/// with empty body, no parameter, or any/unknown/Error type at
+/// non-top-level)`
+///
+/// `delta` is the net working-vs-HEAD addition count. The wording
+/// names the structural failure mode (broad-catch addition) without
+/// editorializing — agents that read the message can decide whether
+/// the addition is a genuine narrowing of scope or a swallow.
+#[must_use]
+pub fn health_broad_exception(subject: &Path, delta: u32) -> String {
+    let plural = if delta == 1 { "" } else { "s" };
+    format!(
+        "{}: adds {delta} broad exception handler{plural} not in HEAD (catch with empty body, no parameter, or any/unknown/Error type at non-top-level)",
+        subject.display(),
+    )
+}
+
 /// Pre-edit fall-through when no other layer fires.
 ///
 /// `commits_touching = 0` is *ambiguous*: it can mean the file is
@@ -459,65 +476,123 @@ pub fn structure_review_conforming(path: &Path, dir: &Path, sibling_count: u32) 
     )
 }
 
-/// `<P>::<fn>: nesting N, directory median M (ratio R); correlates with elevated defect rate (Code Red 2022)`
+/// COMPLEXITY-nesting prose. See [`complexity_review_size`] for the
+/// LOC variant; both share an internal `compose_complexity_prose`
+/// helper.
 ///
-/// Indicator wording: states the empirical implication, doesn't
-/// prescribe a fix. The Tornhill & Borg 2022 study found Alert-class
-/// code (which includes nested-logic smells in its Code Health
-/// composite) shows 15× more defects than Healthy code, with a
-/// medium-large effect size (Cohen's d = 0.73). The 15× headline
-/// applies to the composite, not nesting alone — hence "elevated"
-/// rather than a specific multiplier here.
+/// Two output forms:
+/// - `<P>::<fn>: nesting N exceeds cap C[, directory median M (ratio R)]; correlates with elevated defect rate (Code Red 2022)`
+/// - `<P>::<fn>: nesting N, directory median M (ratio R); correlates with elevated defect rate (Code Red 2022)`
+///
+/// Names the absolute cap when it fired so the agent has a concrete
+/// breach to act on (reduce nesting below `cap`). When the ratio
+/// gate fired instead (absolute didn't), the median + ratio carry
+/// the "outlier vs siblings" story. Either form is anchored on
+/// code facts — never on mmk's missing-data state.
+///
+/// Empirical anchor: Tornhill & Borg 2022 found Alert-class code
+/// (nested-logic smells included in the Code Health composite)
+/// shows 15× more defects than Healthy code, with a medium-large
+/// effect size (Cohen's d = 0.73). The 15× applies to the
+/// composite, not nesting alone — hence "elevated" rather than a
+/// specific multiplier.
 #[must_use]
 pub fn complexity_review_nesting(
     path: &Path,
     fn_name: &str,
     actual: u32,
+    cap: u32,
+    head_actual: Option<u32>,
     median: Option<u32>,
 ) -> String {
-    let median_clause = median.map_or_else(
-        || "directory median unknown".to_owned(),
-        |m| {
-            let ratio = if m == 0 {
-                f64::INFINITY
-            } else {
-                f64::from(actual) / f64::from(m)
-            };
-            format!("directory median {m} (ratio {ratio:.1})")
-        },
-    );
+    let prose = compose_complexity_prose(actual, cap, head_actual, median, "nesting ", "");
     format!(
-        "{}::{fn_name}: nesting {actual}, {median_clause}; correlates with elevated defect rate (Code Red 2022)",
+        "{}::{fn_name}: {prose}; correlates with elevated defect rate (Code Red 2022)",
         path.display(),
     )
 }
 
-/// `<P>::<fn>: N LOC, directory median M (ratio R); correlates with slower comprehension and issue resolution`
+/// COMPLEXITY-size prose; sibling of [`complexity_review_nesting`].
 ///
-/// Indicator wording: ~60% of dev time is comprehension (Xia et al.
-/// 2017, cited in Code Red); long functions are part of the smell
-/// bundle that correlates with the 78–124% longer issue-resolution
-/// time that Tornhill & Borg observed in Warning/Alert code.
+/// Two output forms:
+/// - `<P>::<fn>: N LOC exceeds cap C[, directory median M LOC (ratio R)]; correlates with slower comprehension and issue resolution`
+/// - `<P>::<fn>: N LOC, directory median M LOC (ratio R); correlates with slower comprehension and issue resolution`
+///
+/// Same wording shape as nesting: name the absolute cap when it
+/// fired; otherwise lean on median + ratio. Empirical anchor:
+/// ~60% of dev time is comprehension (Xia et al. 2017, cited in
+/// Code Red); long functions are part of the smell bundle that
+/// correlates with 78–124% longer issue-resolution time in
+/// Warning/Alert code (Tornhill & Borg 2022).
 #[must_use]
 pub fn complexity_review_size(
     path: &Path,
     fn_name: &str,
     actual: u32,
+    cap: u32,
+    head_actual: Option<u32>,
     median: Option<u32>,
 ) -> String {
-    let median_clause = median.map_or_else(
-        || "directory median unknown".to_owned(),
-        |m| {
+    let prose = compose_complexity_prose(actual, cap, head_actual, median, "", " LOC");
+    format!(
+        "{}::{fn_name}: {prose}; correlates with slower comprehension and issue resolution",
+        path.display(),
+    )
+}
+
+/// Shared body for both COMPLEXITY messages. `metric_prefix` is the
+/// kind name placed *before* the value ("nesting " for nesting,
+/// "" for LOC). `unit_suffix` is the unit placed *after* the value
+/// (" LOC" for size, "" for nesting).
+///
+/// Picks the right wording based on which gate fired:
+/// - `actual > cap` → absolute-cap breach is named; median is
+///   appended only when available, as enrichment.
+/// - else → ratio gate fired (median is always Some by construction
+///   in this branch); use the existing "median (ratio)" phrasing.
+fn compose_complexity_prose(
+    actual: u32,
+    cap: u32,
+    head_actual: Option<u32>,
+    median: Option<u32>,
+    metric_prefix: &str,
+    unit_suffix: &str,
+) -> String {
+    // `+N vs HEAD` clause: rendered when we have a HEAD baseline
+    // AND the agent strictly worsened the metric. Tells the agent
+    // *how much* of the breach they introduced — distinguishes "+3"
+    // (small additions to an inherited problem) from "+60"
+    // (substantial worsening). Inserted before the empirical
+    // anchor; both forms (absolute and ratio) get the same delta
+    // clause when applicable.
+    let delta_clause = head_actual
+        .filter(|h| actual > *h)
+        .map(|h| format!(" (+{} vs HEAD)", actual - h))
+        .unwrap_or_default();
+    if actual > cap {
+        let head = format!("{metric_prefix}{actual}{unit_suffix} exceeds cap {cap}{delta_clause}");
+        if let Some(m) = median {
             let ratio = if m == 0 {
                 f64::INFINITY
             } else {
                 f64::from(actual) / f64::from(m)
             };
-            format!("directory median {m} LOC (ratio {ratio:.1})")
-        },
-    );
-    format!(
-        "{}::{fn_name}: {actual} LOC, {median_clause}; correlates with slower comprehension and issue resolution",
-        path.display(),
-    )
+            return format!("{head}, directory median {m}{unit_suffix} (ratio {ratio:.1})");
+        }
+        head
+    } else {
+        // Ratio gate path: median is Some by construction (the
+        // sensor only fires the ratio gate when median is
+        // available). Defensive `unwrap_or` keeps prose intact if
+        // the contract is ever violated.
+        let m = median.unwrap_or(0);
+        let ratio = if m == 0 {
+            f64::INFINITY
+        } else {
+            f64::from(actual) / f64::from(m)
+        };
+        format!(
+            "{metric_prefix}{actual}{unit_suffix}{delta_clause}, directory median {m}{unit_suffix} (ratio {ratio:.1})"
+        )
+    }
 }

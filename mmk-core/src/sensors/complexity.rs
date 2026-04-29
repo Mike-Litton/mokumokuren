@@ -36,6 +36,22 @@ pub struct ComplexityFinding {
     pub kind: ComplexityFindingKind,
     /// Actual measurement on the function.
     pub actual: u32,
+    /// Absolute cap for this kind (`nesting_absolute_max` or
+    /// `loc_absolute_max`). Carried through so the prose can name
+    /// the breach when the absolute gate fires — without it the
+    /// formatter has to fall back to "median unknown" wording that
+    /// confesses missing data instead of describing the code. The
+    /// formatter checks `actual > cap` to decide which gate fired
+    /// (when median is also Some, that disambiguates absolute-vs-ratio).
+    pub cap: u32,
+    /// HEAD-baseline measurement for the same `(path, function)`,
+    /// populated by the CLI's HEAD-baseline filter when a matching
+    /// function existed at HEAD with a known metric. `None` for
+    /// new files / new functions. The formatter renders a
+    /// `+N vs HEAD` clause when this is `Some(h)` and `actual > h`,
+    /// so the agent sees how much they worsened a pre-existing
+    /// over-cap function vs. inheriting an existing problem.
+    pub head_actual: Option<u32>,
     /// Median across same-shape directory siblings, when available.
     /// `None` indicates the relative threshold didn't apply (too
     /// few siblings); the finding fired on the absolute threshold.
@@ -118,6 +134,8 @@ fn check_nesting(
             function: fun.name.clone(),
             kind: ComplexityFindingKind::Nesting,
             actual: fun.max_nesting_depth,
+            cap: cfg.nesting_absolute_max,
+            head_actual: None,
             directory_median: median,
         });
     }
@@ -132,6 +150,8 @@ fn check_nesting(
                 function: fun.name.clone(),
                 kind: ComplexityFindingKind::Nesting,
                 actual: fun.max_nesting_depth,
+                cap: cfg.nesting_absolute_max,
+                head_actual: None,
                 directory_median: Some(m),
             });
         }
@@ -151,6 +171,8 @@ fn check_size(
             function: fun.name.clone(),
             kind: ComplexityFindingKind::Size,
             actual: fun.loc,
+            cap: cfg.loc_absolute_max,
+            head_actual: None,
             directory_median: median,
         });
     }
@@ -165,6 +187,8 @@ fn check_size(
                 function: fun.name.clone(),
                 kind: ComplexityFindingKind::Size,
                 actual: fun.loc,
+                cap: cfg.loc_absolute_max,
+                head_actual: None,
                 directory_median: Some(m),
             });
         }

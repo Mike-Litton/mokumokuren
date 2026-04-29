@@ -512,6 +512,115 @@ fn review_emits_health_warn_when_test_partner_not_touched() {
 
 #[serial(cwd)]
 #[test]
+fn review_health_warn_fires_when_tsx_impl_pairs_with_test_ts_partner() {
+    // Real-world TS pattern: a `.tsx` impl (needs JSX) paired with a
+    // `.test.ts` (doesn't render JSX). Pre-fix v0.7 missed this
+    // because candidate generation required the partner extension to
+    // exactly match the subject's. Reactive-Resume's whole importer
+    // family has this shape.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    write(
+        dir.path(),
+        "src/integrations/import/json-resume.tsx",
+        "export class JSONResumeImporter { parse() {} }\n",
+    );
+    write(
+        dir.path(),
+        "src/integrations/import/json-resume.test.ts",
+        "import { JSONResumeImporter } from './json-resume';\n",
+    );
+    commit_all(dir.path(), "seed", now - 5 * DAY);
+
+    std::fs::write(
+        dir.path().join("mokumokuren.toml"),
+        "[health.ts]\nenabled = true\npatterns = [\"test_pair\"]\n",
+    )
+    .unwrap();
+
+    // Edit the .tsx impl without touching its .test.ts partner.
+    write(
+        dir.path(),
+        "src/integrations/import/json-resume.tsx",
+        "export class JSONResumeImporter { parse(json: string) { return JSON.parse(json); } }\n",
+    );
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let findings = v["findings"].as_array().expect("findings array");
+    let warn_on_test_ts = findings.iter().any(|f| {
+        f["layer"] == "health"
+            && f["severity"] == "warn"
+            && f["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("json-resume.test.ts")
+    });
+    assert!(
+        warn_on_test_ts,
+        "Pattern C must fire on .tsx impl with .test.ts partner not in diff; got: {findings:?}"
+    );
+}
+
+#[serial(cwd)]
+#[test]
+fn review_health_warn_fires_when_test_partner_has_no_recent_churn() {
+    // Pre-fix v0.7: TestPair sourced peer paths from
+    // `analysis.loc.keys()`, which only contains files that churned
+    // in the window. A stable, untouched test partner was invisible —
+    // the agent could edit the impl and never get the "test partner
+    // not in diff" signal because the analyzer pipeline never knew
+    // the test file existed. Fix: augment peer paths with the
+    // working-tree directory listing before running TestPair.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    write(dir.path(), "src/util.ts", "export const helper = 1;\n");
+    // Test partner committed once, far outside the window.
+    write(
+        dir.path(),
+        "src/util.test.ts",
+        "import { helper } from './util';\n",
+    );
+    commit_all(dir.path(), "seed util + test (low churn)", now - 200 * DAY);
+
+    // A second commit a year later that DOESN'T touch util.test.ts —
+    // keeps the test partner stable / out of the analyzer's churn set.
+    write(dir.path(), "src/other.ts", "export const x = 1;\n");
+    commit_all(dir.path(), "unrelated", now - 5 * DAY);
+
+    std::fs::write(
+        dir.path().join("mokumokuren.toml"),
+        "[health.ts]\nenabled = true\npatterns = [\"test_pair\"]\n",
+    )
+    .unwrap();
+
+    // Edit util.ts without touching its (stable) test partner.
+    write(dir.path(), "src/util.ts", "export const helper = 2;\n");
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let findings = v["findings"].as_array().expect("findings array");
+    let warn = findings.iter().any(|f| {
+        f["layer"] == "health"
+            && f["severity"] == "warn"
+            && f["message"].as_str().unwrap_or("").contains("util.test.ts")
+    });
+    assert!(
+        warn,
+        "TestPair must surface stable test partners not in the analyzer's churn set; got: {findings:?}"
+    );
+}
+
+#[serial(cwd)]
+#[test]
 fn review_health_warn_suppressed_when_test_partner_also_touched() {
     // The Warn for Pattern C is the "you forgot the test" signal.
     // If the agent *did* touch the test in this diff, the Warn must
@@ -960,6 +1069,390 @@ fn review_emits_budget_when_diff_exceeds() {
         any_budget,
         "a 6000-line edit must trip the BUDGET finding; got findings: {:?}",
         v["findings"]
+    );
+}
+
+#[serial(cwd)]
+#[test]
+fn complexity_suppressed_for_unchanged_pre_existing_function() {
+    // Real-world failure mode (data point #2): an over-cap function
+    // that already existed at HEAD fires COMPLEXITY on every fresh
+    // agent's first review, even when the agent's diff didn't
+    // change the function's shape. Fix: filter out findings whose
+    // (path, function-name) pair has the same-or-better metric at
+    // HEAD. Only fire when the agent worsens it or introduces a
+    // brand-new over-cap function.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+
+    // Seed a 100-LOC function at HEAD (already over the 80-LOC
+    // default cap — pre-existing complexity the agent inherited).
+    let mut body = String::from("export function bigFn() {\n");
+    for i in 0..98 {
+        use std::fmt::Write as _;
+        writeln!(body, "  const v{i} = {i};").unwrap();
+    }
+    body.push_str("}\n");
+    write(dir.path(), "src/foo.ts", &body);
+    write(
+        dir.path(),
+        "src/sibling.ts",
+        "export function smallSibling() { return 1; }\n",
+    );
+    commit_all(dir.path(), "seed", now - 5 * DAY);
+
+    // Working-tree edit: agent adds an unrelated comment to bigFn,
+    // doesn't change its shape. The function is *still* over the
+    // cap, but the agent didn't make it worse.
+    let mut working = body.clone();
+    working = working.replace(
+        "export function bigFn() {\n",
+        "// docs: business logic\nexport function bigFn() {\n",
+    );
+    write(dir.path(), "src/foo.ts", &working);
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let complexity_on_bigfn: Vec<&Value> = v["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .filter(|f| {
+            f["layer"] == "complexity" && f["message"].as_str().unwrap_or("").contains("bigFn")
+        })
+        .collect();
+    assert!(
+        complexity_on_bigfn.is_empty(),
+        "COMPLEXITY must not fire on a pre-existing over-cap function whose shape \
+         the agent didn't change; got: {complexity_on_bigfn:?}"
+    );
+}
+
+#[serial(cwd)]
+#[test]
+fn complexity_prose_includes_delta_vs_head_when_agent_worsens() {
+    // Data point #3 motivation: agent grew an over-cap function by
+    // a few LOC. The fire is correct, but the prose alone ("366 LOC
+    // exceeds cap 80") doesn't tell the agent how much of that
+    // they actually contributed. With the delta clause they can
+    // judge their contribution at a glance: "+3" reads differently
+    // from "+60".
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    let mut head_body = String::from("export function bigFn() {\n");
+    for i in 0..98 {
+        use std::fmt::Write as _;
+        writeln!(head_body, "  const v{i} = {i};").unwrap();
+    }
+    head_body.push_str("}\n");
+    write(dir.path(), "src/foo.ts", &head_body);
+    write(
+        dir.path(),
+        "src/sibling.ts",
+        "export function smallSibling() { return 1; }\n",
+    );
+    commit_all(dir.path(), "seed", now - 5 * DAY);
+
+    // Working-tree: extend bigFn from 100 LOC to 110 LOC (+10).
+    let mut working = String::from("export function bigFn() {\n");
+    for i in 0..108 {
+        use std::fmt::Write as _;
+        writeln!(working, "  const v{i} = {i};").unwrap();
+    }
+    working.push_str("}\n");
+    write(dir.path(), "src/foo.ts", &working);
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let bigfn_msg: Vec<String> = v["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .filter(|f| {
+            f["layer"] == "complexity" && f["message"].as_str().unwrap_or("").contains("bigFn")
+        })
+        .map(|f| f["message"].as_str().unwrap_or("").to_string())
+        .collect();
+    assert_eq!(
+        bigfn_msg.len(),
+        1,
+        "exactly one COMPLEXITY finding on bigFn; got: {bigfn_msg:?}"
+    );
+    assert!(
+        bigfn_msg[0].contains("vs HEAD"),
+        "delta clause must surface end-to-end; got: {}",
+        bigfn_msg[0]
+    );
+}
+
+#[serial(cwd)]
+#[test]
+fn complexity_fires_when_agent_worsens_pre_existing_function() {
+    // Counterpart to the suppression test: if the agent makes an
+    // already-over-cap function worse, the finding must fire so the
+    // signal isn't lost.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+
+    let mut head_body = String::from("export function bigFn() {\n");
+    for i in 0..98 {
+        use std::fmt::Write as _;
+        writeln!(head_body, "  const v{i} = {i};").unwrap();
+    }
+    head_body.push_str("}\n");
+    write(dir.path(), "src/foo.ts", &head_body);
+    write(
+        dir.path(),
+        "src/sibling.ts",
+        "export function smallSibling() { return 1; }\n",
+    );
+    commit_all(dir.path(), "seed", now - 5 * DAY);
+
+    // Working-tree: extend bigFn with 50 more LOC.
+    let mut working = String::from("export function bigFn() {\n");
+    for i in 0..148 {
+        use std::fmt::Write as _;
+        writeln!(working, "  const v{i} = {i};").unwrap();
+    }
+    working.push_str("}\n");
+    write(dir.path(), "src/foo.ts", &working);
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let complexity_on_bigfn = v["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .any(|f| {
+            f["layer"] == "complexity" && f["message"].as_str().unwrap_or("").contains("bigFn")
+        });
+    assert!(
+        complexity_on_bigfn,
+        "COMPLEXITY must fire when the agent worsens a pre-existing \
+         over-cap function; got: {:?}",
+        v["findings"]
+    );
+}
+
+#[serial(cwd)]
+#[test]
+fn complexity_fires_for_newly_added_over_cap_function() {
+    // A brand-new function that's over the cap is genuinely new
+    // signal — fire.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+
+    write(
+        dir.path(),
+        "src/foo.ts",
+        "export function tiny() { return 1; }\n",
+    );
+    write(
+        dir.path(),
+        "src/sibling.ts",
+        "export function smallSibling() { return 1; }\n",
+    );
+    commit_all(dir.path(), "seed", now - 5 * DAY);
+
+    // Working-tree: add a brand-new over-cap function.
+    let mut working = String::from("export function tiny() { return 1; }\n");
+    working.push_str("export function newBig() {\n");
+    for i in 0..120 {
+        use std::fmt::Write as _;
+        writeln!(working, "  const v{i} = {i};").unwrap();
+    }
+    working.push_str("}\n");
+    write(dir.path(), "src/foo.ts", &working);
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let complexity_on_newbig = v["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .any(|f| {
+            f["layer"] == "complexity" && f["message"].as_str().unwrap_or("").contains("newBig")
+        });
+    assert!(
+        complexity_on_newbig,
+        "COMPLEXITY must fire on a newly-added over-cap function; got: {:?}",
+        v["findings"]
+    );
+}
+
+#[serial(cwd)]
+#[test]
+fn health_test_pair_re_fire_suppressed_when_state_unchanged() {
+    // DP#4 failure mode: hooks fire on every Edit, so an agent
+    // doing 6 Edits sees the same TestPair warning 6 times. The
+    // existing whole-set dedup keys on findings hash, which
+    // changes whenever the diff grows even by one line — never
+    // suppresses. Per-finding MonotonicSignal keyed on the
+    // (pattern, subject) pair fixes it: fire once, then stay
+    // silent until TTL expires or the partner enters the diff.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    write(dir.path(), "src/foo.ts", "export const foo = 1;\n");
+    write(
+        dir.path(),
+        "src/foo.test.ts",
+        "import {foo} from './foo';\n",
+    );
+    commit_all(dir.path(), "seed", now - 5 * DAY);
+
+    std::fs::write(
+        dir.path().join("mokumokuren.toml"),
+        "[health.ts]\nenabled = true\npatterns = [\"test_pair\"]\n",
+    )
+    .unwrap();
+
+    let count_test_pair_warns = |stdout: &[u8]| -> usize {
+        let v: Value = serde_json::from_slice(stdout).expect("valid JSON");
+        v["findings"].as_array().map_or(0, |a| {
+            a.iter()
+                .filter(|f| {
+                    f["layer"] == "health"
+                        && f["severity"] == "warn"
+                        && f["message"]
+                            .as_str()
+                            .is_some_and(|m| m.contains("test partner"))
+                })
+                .count()
+        })
+    };
+
+    let dedup_args = || -> ReviewArgs {
+        let mut a = review_args();
+        a.no_dedup = false;
+        a.format = Format::Json;
+        a
+    };
+
+    // Edit 1: foo.ts gets a 600-line dump (BUDGET ramp at 60% =
+    // Approaching). TestPair fires; whole findings set is
+    // {TestPair, BUDGET ramp 60%}.
+    let mut edit1 = String::new();
+    for i in 0..600 {
+        use std::fmt::Write as _;
+        writeln!(edit1, "export const v{i} = {i};").unwrap();
+    }
+    write(dir.path(), "src/foo.ts", &edit1);
+    let (stdout1, _) = run_in(dir.path(), dedup_args());
+    assert!(
+        count_test_pair_warns(&stdout1) >= 1,
+        "first edit must fire TestPair Warn; got: {}",
+        String::from_utf8_lossy(&stdout1)
+    );
+
+    // Edit 2: extend foo.ts to 750 lines (BUDGET ramp at 75% =
+    // Near tier, severity Warn). The BUDGET finding's text and
+    // severity change → whole findings hash differs from Edit 1
+    // → envelope-level dedup misses. TestPair on foo.ts is still
+    // the same finding (subject under-test, partner untouched).
+    // Per-key MonotonicSignal must suppress the TestPair re-fire.
+    let mut edit2 = String::new();
+    for i in 0..750 {
+        use std::fmt::Write as _;
+        writeln!(edit2, "export const v{i} = {i};").unwrap();
+    }
+    write(dir.path(), "src/foo.ts", &edit2);
+    let (stdout2, _) = run_in(dir.path(), dedup_args());
+    assert_eq!(
+        count_test_pair_warns(&stdout2),
+        0,
+        "TestPair on foo.ts must not re-fire when its state \
+         (subject under-test, partner untouched) is unchanged, \
+         even though the broader findings set changed (BUDGET ramp \
+         tier escalated); got: {}",
+        String::from_utf8_lossy(&stdout2)
+    );
+}
+
+#[serial(cwd)]
+#[test]
+fn budget_re_fire_suppressed_when_counts_unchanged() {
+    // Real-world failure mode (data point #1): drizzle generated
+    // a 3.5k-line snapshot.json once; subsequent Edit/Write hooks
+    // re-fired the BUDGET warning ~12 times with the same numbers.
+    // Fix: per-key MonotonicSignal on BUDGET. Re-fire only when
+    // files_net or lines_net strictly worsens past the prior fire.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    write(dir.path(), "seed.rs", "x\n");
+    commit_all(dir.path(), "seed", now - DAY);
+
+    // Working-tree blast that trips BUDGET (6000 lines > default 1000).
+    let mut huge = String::with_capacity(6000 * 8);
+    for i in 0..6000 {
+        use std::fmt::Write as _;
+        writeln!(huge, "line{i}").unwrap();
+    }
+    write(dir.path(), "seed.rs", &huge);
+
+    let count_budget = |stdout: &[u8]| -> usize {
+        // Bulk-self path emits text by default; this test uses JSON
+        // so we can count BUDGET findings precisely.
+        let v: Value = serde_json::from_slice(stdout).expect("valid JSON");
+        v["findings"]
+            .as_array()
+            .map_or(0, |a| a.iter().filter(|f| f["layer"] == "budget").count())
+    };
+
+    let dedup_args = || -> ReviewArgs {
+        let mut a = review_args();
+        a.no_dedup = false;
+        a.format = Format::Json;
+        a
+    };
+
+    // First fire: BUDGET should appear.
+    let (stdout1, _) = run_in(dir.path(), dedup_args());
+    assert!(
+        count_budget(&stdout1) >= 1,
+        "first fire on a 6000-line edit must emit BUDGET; got: {}",
+        String::from_utf8_lossy(&stdout1)
+    );
+
+    // Second fire against the same working tree: same numbers,
+    // MonotonicSignal must suppress.
+    let (stdout2, _) = run_in(dir.path(), dedup_args());
+    assert_eq!(
+        count_budget(&stdout2),
+        0,
+        "identical BUDGET fire must be suppressed by MonotonicSignal; got: {}",
+        String::from_utf8_lossy(&stdout2)
+    );
+
+    // Push lines strictly higher → must re-fire (axis worsened).
+    let mut huger = huge;
+    for i in 6000..7000 {
+        use std::fmt::Write as _;
+        writeln!(huger, "line{i}").unwrap();
+    }
+    write(dir.path(), "seed.rs", &huger);
+    let (stdout3, _) = run_in(dir.path(), dedup_args());
+    assert!(
+        count_budget(&stdout3) >= 1,
+        "BUDGET must re-fire when lines_net worsens; got: {}",
+        String::from_utf8_lossy(&stdout3)
     );
 }
 

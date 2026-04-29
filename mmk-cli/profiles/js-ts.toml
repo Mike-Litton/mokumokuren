@@ -34,10 +34,15 @@ ignore_partners = [
 [blast_radius]
 threshold = 0.10
 
-# Health adapter: structural-pattern findings for TS files.
+# Health adapter: structural-pattern findings for TS / JS files.
 # Surfaces architectural neighbors the empirical co-change cone
 # can't see (e.g. an `*.contribution.ts` file as a precedent for a
 # sibling `*.contribution.ts` even when they have no commit overlap).
+# `broad_exception` adds the EVASION sensor: detects newly-added
+# non-top-level broad catch handlers (empty body, no parameter, or
+# any/unknown/Error type) — the failure mode named in
+# arXiv:2509.13941 *(An Empirical Study on Failures in Automated
+# Issue Solving)*.
 [health.ts]
 enabled = true
-patterns = ["registration", "service", "test_pair"]
+patterns = ["registration", "service", "test_pair", "broad_exception"]

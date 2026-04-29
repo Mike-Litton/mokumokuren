@@ -61,11 +61,24 @@ emits layer-labeled findings:
   matching change.
 - `COHESION` — your diff spans multiple disjoint co-change
   clusters. Likely a tangled change (two unrelated edits in one
-  diff); consider splitting into separate commits.
+  diff); consider splitting into separate commits. v0.7 returns
+  the full per-cluster decomposition under top-level `cohesion`
+  in JSON output (`cohesion.tangles[].clusters[]`) so a harness
+  can render the proposed split without re-parsing the message.
 - `STRUCTURE` — the file's directory has a convention (siblings
   share imports / export shape). Your file diverges or matches.
 - `COMPLEXITY` — function shape (nesting / LOC) is far above the
   directory norm or the absolute threshold.
+- `HEALTH` — structural-pattern signals: missing test partner,
+  missing registration / service neighbor, or (v0.7,
+  `pattern = "broad_exception"`) a newly-added non-top-level
+  broad TS/JS catch handler. The EVASION case fires when the
+  working tree adds a `try { ... } catch {}`, `catch (e) {}`, or
+  a typed `any` / `unknown` / `Error` catch inside a
+  function/method/arrow that wasn't there at HEAD — the
+  *"evasive repairs with try-except blocks"* failure mode named
+  in arXiv:2509.13941. Findings appear in
+  `health.matches[].pattern == "broad_exception"`.
 - `BUDGET` — diff exceeds `bulk.max_files` / `bulk.max_lines` in
   `mokumokuren.toml`. Likely a sweep; consider splitting.
 

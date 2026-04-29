@@ -371,10 +371,10 @@ pub struct HealthCfg {
 #[derive(Debug, Clone, Serialize)]
 pub struct HealthTsCfg {
     pub enabled: bool,
-    /// Pattern tokens (`registration`, `service`, `test_pair`).
-    /// Keep as plain strings here; mmk-health resolves them to
-    /// `HealthPattern` enums at the boundary so this crate doesn't
-    /// pull in tree-sitter.
+    /// Pattern tokens (`registration`, `service`, `test_pair`,
+    /// `broad_exception`). Keep as plain strings here; mmk-health
+    /// resolves them to `HealthPattern` enums at the boundary so this
+    /// crate doesn't pull in tree-sitter.
     pub patterns: Vec<String>,
 }
 
@@ -382,7 +382,12 @@ impl Default for HealthTsCfg {
     fn default() -> Self {
         Self {
             enabled: false,
-            patterns: vec!["registration".into(), "service".into(), "test_pair".into()],
+            patterns: vec![
+                "registration".into(),
+                "service".into(),
+                "test_pair".into(),
+                "broad_exception".into(),
+            ],
         }
     }
 }

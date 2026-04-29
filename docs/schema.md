@@ -6,7 +6,7 @@ JSON object whose shape is documented here. The
 against; `crate_version` is the Cargo version of the producing build
 and is diagnostic only.
 
-Subcommands at v0.6.0:
+Subcommands at v0.7.0:
 
 - `mmk analyze` — ranked hotspots over a window.
 - `mmk session-summary` (alias: `mmk session`) — window + session
@@ -16,8 +16,10 @@ Subcommands at v0.6.0:
   isn't buried under generated-artefact rankings.
 - `mmk review` — diff against history (working tree by default;
   `--staged`, `--range A..B`, `--commit <SHA>`). Surfaces HOTSPOT,
-  COUPLING, COHESION (v0.6), STRUCTURE, COMPLEXITY, HEALTH, and
-  BUDGET findings.
+  COUPLING, COHESION (Warn since v0.7), STRUCTURE, COMPLEXITY,
+  HEALTH (incl. EVASION / `broad_exception` since v0.7), and BUDGET
+  findings. v0.7 adds an optional `cohesion` top-level block with
+  the per-cluster path decomposition.
 - `mmk pre-edit <PATH>` — historical context for a path before edit.
   Absolute path inputs are normalized against the discovered repo
   root. The path is optional when invoked via a Claude Code hook
@@ -35,8 +37,8 @@ envelope on stdin, it switches to a hook-shape output envelope
 
 ## Stability contract
 
-`schema_version` tracks the `mmk` minor release: every `0.6.x` build
-emits `0.6.0`.
+`schema_version` tracks the `mmk` minor release: every `0.7.x` build
+emits `0.7.0`.
 
 | Change kind                                             | Schema bump? |
 | ------------------------------------------------------- | :----------: |
@@ -54,7 +56,7 @@ and ignore them rather than fail.
 
 | Field            | Type    | Notes                                                                                |
 | ---------------- | ------- | ------------------------------------------------------------------------------------ |
-| `schema_version` | string  | Pinned to the `mmk` minor (`"0.6.0"`).                                               |
+| `schema_version` | string  | Pinned to the `mmk` minor (`"0.7.0"`).                                               |
 | `crate_version`  | string  | `CARGO_PKG_VERSION` of the producing build. Diagnostic only — do not pin against.    |
 | `repo`           | object  | HEAD metadata + repo-level warnings.                                                 |
 | `config`         | object  | Effective `Config` after merging file + CLI sources.                                 |
@@ -158,7 +160,7 @@ it to understand exactly what produced the result.
 | `coupling.min_sample_size`     | uint     | Min `commits_touching(subject)` before COUPLING fires (default `3` since v0.6; was `5` in v0.4 and `1` in v0.5). |
 | `coupling.ignore_partners`     | string[] | Globs that never fire as the missed partner in COUPLING.     |
 | `health.ts.enabled`            | bool     | (v0.4) Whether the TypeScript Health adapter runs.           |
-| `health.ts.patterns`           | string[] | (v0.4) Pattern tokens (`registration`, `service`, `test_pair`). |
+| `health.ts.patterns`           | string[] | Pattern tokens. v0.4 shipped `registration` / `service` / `test_pair`; v0.7 adds `broad_exception` (EVASION). |
 | `sensor.structure.enabled`     | bool     | (v0.5) Whether the STRUCTURE convention sensor runs.         |
 | `sensor.structure.import_majority` | float | (v0.5) Sibling fraction needed for an import to count as the directory's convention (default 0.85). |
 | `sensor.complexity.enabled`    | bool     | (v0.5) Whether the COMPLEXITY per-function sensor runs.      |
@@ -188,7 +190,7 @@ before any commit lands.
 
 | Field            | Type    | Notes                                                                                  |
 | ---------------- | ------- | -------------------------------------------------------------------------------------- |
-| `schema_version` | string  | `"0.6.0"`.                                                                             |
+| `schema_version` | string  | `"0.7.0"`.                                                                             |
 | `crate_version`  | string  |                                                                                        |
 | `repo`           | object  | Same as analyze. Present only when there are changes (clean tree skips analyze).       |
 | `config`         | object  | Same as analyze. Present only when there are changes.                                  |
@@ -222,7 +224,7 @@ and *why* (since v0.6) so silence on HOTSPOT/COUPLING reads as
 
 | Field            | Type    | Notes                                                            |
 | ---------------- | ------- | ---------------------------------------------------------------- |
-| `schema_version` | string  | `"0.6.0"`.                                                       |
+| `schema_version` | string  | `"0.7.0"`.                                                       |
 | `crate_version`  | string  |                                                                  |
 | `review`         | object  | `mode` + per-file diff numstat.                                  |
 | `findings`       | array   | One BUDGET finding plus any STRUCTURE / COMPLEXITY findings on the changed paths; HOTSPOT/COUPLING skipped. |
@@ -239,7 +241,7 @@ queried path.
 
 | Field            | Type    | Notes                                                                                  |
 | ---------------- | ------- | -------------------------------------------------------------------------------------- |
-| `schema_version` | string  | `"0.6.0"`.                                                                             |
+| `schema_version` | string  | `"0.7.0"`.                                                                             |
 | `crate_version`  | string  |                                                                                        |
 | `repo`           | object  |                                                                                        |
 | `config`         | object  |                                                                                        |
@@ -273,7 +275,7 @@ K snapshot labels + the climb-majority findings.
 
 | Field                       | Type     | Notes                                                                          |
 | --------------------------- | -------- | ------------------------------------------------------------------------------ |
-| `schema_version`            | string   | `"0.6.0"`.                                                                     |
+| `schema_version`            | string   | `"0.7.0"`.                                                                     |
 | `crate_version`             | string   |                                                                                |
 | `drift.base`                | string?  | Echo of `--base`.                                                              |
 | `drift.sessions`            | uint     | Echo of `--sessions K`.                                                        |
@@ -349,6 +351,15 @@ The argv-fallback path is preserved: invoking `mmk review` /
 
 ## Schema-version history
 
+- **`0.7.0`** — `findings[].layer = "cohesion"` severity is **Warn**
+  (was Info; consumers running `--gate warn` now exit 2 on tangled
+  diffs); optional top-level `cohesion` block with
+  `tangles[].clusters[]` per-cluster decomposition;
+  `findings[].layer = "health"` `pattern = "broad_exception"`
+  (EVASION) added; `health.matches[].pattern = "test_pair"` extends
+  to `.js` / `.jsx` (cross-extension within TS / JS family); TSX
+  grammar dispatch fix (no shape change to schema). All changes
+  additive — `0.6` consumers parse `0.7` without modification.
 - **`0.6.0`** — Layer `"cohesion"` populated; `sensor.cohesion`
   config block; `review.diff.budget` sub-block (gross / net BUDGET
   accounting); `bulk.max_files` / `bulk.max_lines` honoured from

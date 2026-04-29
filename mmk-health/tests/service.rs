@@ -56,6 +56,7 @@ fn service_finds_consumers_importing_the_interface() {
     let findings = analyze_ts(
         &subject_abs,
         SERVICE_DECL_BODY,
+        None,
         &peers,
         &[HealthPattern::Service],
     );
@@ -85,6 +86,7 @@ fn service_silent_without_register_call() {
     let findings = analyze_ts(
         &subject_abs,
         body,
+        None,
         std::slice::from_ref(&subject_abs),
         &[HealthPattern::Service],
     );
@@ -106,6 +108,7 @@ fn service_silent_without_iprefixed_interface() {
     let findings = analyze_ts(
         &subject_abs,
         body,
+        None,
         std::slice::from_ref(&subject_abs),
         &[HealthPattern::Service],
     );

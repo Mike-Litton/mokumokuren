@@ -6,6 +6,119 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-04-28
+
+Three composable changes that together make agent failure modes
+detectable at commit time on the sub-second hot path. Each change
+carries peer-reviewed empirical grounding.
+
+### Added
+
+- **EVASION sensor (`broad_exception` Health pattern).** Detects
+  newly-added non-top-level broad TS/JS catch handlers (empty body,
+  no parameter, or `any` / `unknown` / `Error` type) by comparing the
+  working tree against HEAD. Severity Warn in review; skipped under
+  pre-edit (no diff yet). Targets the *"evasive repairs with
+  try-except blocks"* failure mode named in arXiv:2509.13941
+  *(An Empirical Study on Failures in Automated Issue Solving)* and
+  corroborated by FSE 2025 *Suppressed Static Analysis Warnings*
+  (broad-except = 18.4 % of Python suppressions across 46 projects).
+  Default-on under the `js-ts` profile.
+- **Structured `cohesion` block on `mmk review` JSON.** Carries the
+  full per-cluster path decomposition (`tangles[].clusters[]`) so
+  harnesses can render the split as a commit-split proposal without
+  re-parsing finding messages. Absent when no tangle qualifies —
+  shape stays additive.
+- **HEAD-blob fetch helper (`mmk_git::read_head_blob` /
+  `read_head_bodies`).** Reads a path's blob bytes at HEAD without
+  callers needing to depend on `gix` directly. Foundation for
+  EVASION's working-vs-HEAD comparison.
+
+### Changed
+
+- **COHESION severity Info → Warn.** Empirical grounding: MSR 2026
+  *"LGTM! Characteristics of Auto-Merged LLM-based Agentic PRs"*
+  (Canelas et al.) — across the AIDev corpus, auto-merged PRs are
+  smaller and more focused than non-auto-merged ones. Consumers
+  running `--gate warn` now exit 2 on tangled diffs.
+- **COHESION fires gain MonotonicSignal dedup.** Key derives from a
+  canonical signature over the qualifying clusters; axes are
+  `[cluster_count, total_files]`. A re-save of the same tangled diff
+  no longer re-fires; adding an unrelated file to one cluster does.
+- **TestPair extended to `.js` / `.jsx`.** Implementation-test
+  pairing fires on JS sources, not just TS. Cross-language pairing
+  (`.js → .test.ts`) is now rejected as a non-match.
+- **TSX grammar dispatch fixed.** Pre-v0.7 every `.tsx` file was
+  parsed by the non-TSX TypeScript grammar — JSX-bearing files
+  silently degraded. v0.7 selects `LANGUAGE_TSX` for `.tsx` and
+  `.jsx`, which removes the latent bug across all Health detectors.
+- **`mmk-health` adapter coverage extends to `.js` / `.jsx`.**
+  Structural detectors (Service, TestPair, EVASION) now run on JS,
+  matching the JS/TS-first deployment target.
+
+### Schema
+
+- `SCHEMA_VERSION` bumps to `0.7.0`. All changes are additive — a
+  v0.6 reader parses v0.7 output without modification.
+
+### Fixed (in-flight, before tag)
+
+- **COMPLEXITY prose names the absolute cap that fired** instead of
+  emitting "directory median unknown" when no siblings exist. The
+  `Option<u32>` median was leaking mmk's data state into the agent
+  output. Now: `<P>::<fn>: 320 LOC exceeds cap 80; correlates with
+  slower comprehension and issue resolution`. When median is also
+  available, it appears as enrichment after the cap clause.
+  `ComplexityFinding` now carries `cap: u32` so the formatter can
+  name the breach.
+- **COMPLEXITY suppresses unchanged pre-existing functions.** Filter
+  the per-function findings against a HEAD-baseline lookup: keep a
+  finding only when the function is newly added, the file is new,
+  or the metric strictly worsened vs. HEAD. A pre-existing over-cap
+  function that the agent didn't reshape no longer fires noise on
+  every fresh agent's first review. Known weakness: a function
+  rename leaves the working-tree function with no HEAD match and
+  fires as if newly added — a small false-fire cost trade-off
+  preferred over structural cross-rename matching.
+- **TestPair pairs across the TS family (`.ts` ↔ `.tsx`) and the JS
+  family (`.js` ↔ `.jsx`)**, not strict same-extension. Cross-family
+  (TS ↔ JS) still rejected. The earlier same-extension rule made
+  `.tsx` impl + `.test.ts` partner invisible — a common React
+  pattern where the impl needs JSX support and the test doesn't
+  render. Now visible.
+- **TestPair sees stable test partners** by augmenting `peer_paths`
+  with the subject's working-tree directory listing (and any
+  `test/` subdirectory). Pre-fix, `peer_paths` came from
+  `analysis.loc.keys()`, which only contains files with recent
+  churn — an untouched test partner was invisible to the detector
+  even when both files existed in HEAD's tree.
+- **BUDGET fires get per-finding MonotonicSignal dedup** keyed on
+  `budget::files` / `budget::lines` (over-cap path), `budget::ramp::*`
+  (under-cap ramp), with axes `[actual]`. Fixes the failure mode
+  where a generated artifact (e.g. drizzle's ~3.5k-line
+  `snapshot.json`) caused the same BUDGET warning to re-fire on
+  every subsequent Edit/Write hook. Now: re-fires only when the
+  offending count strictly worsens past the prior emission. The
+  bulk-self path goes through the same gate as the under-cap path.
+- **COMPLEXITY prose names the `+N vs HEAD` delta** when the agent
+  worsens a pre-existing over-cap function. Reads
+  `<P>::<fn>: 366 LOC exceeds cap 80 (+3 vs HEAD); ...` — agents
+  can judge their contribution at a glance (small additions to an
+  inherited problem vs. substantial worsening). `head_actual: Option<u32>`
+  on `ComplexityFinding` carries the baseline; the formatter renders
+  the clause when present. Omitted on new files / new functions so
+  no false delta is fabricated.
+- **HEALTH findings get per-key MonotonicSignal dedup** keyed on
+  `health::<pattern>::review::<subject>` with constant axes `[1]`.
+  Fixes the failure mode where an agent doing N Edits in a row sees
+  the same TestPair / EVASION warning N times: envelope-level dedup
+  keys on the whole findings hash, which changes whenever the
+  broader diff grows (BUDGET ramp tier moves, COMPLEXITY actuals
+  shift, etc.); the per-key gate suppresses identical re-fires
+  until TTL expires or the partner is touched. Same dedup
+  discipline already applied to BUDGET / COUPLING / COHESION /
+  COMPLEXITY / STRUCTURE.
+
 ## [0.6.0] - 2026-04-28
 
 Calibration plus the COHESION sensor and a documented Claude Code

@@ -281,10 +281,15 @@ fn structure_review_conforming_pins_wording() {
 
 #[test]
 fn complexity_review_nesting_pins_wording() {
+    // Ratio gate path: actual=8, cap=6, median=2 → ratio fired
+    // (the 8 > 6 absolute breach is also true, so the new wording
+    // anchors on the cap; median enrichment follows).
     let s = msg::complexity_review_nesting(
         Path::new("src/dialogs/resume/sections/job-tracker.tsx"),
         "parseApplication",
         8,
+        6,
+        None,
         Some(2),
     );
     insta::assert_snapshot!(s);
@@ -292,8 +297,100 @@ fn complexity_review_nesting_pins_wording() {
 
 #[test]
 fn complexity_review_size_pins_wording() {
-    let s = msg::complexity_review_size(Path::new("a.ts"), "longFn", 120, Some(20));
+    // Same shape as nesting: actual=120 LOC, cap=80 (default),
+    // median=20. Absolute fires; median+ratio enrich.
+    let s = msg::complexity_review_size(Path::new("a.ts"), "longFn", 120, 80, None, Some(20));
     insta::assert_snapshot!(s);
+}
+
+#[test]
+fn complexity_review_size_singleton_directory_names_cap_not_unknown_median() {
+    // Regression oracle for the v0.7 fix: when median is None
+    // (no siblings to compute a directory baseline), the prose must
+    // name the absolute cap that fired — not confess "directory
+    // median unknown" back to the reader. The reader needs an
+    // actionable instruction (reduce below 80 LOC), not
+    // meta-information about mmk's missing data.
+    let s = msg::complexity_review_size(
+        Path::new("src/routes/widget/-components/dialog.tsx"),
+        "WidgetDialog",
+        320,
+        80,
+        None,
+        None,
+    );
+    assert!(
+        !s.contains("median unknown"),
+        "must not leak the median-unknown state into prose; got: {s}"
+    );
+    assert!(
+        s.contains("exceeds cap 80"),
+        "must name the absolute cap that fired; got: {s}"
+    );
+    insta::assert_snapshot!(s);
+}
+
+#[test]
+fn complexity_review_nesting_singleton_directory_names_cap() {
+    let s =
+        msg::complexity_review_nesting(Path::new("src/foo.ts"), "deeplyNested", 9, 6, None, None);
+    assert!(
+        !s.contains("median unknown"),
+        "must not leak the median-unknown state into prose; got: {s}"
+    );
+    assert!(
+        s.contains("exceeds cap 6"),
+        "must name the absolute cap that fired; got: {s}"
+    );
+    insta::assert_snapshot!(s);
+}
+
+#[test]
+fn complexity_review_size_renders_delta_when_head_baseline_known() {
+    // Real-world failure mode (data point #3): an agent grew
+    // `parse` from 363 → 366 LOC. Without the delta clause the
+    // prose reads "366 LOC exceeds cap 80" — agent's perception
+    // is "this problem mostly existed before me." With the delta
+    // it reads "366 LOC exceeds cap 80 (+3 vs HEAD)" — the agent
+    // can judge their contribution at a glance.
+    let s = msg::complexity_review_size(
+        Path::new("src/integrations/import/reactive-resume-v4-json.tsx"),
+        "parse",
+        366,
+        80,
+        Some(363),
+        None,
+    );
+    assert!(
+        s.contains("(+3 vs HEAD)"),
+        "must render the +N vs HEAD clause when head_actual is known and worsened; got: {s}"
+    );
+    assert!(
+        s.contains("exceeds cap 80"),
+        "must keep the cap-naming anchor alongside the delta; got: {s}"
+    );
+    insta::assert_snapshot!(s);
+}
+
+#[test]
+fn complexity_review_size_omits_delta_when_head_baseline_absent() {
+    // New file or new function: head_actual is None, so the prose
+    // shouldn't fabricate a delta. Reader gets the same
+    // cap-anchored message the singleton-directory case produces.
+    let s = msg::complexity_review_size(Path::new("src/new.ts"), "newFn", 200, 80, None, None);
+    assert!(
+        !s.contains("vs HEAD"),
+        "must not render `vs HEAD` when no baseline; got: {s}"
+    );
+}
+
+#[test]
+fn complexity_review_nesting_renders_delta() {
+    let s = msg::complexity_review_nesting(Path::new("src/foo.ts"), "deepFn", 9, 6, Some(7), None);
+    assert!(
+        s.contains("(+2 vs HEAD)"),
+        "nesting variant must also render the delta; got: {s}"
+    );
 }
 
 // ---- session_budget / session_overrun -------------------------------------

@@ -13,7 +13,7 @@
 //! convention; an import-statement parse would tighten precision
 //! once eval data motivates the upgrade.
 
-use crate::ts::parse;
+use crate::ts::parse_for;
 use crate::{HealthFinding, HealthPattern};
 use std::path::{Path, PathBuf};
 use tree_sitter::Node;
@@ -33,7 +33,7 @@ const MAX_PEERS_SCANNED: usize = 500;
 
 #[must_use]
 pub fn detect(subject: &Path, body: &str, peer_paths: &[PathBuf]) -> Vec<HealthFinding> {
-    let Some(tree) = parse(body) else {
+    let Some(tree) = parse_for(subject, body) else {
         return Vec::new();
     };
     let root = tree.root_node();
@@ -91,7 +91,7 @@ pub fn detect(subject: &Path, body: &str, peer_paths: &[PathBuf]) -> Vec<HealthF
 fn is_typescript_path(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| e == "ts" || e == "tsx")
+        .is_some_and(|e| matches!(e, "ts" | "tsx" | "js" | "jsx"))
 }
 
 /// Walk the AST collecting `interface IFoo` names. We recurse
@@ -128,7 +128,7 @@ mod tests {
     #[test]
     fn extracts_iprefixed_interface_name() {
         let body = "interface IFoo { bar(): void; }\nregisterSingleton(IFoo, FooImpl);";
-        let tree = parse(body).expect("parse");
+        let tree = parse_for(Path::new("a.ts"), body).expect("parse");
         let names = collect_interface_names(tree.root_node(), body);
         assert_eq!(names, vec!["IFoo".to_string()]);
     }
@@ -138,7 +138,7 @@ mod tests {
         // `Foo` (no leading I) doesn't match the I-prefixed
         // service-interface convention; the detector ignores it.
         let body = "interface Foo { bar(): void; }";
-        let tree = parse(body).expect("parse");
+        let tree = parse_for(Path::new("a.ts"), body).expect("parse");
         let names = collect_interface_names(tree.root_node(), body);
         assert!(names.is_empty(), "got {names:?}");
     }

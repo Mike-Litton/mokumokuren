@@ -68,16 +68,17 @@ COUPLING:
 
 The full menu of sensors `mmk review` and `mmk pre-edit` emit:
 
-| Sensor       | Question                                                              | Severity         |
-| ------------ | --------------------------------------------------------------------- | ---------------- |
-| `HOTSPOT`    | "Is this file near the top of the rank?"                              | Warn             |
-| `COUPLING`   | "Is a historical co-change partner missing from this diff?"           | Warn / Info      |
-| `COHESION`   | "Does this diff decompose into multiple disjoint clusters?" (v0.6)    | Info             |
-| `STRUCTURE`  | "Does this file diverge from its directory's import / export shape?"  | Warn / Info / Ok |
-| `COMPLEXITY` | "Is this function structurally over the cap (nesting / LOC)?"         | Warn             |
-| `HEALTH`     | "Is the test pair / registration peer / service consumer absent?"     | Warn / Info      |
-| `BUDGET`     | "Is the diff over the size cap, or ramping toward it?"                | Warn / Info      |
-| `DRIFT`      | "Is this file climbing the rank across recent sessions?"              | Warn             |
+| Sensor       | Question                                                                                          | Severity         |
+| ------------ | ------------------------------------------------------------------------------------------------- | ---------------- |
+| `HOTSPOT`    | "Is this file near the top of the rank?"                                                          | Warn             |
+| `COUPLING`   | "Is a historical co-change partner missing from this diff?"                                       | Warn / Info      |
+| `COHESION`   | "Does this diff decompose into multiple disjoint clusters?"                                       | Warn (v0.7)      |
+| `STRUCTURE`  | "Does this file diverge from its directory's import / export shape?"                              | Warn / Info / Ok |
+| `COMPLEXITY` | "Is this function structurally over the cap (nesting / LOC)?"                                    | Warn             |
+| `HEALTH`     | "Is the test pair / registration peer / service consumer absent? Did a broad catch get added?"   | Warn / Info      |
+| `EVASION`    | "Did this diff add a broad TS/JS catch handler not in HEAD?" (v0.7, under `HEALTH.broad_exception`) | Warn             |
+| `BUDGET`     | "Is the diff over the size cap, or ramping toward it?"                                            | Warn / Info      |
+| `DRIFT`      | "Is this file climbing the rank across recent sessions?"                                          | Warn             |
 
 JSON output (`--format json`) is the same data with a stable
 schema for harness consumers. See

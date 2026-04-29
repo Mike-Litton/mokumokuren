@@ -1,0 +1,5 @@
+---
+source: mmk-cli/tests/messages.rs
+expression: s
+---
+src/routes/widget/-components/dialog.tsx::WidgetDialog: 320 LOC exceeds cap 80; correlates with slower comprehension and issue resolution

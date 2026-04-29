@@ -327,16 +327,22 @@ pub fn resolve_patterns(tokens: &[String]) -> Vec<HealthPattern> {
 ///
 /// - Pre-edit: every Health finding is informational (the agent
 ///   hasn't acted yet, the message is "consider this neighbor").
-/// - Review: Pattern C is **Warn** (the implementation was edited
-///   but its test partner is still untouched in the diff). Patterns
-///   A and B remain Info — they surface architectural neighbors
-///   without demanding edits.
+/// - Review: Pattern C and BroadException are **Warn** (the
+///   implementation moved without its test partner; or a broad
+///   handler was added). Patterns A and B remain Info — they
+///   surface architectural neighbors without demanding edits.
 #[must_use]
 pub fn health_to_finding(h: &HealthFinding, severity: Severity) -> Finding {
     let message = match h.pattern {
         HealthPattern::Registration => messages::health_registration(&h.subject, &h.related),
         HealthPattern::Service => messages::health_service(&h.subject, &h.related),
         HealthPattern::TestPair => messages::health_test_pair(&h.subject, &h.related),
+        // BroadException's `related` field is empty by convention —
+        // the finding is about the subject only. The detector tracks
+        // the *delta*; we surface "1+" rather than re-reading the
+        // detector's internal counter, since v0.7's HealthFinding
+        // shape carries no numeric payload.
+        HealthPattern::BroadException => messages::health_broad_exception(&h.subject, 1),
     };
     Finding::new(Layer::Health, severity, message)
 }
@@ -344,12 +350,12 @@ pub fn health_to_finding(h: &HealthFinding, severity: Severity) -> Finding {
 /// Pick the severity for a Health finding given the call site.
 ///
 /// Captured here so the rule lives in one place — drift would
-/// otherwise mean Pattern C silently downgrades across
-/// review/pre-edit.
+/// otherwise mean Pattern C / BroadException silently downgrade
+/// across review/pre-edit.
 #[must_use]
 pub const fn health_severity_for_review(p: HealthPattern) -> Severity {
     match p {
-        HealthPattern::TestPair => Severity::Warn,
+        HealthPattern::TestPair | HealthPattern::BroadException => Severity::Warn,
         HealthPattern::Registration | HealthPattern::Service => Severity::Info,
     }
 }
@@ -361,26 +367,89 @@ pub const fn health_severity_for_review(p: HealthPattern) -> Severity {
 /// findings — Health is opportunistic, not load-bearing. `peer_paths`
 /// should be repo-relative paths matching `analyze.loc.keys()`;
 /// Pattern B's `read_to_string` resolves them against the process
-/// CWD, which the CLI sets to the repo root.
+/// CWD, which the CLI sets to the repo root. `head_body` carries the
+/// file's content at HEAD when available — EVASION uses it to
+/// compute the working-vs-HEAD broad-handler delta. `None` is
+/// correct for new files (no HEAD blob) and for pre-edit (no diff
+/// to score against yet).
+///
+/// `peer_paths` is supplemented here with the subject's working-tree
+/// directory listing (and any `test/` subdirectory) before being
+/// passed down. Reason: `analyze.loc.keys()` only contains paths
+/// with recent churn — TestPair otherwise misses stable, untouched
+/// test partners. The supplement is opportunistic; a missing
+/// directory just yields no extra entries.
 #[must_use]
 pub fn analyze_health_for_subject(
     repo_root: &Path,
     subject: &Path,
+    head_body: Option<&str>,
     peer_paths: &[PathBuf],
     enabled: &[HealthPattern],
 ) -> Vec<HealthFinding> {
-    if !is_typescript_path(subject) {
+    if !is_health_eligible_path(subject) {
         return Vec::new();
     }
     let abs_subject = repo_root.join(subject);
     let body = std::fs::read_to_string(&abs_subject).unwrap_or_default();
-    mmk_health::ts::analyze_ts(subject, &body, peer_paths, enabled)
+    let augmented = augment_peer_paths_with_working_tree(repo_root, subject, peer_paths);
+    mmk_health::ts::analyze_ts(subject, &body, head_body, &augmented, enabled)
 }
 
-fn is_typescript_path(path: &Path) -> bool {
+/// Add the subject's working-tree directory siblings (plus any
+/// `test/` sibling subdirectory) to `base`. Deduplicates against
+/// the existing entries; preserves their order. Pure: returns a new
+/// owned vec.
+fn augment_peer_paths_with_working_tree(
+    repo_root: &Path,
+    subject: &Path,
+    base: &[PathBuf],
+) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = base.to_vec();
+    let mut seen: ahash::AHashSet<PathBuf> = base.iter().cloned().collect();
+    let push = |p: PathBuf, out: &mut Vec<PathBuf>, seen: &mut ahash::AHashSet<PathBuf>| {
+        if seen.insert(p.clone()) {
+            out.push(p);
+        }
+    };
+    // Same-directory siblings.
+    for s in list_directory_siblings(repo_root, subject) {
+        push(s, &mut out, &mut seen);
+    }
+    // `test/` subdirectory (TestPair's third candidate shape).
+    let test_subdir = subject
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .join("test");
+    let abs_test = repo_root.join(&test_subdir);
+    if let Ok(entries) = std::fs::read_dir(&abs_test) {
+        for entry in entries.flatten() {
+            let Ok(ft) = entry.file_type() else { continue };
+            if !ft.is_file() {
+                continue;
+            }
+            let name = entry.file_name();
+            let Some(name_str) = name.to_str() else {
+                continue;
+            };
+            push(test_subdir.join(name_str), &mut out, &mut seen);
+        }
+    }
+    out
+}
+
+/// Extensions the Health TypeScript adapter knows how to parse.
+///
+/// Includes `.ts`, `.tsx`, `.js`, and `.jsx` — the TSX grammar
+/// (selected per-file in `mmk_health::ts::parse_for`) is a superset
+/// that handles JSX-bearing files in either language. Pub-crate so
+/// `commands::review` can use the same predicate when filtering
+/// changed files for HEAD-blob fetching, instead of duplicating the
+/// match arms.
+pub(crate) fn is_health_eligible_path(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| e == "ts" || e == "tsx")
+        .is_some_and(|e| matches!(e, "ts" | "tsx" | "js" | "jsx"))
 }
 
 // ---- STRUCTURE / COMPLEXITY plumbing ---------------------------
@@ -538,12 +607,22 @@ pub fn structure_to_finding_with_signal(
 pub fn complexity_to_finding(f: &mmk_core::sensors::ComplexityFinding) -> Finding {
     use mmk_core::sensors::ComplexityFindingKind as K;
     let message = match f.kind {
-        K::Nesting => {
-            messages::complexity_review_nesting(&f.path, &f.function, f.actual, f.directory_median)
-        }
-        K::Size => {
-            messages::complexity_review_size(&f.path, &f.function, f.actual, f.directory_median)
-        }
+        K::Nesting => messages::complexity_review_nesting(
+            &f.path,
+            &f.function,
+            f.actual,
+            f.cap,
+            f.head_actual,
+            f.directory_median,
+        ),
+        K::Size => messages::complexity_review_size(
+            &f.path,
+            &f.function,
+            f.actual,
+            f.cap,
+            f.head_actual,
+            f.directory_median,
+        ),
     };
     Finding::new(Layer::Complexity, Severity::Warn, message)
 }
@@ -721,9 +800,13 @@ mod tests {
     }
 
     #[test]
-    fn health_severity_for_review_only_warns_on_test_pair() {
+    fn health_severity_for_review_warns_on_test_pair_and_broad_exception() {
         assert_eq!(
             health_severity_for_review(HealthPattern::TestPair),
+            Severity::Warn
+        );
+        assert_eq!(
+            health_severity_for_review(HealthPattern::BroadException),
             Severity::Warn
         );
         assert_eq!(

@@ -65,22 +65,42 @@ shape and connectivity:
   ratio fires. v0.6 adds per-key monotonic-worsening dedup so the
   same finding doesn't re-fire across edits unless an axis strictly
   worsened. Same language-coverage rules as STRUCTURE.
-- **COHESION** (v0.6) — tangled-diff fingerprint. Detects working-tree
-  diffs that decompose into multiple disjoint connected components
-  on the historical co-change graph, the structural pattern Herzig
-  & Zeller (2013) identified as elevating revert / review cost.
-  Edge metric is the max-symmetrized Wilson 95 % lower bound on
-  the directional conditional co-change probability — same
-  statistical primitive as COUPLING, generalized to a graph
-  connectivity question. Severity is Info: descriptive, not
-  gating. The sensor is a structural-fingerprint proxy for
-  Herzig & Zeller's AST-level untangling method, not a
-  reimplementation of it.
+- **COHESION** (v0.6, **promoted to Warn in v0.7**) — tangled-diff
+  fingerprint. Detects working-tree diffs that decompose into
+  multiple disjoint connected components on the historical co-change
+  graph, the structural pattern Herzig & Zeller (2013) identified as
+  elevating revert / review cost. Edge metric is the max-symmetrized
+  Wilson 95 % lower bound on the directional conditional co-change
+  probability — same statistical primitive as COUPLING, generalized
+  to a graph connectivity question. Empirical promotion grounding:
+  MSR 2026 *"LGTM! Characteristics of Auto-Merged LLM-based Agentic
+  PRs"* (Canelas et al.) shows across the AIDev corpus that
+  auto-merged PRs are smaller and more focused than non-auto-merged
+  ones — peer-reviewed evidence that focus correlates with merge
+  success, the direction COHESION already detects.
+- **EVASION** (v0.7, surfaced under HEALTH as `pattern =
+  "broad_exception"`) — newly-added non-top-level broad TS/JS catch
+  handlers. The detector counts catch_clauses where the body is
+  empty, the parameter is absent, or the parameter type is `any` /
+  `unknown` / `Error`, filters to non-top-level (some enclosing
+  function/method/arrow ancestor before reaching `program`), and
+  fires on a working-vs-HEAD net delta increase. Module-level
+  handlers are legitimate; the pathological case is a swallowed
+  error inside business logic. Targets the *"evasive repairs with
+  try-except blocks"* failure mode named in arXiv:2509.13941
+  *(An Empirical Study on Failures in Automated Issue Solving)* and
+  corroborated by FSE 2025 *Suppressed Static Analysis Warnings*
+  (broad-except = 18.4 % of Python suppressions across 46 projects).
+  Severity Warn in review; skipped in pre-edit (no diff to score
+  against). Cheap pre-gate (`body.contains("catch")`) avoids the
+  per-file tree-sitter parse on diffs that don't touch error-handling
+  code.
 
-All three sensors refuse to emit low-quality signal where their
-inputs aren't reliable (STRUCTURE / COMPLEXITY on languages
-without an AST adapter; COHESION on diffs with no historical
-co-change data). The right way to use mmk is alongside type checks,
+All these sensors refuse to emit low-quality signal where their
+inputs aren't reliable (STRUCTURE / COMPLEXITY / EVASION on
+languages without an AST adapter; COHESION on diffs with no
+historical co-change data; EVASION on a new file with zero broad
+handlers added). The right way to use mmk is alongside type checks,
 linters, and tests — not in place of any of them. Each pillar
 catches a different class of failure; mmk's class is "patterns
 visible only in historical data, plus shape and connectivity

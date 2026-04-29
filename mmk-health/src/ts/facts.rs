@@ -9,7 +9,7 @@ use crate::adapter::LanguageAdapter;
 use crate::facts::{
     template_for, ExportFact, ExportKind, FunctionFact, ImportFact, StructuredFacts, TypeDensity,
 };
-use crate::ts::parse;
+use crate::ts::parse_for;
 use std::path::Path;
 use tree_sitter::Node;
 
@@ -18,11 +18,11 @@ pub struct TsAdapter;
 
 impl LanguageAdapter for TsAdapter {
     fn extensions(&self) -> &'static [&'static str] {
-        &["ts", "tsx"]
+        &["ts", "tsx", "js", "jsx"]
     }
 
     fn extract(&self, path: &Path, body: &str) -> Option<StructuredFacts> {
-        let tree = parse(body)?;
+        let tree = parse_for(path, body)?;
         let root = tree.root_node();
         let stem = path
             .file_stem()

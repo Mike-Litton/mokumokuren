@@ -10,12 +10,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 pub mod binary;
+pub mod blob;
 pub mod cache;
 pub mod diff;
 pub mod loc;
 pub mod untracked;
 pub mod walker;
 
+pub use blob::{read_head_blob, read_head_bodies};
 pub use untracked::{list_untracked, UntrackedFile};
 pub use walker::{BaseResolution, BaseResolvedVia, RepoWalker};
 

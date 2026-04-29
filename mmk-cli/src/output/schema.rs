@@ -5,6 +5,48 @@
 //! blocks) do not bump the schema version; renames, removals, type
 //! changes, and semantic changes do.
 //!
+//! ## v0.7.0 — what's new
+//!
+//! Three additive changes — none break the existing shape; consumers
+//! reading `0.6.x` parse v0.7 output without modification.
+//!
+//! - **`findings[].severity = "warn"` for `findings[].layer = "cohesion"`.**
+//!   COHESION promotes from Info to Warn. Empirical grounding: the
+//!   MSR 2026 mining-challenge paper *"LGTM! Characteristics of
+//!   Auto-Merged LLM-based Agentic PRs"* (Canelas et al.) shows
+//!   across the AIDev corpus that auto-merged PRs are smaller and
+//!   more focused than non-auto-merged ones — peer-reviewed evidence
+//!   for the direction COHESION already detects. Severity-only
+//!   change — no shape change in the finding's structure. Consumers
+//!   running `--gate warn` will see exit code 2 fire on tangled diffs.
+//! - **Optional `cohesion` top-level block on `mmk review` JSON.**
+//!   Carries `tangles[].clusters[]` — the full per-cluster path
+//!   decomposition (no 8-path cap, unlike the prose form). Lets a
+//!   harness render the split as a commit-split proposal without
+//!   parsing `findings[].message`. Absent when no tangle qualified;
+//!   `serde_skip_if = "Option::is_none"` keeps the JSON shape
+//!   additive.
+//! - **`findings[].layer = "health"` with `pattern = "broad_exception"`
+//!   under `health.matches[]`.** New EVASION sensor (under
+//!   `[health.ts] patterns = ["broad_exception", ...]`) detects
+//!   newly-added non-top-level broad TS/JS catch handlers (empty
+//!   body, no parameter, or `any` / `unknown` / `Error` type) — the
+//!   *"evasive repairs with try-except blocks"* failure mode named in
+//!   arXiv:2509.13941 *(An Empirical Study on Failures in Automated
+//!   Issue Solving)* and corroborated by FSE 2025
+//!   *Suppressed Static Analysis Warnings*. Severity Warn in review;
+//!   skipped in pre-edit (no working-vs-HEAD diff).
+//! - **TestPair (`pattern = "test_pair"`) extends to `.js` / `.jsx`.**
+//!   Implementation-test pairing now fires on JS sources, not just
+//!   TS. Pre-v0.7 cross-language `.js → .test.ts` mismatches stayed
+//!   silent; v0.7 rejects cross-language pairing (the convention
+//!   pairs same-extension).
+//! - **TSX grammar dispatch fix.** Pre-v0.7 every `.tsx` file was
+//!   parsed by the non-TSX TypeScript grammar — JSX-bearing files
+//!   silently degraded. v0.7 selects `LANGUAGE_TSX` for `.tsx` /
+//!   `.jsx`. Affects all TS Health detectors (Service, Pattern A
+//!   substring scan is unchanged because it doesn't parse).
+//!
 //! ## v0.6.0 — what's new
 //!
 //! Calibration plus one new sensor and a documented hook contract.
@@ -131,4 +173,4 @@
 //! than the crate version, which they should treat as diagnostic
 //! only.
 
-pub const SCHEMA_VERSION: &str = "0.6.0";
+pub const SCHEMA_VERSION: &str = "0.7.0";

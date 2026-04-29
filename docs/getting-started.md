@@ -88,6 +88,32 @@ Exit code semantics:
 
 Same flag works on `mmk pre-edit` and `mmk session-summary`.
 
+## I want a pre-commit gate against tangled diffs
+
+`mmk review --staged --gate warn` reads the staged index and exits 2
+when COHESION (or any other warn-severity sensor) fires:
+
+```shell
+$ git add src/auth/login.ts src/auth/session.ts
+$ git add src/billing/invoice.ts src/billing/plan.ts
+$ mmk review --staged --gate warn
+COHESION:
+  ⚠ staged diff decomposes into 2 disjoint co-change clusters (2 + 2 files)
+$ echo $?
+2
+```
+
+Wire it into `.git/hooks/pre-commit` (or your `pre-commit-config.yaml`)
+to block tangled commits before they land. The structured
+`cohesion.tangles[].clusters[]` JSON block (`--format json`) carries
+the full per-cluster path decomposition so a wrapper can propose
+the split.
+
+As of v0.7 COHESION is Warn-severity (was Info pre-v0.7). Empirical
+grounding: MSR 2026 *"LGTM!"* (Canelas et al.) shows auto-merged PRs
+across the AIDev corpus are smaller and more focused than
+non-auto-merged ones — the structural property COHESION detects.
+
 ## I want to look at hotspots
 
 ```shell

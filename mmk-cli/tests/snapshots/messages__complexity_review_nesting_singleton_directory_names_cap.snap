@@ -1,0 +1,5 @@
+---
+source: mmk-cli/tests/messages.rs
+expression: s
+---
+src/foo.ts::deeplyNested: nesting 9 exceeds cap 6; correlates with elevated defect rate (Code Red 2022)

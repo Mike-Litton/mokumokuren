@@ -142,7 +142,14 @@ pub fn run<O: Write, E: Write>(args: &EvalArgs, stdout: &mut O, stderr: &mut E) 
         let findings = if counts.files_net > cfg.bulk.max_files
             || counts.lines_net > u64::from(cfg.bulk.max_lines)
         {
+            // bulk_self_findings now returns tagged findings for the
+            // monotonic-dedup gate; eval doesn't run that gate (it
+            // wants every fire visible for replay/learn), so strip
+            // the signals here and keep just the findings.
             bulk_self_findings(&counts, &cfg)
+                .into_iter()
+                .map(|(f, _)| f)
+                .collect()
         } else {
             compute_findings(
                 &changed,

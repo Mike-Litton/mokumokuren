@@ -174,29 +174,31 @@ CLI override: `--blast-radius-threshold <FLOAT>`.
 ## `[health.ts]`
 
 Enables the structural-pattern adapter (`mmk-health`) for
-TypeScript files. Surfaces architectural neighbors empirical
-co-change history cannot see — e.g. a contribution-registration
-file's peer contribution files in the same `contrib/` subtree, or
-the `*.test.ts` partner of an implementation file.
+TypeScript / JavaScript files. Surfaces architectural neighbors
+empirical co-change history cannot see — e.g. a
+contribution-registration file's peer contribution files in the same
+`contrib/` subtree, the `*.test.ts` partner of an implementation
+file, or a newly-added broad TS/JS catch handler that wasn't in HEAD.
 
 ```toml
 [health.ts]
 enabled  = true
-patterns = ["registration", "service", "test_pair"]
+patterns = ["registration", "service", "test_pair", "broad_exception"]
 ```
 
-| Field      | Default     | Notes                                                                                    |
-| ---------- | ----------- | ---------------------------------------------------------------------------------------- |
-| `enabled`  | `false`     | Off by default outside the `js-ts` profile so non-TS users aren't surprised.             |
-| `patterns` | all three   | Subset of `"registration"`, `"service"`, `"test_pair"`. Unknown tokens are dropped silently. |
+| Field      | Default     | Notes                                                                                                                  |
+| ---------- | ----------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `enabled`  | `false`     | Off by default outside the `js-ts` profile so non-TS users aren't surprised.                                           |
+| `patterns` | all four    | Subset of `"registration"`, `"service"`, `"test_pair"`, `"broad_exception"`. Unknown tokens are dropped silently.       |
 
 Pattern semantics (review/pre-edit):
 
-| Pattern        | Trigger                                                                  | Severity                            |
-| -------------- | ------------------------------------------------------------------------ | ----------------------------------- |
-| `registration` | `*.contribution.ts` or imports/extends from `vs/platform/actions/...`.   | Info (architectural precedent).     |
-| `service`      | Declares `interface IFoo` + `registerSingleton(IFoo, ...)` / `createDecorator`. | Info (consumer list).        |
-| `test_pair`    | Implementation file with a sibling `*.test.ts` / `*.spec.ts`.            | Warn in review when the test partner isn't in the diff; Info in pre-edit. |
+| Pattern           | Trigger                                                                                                                                | Severity                            |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `registration`    | `*.contribution.ts` or imports/extends from `vs/platform/actions/...`.                                                                 | Info (architectural precedent).     |
+| `service`         | Declares `interface IFoo` + `registerSingleton(IFoo, ...)` / `createDecorator`.                                                        | Info (consumer list).               |
+| `test_pair`       | Implementation file with a sibling `*.test.{ts,tsx,js,jsx}` / `*.spec.{ts,tsx,js,jsx}`. Pairs across the TS family (`.ts` ↔ `.tsx`) and the JS family (`.js` ↔ `.jsx`); cross-family rejected. | Warn in review when the test partner isn't in the diff; Info in pre-edit. |
+| `broad_exception` | Working tree adds a non-top-level broad TS/JS catch handler not present at HEAD (empty body, no parameter, or `any`/`unknown`/`Error` type). v0.7. | Warn in review; suppressed in pre-edit (no working-vs-HEAD diff yet). |
 
 ## CLI flags vs file config
 

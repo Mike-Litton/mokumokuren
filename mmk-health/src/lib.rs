@@ -48,6 +48,12 @@ pub enum HealthPattern {
     /// by naming convention. Surfaces the test partner so an edit to
     /// the implementation can re-touch its tests.
     TestPair,
+    /// EVASION: a non-top-level broad TS/JS catch handler was added
+    /// in the working tree relative to HEAD. "Broad" means empty
+    /// catch body, no parameter, or a parameter typed as
+    /// `any | unknown | Error`. Targets the *"evasive repairs with
+    /// try-except blocks"* failure mode named in arXiv:2509.13941.
+    BroadException,
 }
 
 impl HealthPattern {
@@ -60,6 +66,7 @@ impl HealthPattern {
             Self::Registration => "registration",
             Self::Service => "service",
             Self::TestPair => "test_pair",
+            Self::BroadException => "broad_exception",
         }
     }
 
@@ -72,6 +79,7 @@ impl HealthPattern {
             "registration" => Some(Self::Registration),
             "service" => Some(Self::Service),
             "test_pair" => Some(Self::TestPair),
+            "broad_exception" => Some(Self::BroadException),
             _ => None,
         }
     }
