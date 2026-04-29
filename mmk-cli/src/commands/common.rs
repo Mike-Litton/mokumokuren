@@ -461,7 +461,6 @@ fn augment_peer_paths_with_working_tree(
     out
 }
 
-
 /// Extensions the Health TypeScript adapter knows how to parse.
 ///
 /// Includes `.ts`, `.tsx`, `.js`, and `.jsx` — the TSX grammar

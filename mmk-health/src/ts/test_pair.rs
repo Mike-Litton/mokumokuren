@@ -254,9 +254,7 @@ mod tests {
         // vs/editor/common/commands/foo.ts ↔
         // vs/editor/test/common/commands/foo.test.ts
         let subject = PathBuf::from("vs/editor/common/commands/foo.ts");
-        let peers = vec![PathBuf::from(
-            "vs/editor/test/common/commands/foo.test.ts",
-        )];
+        let peers = vec![PathBuf::from("vs/editor/test/common/commands/foo.test.ts")];
         let f = detect(&subject, &peers);
         assert_eq!(f.len(), 1, "mirrored test dir must pair; got {f:?}");
     }

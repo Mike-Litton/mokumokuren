@@ -20,22 +20,26 @@ Pick the path that matches what you're trying to do.
    `[coupling]` defaults, plus the `[health.ts]` structural-pattern
    adapter enabled). Commit it.
 
-3. Wire mmk into Claude Code's `PostToolUse:Edit` hook. Add to
+3. Wire mmk into Claude Code's `PostToolUse` hook. Add to
    `.claude/settings.json`:
    ```json
    {
      "hooks": {
        "PostToolUse": [
          {
-           "matcher": "Edit",
+           "matcher": "Edit|Write",
            "hooks": [
-             { "type": "command", "command": "mmk review 2>/dev/null || true" }
+             { "type": "command", "command": "mmk review" }
            ]
          }
        ]
      }
    }
    ```
+   For drop-in CLAUDE.md content describing how the agent should
+   read mmk's output, copy
+   [`agent-claude-md-template.md`](agent-claude-md-template.md) into
+   your repo's `CLAUDE.md`.
 
 4. Edit a service file with Claude. The hook fires after every edit;
    the agent sees layer-labeled findings before its next turn:
@@ -46,12 +50,12 @@ Pick the path that matches what you're trying to do.
 
 5. After a real session, measure your repo's noise floor:
    ```shell
-   mmk eval --sample 50
+   mmk eval --sample 50 --learn
    ```
-   If a majority of findings sit in the 0.10–0.30 jaccard bucket,
-   raise `[coupling] threshold` in `mokumokuren.toml`. If a specific
-   partner path dominates the noisy-partner list, add it to
-   `[coupling] ignore_partners`. See
+   `wilson_lower_buckets` shows the COUPLING confidence
+   distribution; if most fires sit below your
+   `confidence_threshold`, raise it. `learn_suggestions` flags
+   broad-partner paths to add to `[coupling] ignore_partners`. See
    [`coupling.md`](coupling.md) for the tuning approach.
 
 Why text mode (no `--format json`) in the hook command? `mmk review`

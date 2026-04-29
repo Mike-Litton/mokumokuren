@@ -6,10 +6,6 @@ make `mmk` self-acting in three ways. Pick the strictness that fits.
 All three assume `mmk` is on `$PATH` (`cargo install --path mmk-cli`,
 or use a published binary).
 
-> **Drop-in CLAUDE.md content** lives in
-> [`agent-claude-md-template.md`](agent-claude-md-template.md) —
-> calibrated invocation pattern, override discipline, sensor priors.
-
 ## Working-tree vs history
 
 The agent's actual edit loop happens in the **working tree**, not in
@@ -29,77 +25,12 @@ triage, not in the per-edit hook.
 
 ## Option 1 — `CLAUDE.md` (advisory, easiest)
 
-Auto-loads per project. Drop the snippet below into your repo's
-`CLAUDE.md` (or merge into an existing one — keep total file length
-under ~200 lines for adherence):
-
-```markdown
-## Using mmk for editing decisions
-
-This project uses [mmk](https://github.com/Mike-Litton/mokumokuren) — a
-deterministic Git-history sensor that catches LLM slop the linter
-and tests can't see (hotspot blindness, hallucinated coupling,
-thrashing). The agent edit loop wires to it like this:
-
-**Before editing or creating a file `<PATH>`:**
-
-Run `mmk pre-edit <PATH>` — even when `<PATH>` doesn't yet exist.
-It returns layer-labeled findings: HOTSPOT (rank if top-N),
-COUPLING (historical co-change partners above the threshold),
-and STRUCTURE (the directory's convention — common imports,
-export shape — when one is detectable). If a partner is not part
-of your plan, either touch it or say why this edit breaks the
-pattern. If STRUCTURE surfaces a convention, match it before
-writing. Add `--format json` if your harness needs structured
-output.
-
-**After every edit (or batch of edits) before declaring "done":**
-
-Run `mmk review`. It compares the working tree against HEAD and
-emits layer-labeled findings:
-
-- `HOTSPOT` — file you edited is in the top-N hotspot list.
-  Tighten the review on this change.
-- `COUPLING` — file you edited has a historical partner you did
-  not touch. Decide deliberately whether the partner needs the
-  matching change.
-- `COHESION` — your diff spans multiple disjoint co-change
-  clusters. Likely a tangled change (two unrelated edits in one
-  diff); consider splitting into separate commits. v0.7 returns
-  the full per-cluster decomposition under top-level `cohesion`
-  in JSON output (`cohesion.tangles[].clusters[]`) so a harness
-  can render the proposed split without re-parsing the message.
-- `STRUCTURE` — the file's directory has a convention (siblings
-  share imports / export shape). Your file diverges or matches.
-- `COMPLEXITY` — function shape (nesting / LOC) is far above the
-  directory norm or the absolute threshold.
-- `HEALTH` — structural-pattern signals: missing test partner,
-  missing registration / service neighbor, or (v0.7,
-  `pattern = "broad_exception"`) a newly-added non-top-level
-  broad TS/JS catch handler. The EVASION case fires when the
-  working tree adds a `try { ... } catch {}`, `catch (e) {}`, or
-  a typed `any` / `unknown` / `Error` catch inside a
-  function/method/arrow that wasn't there at HEAD — the
-  *"evasive repairs with try-except blocks"* failure mode named
-  in arXiv:2509.13941. Findings appear in
-  `health.matches[].pattern == "broad_exception"`.
-- `BUDGET` — diff exceeds `bulk.max_files` / `bulk.max_lines` in
-  `mokumokuren.toml`. Likely a sweep; consider splitting.
-
-**At end of feature, before opening a PR:**
-
-Run `mmk session-summary --base main --drift-sessions 5`. The
-output covers DRIFT (paths that climbed across recent sessions — a
-thrashing signal) and BUDGET (session-aggregate cost), plus the
-`entered_top_n` / `churn_of_churn` "what shifted while I was
-working?" view. Add `--format json` if you need structured fields.
-
-If `session.base_resolved_via` is `head_minus_one` or any
-`merge_base_*`, the comparison was synthetic — treat the session
-block as informational only.
-
-mmk does not validate semantics. Always run tests separately.
-```
+Auto-loads per project. Copy
+[`agent-claude-md-template.md`](agent-claude-md-template.md) into
+your repo's `CLAUDE.md` (or merge into an existing one). The
+template covers invocation pattern, vertical-slice / commit-per-slice
+discipline, override discipline, and per-sensor priors — calibrated
+for adherence, not length.
 
 **Reliability:** advisory. Claude reads it and tries to follow it;
 adherence improves when rules are concrete ("if X then Y") rather
