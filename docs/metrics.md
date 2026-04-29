@@ -56,15 +56,20 @@ shape and connectivity:
 - **STRUCTURE** (v0.5) — directory-convention divergence. When ≥3
   sibling files share an import (≥85% by default) or an export
   shape and a new sibling diverges, mmk surfaces the convention
-  before the agent writes against it. Language-specific
+  before the agent writes against it. v0.8 demotes Warn → Info on
+  role-pattern matches (factory, registration, contribution, …) —
+  see `[sensor.structure].role_patterns` in
+  [`configuration.md`](configuration.md). Language-specific
   (TypeScript / TSX / JS / JSX AST today; line-scan fallback for
   other languages emits imports only); refuses to fire rather than
   emit low-quality signal on unsupported languages.
 - **COMPLEXITY** (v0.5) — per-function nesting and LOC. Either an
   absolute cap (default nesting 6 / LOC 80) or a 3× directory-median
-  ratio fires. v0.6 adds per-key monotonic-worsening dedup so the
-  same finding doesn't re-fire across edits unless an axis strictly
-  worsened. Same language-coverage rules as STRUCTURE.
+  ratio fires. v0.7 suppresses unchanged pre-existing functions
+  (HEAD-baseline filter); v0.8 demotes the survivors to `Info`
+  unless the agent's Δ vs. HEAD clears `delta_warn_pct` /
+  `delta_warn_abs` — see [`configuration.md`](configuration.md).
+  Same language-coverage rules as STRUCTURE.
 - **COHESION** (v0.6, **promoted to Warn in v0.7**) — tangled-diff
   fingerprint. Detects working-tree diffs that decompose into
   multiple disjoint connected components on the historical co-change

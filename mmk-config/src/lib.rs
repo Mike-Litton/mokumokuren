@@ -70,6 +70,35 @@ pub const DEFAULT_STRUCTURE_EXPORT_TEMPLATE_MAJORITY: f64 = 0.85;
 pub const DEFAULT_STRUCTURE_TOP_IMPORTS_TO_SHOW: usize = 6;
 pub const DEFAULT_STRUCTURE_DIVERGENCE_MIN_MISSING: u32 = 1;
 
+/// `[sensor.structure] role_patterns` defaults.
+///
+/// Files matching any of these stem-suffix patterns are treated as
+/// architectural-role files: STRUCTURE demotes divergence findings
+/// from `Warn` to `Info` because the divergence is expected (factory,
+/// registration, contribution files legitimately diverge from
+/// sibling shape conventions). Patterns are stem-suffix matches —
+/// `*<suffix>` checks whether the file stem (before final extension)
+/// ends with `<suffix>`. Override or extend per-repo via
+/// `[structure] role_patterns = [...]` in `mokumokuren.toml`.
+///
+/// Defaults derived from the N=20 vscode experiment (2026-04-29):
+/// the `*.contribution`, `*Factory`, `*.action`, `*Registry`,
+/// `*.module`, `*.routes`, `*.config` patterns each accumulated
+/// dismissable Warn fires that read as "role file diverges from
+/// directory shape" — exactly the role / shape conflation this
+/// suppression separates.
+pub const DEFAULT_STRUCTURE_ROLE_PATTERNS: &[&str] = &[
+    "*.contribution",
+    "*Factory",
+    "*.action",
+    "*.actions",
+    "*Registry",
+    "*.module",
+    "*Module",
+    "*.routes",
+    "*.config",
+];
+
 /// `[bulk] ignore_for_budget` default — empty.
 ///
 /// Globs in this list are excluded from the *diff-time* BUDGET
@@ -97,6 +126,21 @@ pub const DEFAULT_COMPLEXITY_NESTING_ABS_MAX: u32 = 6;
 pub const DEFAULT_COMPLEXITY_LOC_RATIO: f64 = 3.0;
 pub const DEFAULT_COMPLEXITY_LOC_ABS_MAX: u32 = 80;
 pub const DEFAULT_COMPLEXITY_MIN_DIRECTORY_SIBLINGS: u32 = 3;
+
+/// `[sensor.complexity]` delta-weighted severity defaults.
+///
+/// COMPLEXITY findings on pre-existing functions get severity from
+/// the agent's actual contribution (Δ vs HEAD), not from the
+/// absolute metric. New files / new functions stay `Warn`. For an
+/// existing function whose metric ticked up by 1 above an absolute
+/// cap, demote to `Info` — the agent's edit is small even if the
+/// function was already over. Only when the delta clears either of
+/// these thresholds does the finding earn `Warn`. Defaults derived
+/// from the N=20 vscode experiment (2026-04-29) where 51 of 51
+/// COMPLEXITY fires landed on pre-existing oversized functions and
+/// only ~6 % converted to refactors.
+pub const DEFAULT_COMPLEXITY_DELTA_WARN_PCT: f64 = 0.50;
+pub const DEFAULT_COMPLEXITY_DELTA_WARN_ABS: u32 = 20;
 
 /// `[sensor.cohesion]` defaults.
 ///
@@ -273,6 +317,11 @@ pub struct StructureCfg {
     /// TS). Imports-only signal — exports / templates won't be
     /// considered for those files.
     pub linescan_fallback: bool,
+    /// Role-file stem-suffix patterns. Files matching any pattern
+    /// have their STRUCTURE Warn findings demoted to Info — role
+    /// divergence is expected. See [`DEFAULT_STRUCTURE_ROLE_PATTERNS`]
+    /// for the rationale and shipped defaults.
+    pub role_patterns: Vec<String>,
 }
 
 impl Default for StructureCfg {
@@ -286,6 +335,10 @@ impl Default for StructureCfg {
             divergence_min_missing: DEFAULT_STRUCTURE_DIVERGENCE_MIN_MISSING,
             report_conformance: false,
             linescan_fallback: true,
+            role_patterns: DEFAULT_STRUCTURE_ROLE_PATTERNS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
         }
     }
 }
@@ -302,6 +355,15 @@ pub struct ComplexityCfg {
     /// — the directory median has too little support to drive a
     /// ratio-based finding.
     pub min_directory_siblings: u32,
+    /// Δ-percent threshold above which a pre-existing function's
+    /// finding earns `Warn`. Below this AND below `delta_warn_abs`,
+    /// the formatter demotes to `Info`. Defaults to
+    /// [`DEFAULT_COMPLEXITY_DELTA_WARN_PCT`].
+    pub delta_warn_pct: f64,
+    /// Δ-absolute threshold above which a pre-existing function's
+    /// finding earns `Warn`. Defaults to
+    /// [`DEFAULT_COMPLEXITY_DELTA_WARN_ABS`].
+    pub delta_warn_abs: u32,
 }
 
 impl Default for ComplexityCfg {
@@ -313,6 +375,8 @@ impl Default for ComplexityCfg {
             loc_ratio_threshold: DEFAULT_COMPLEXITY_LOC_RATIO,
             loc_absolute_max: DEFAULT_COMPLEXITY_LOC_ABS_MAX,
             min_directory_siblings: DEFAULT_COMPLEXITY_MIN_DIRECTORY_SIBLINGS,
+            delta_warn_pct: DEFAULT_COMPLEXITY_DELTA_WARN_PCT,
+            delta_warn_abs: DEFAULT_COMPLEXITY_DELTA_WARN_ABS,
         }
     }
 }

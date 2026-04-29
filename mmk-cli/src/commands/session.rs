@@ -174,18 +174,13 @@ fn run_session_summary<O: Write, E: Write>(
         ));
     }
 
-    if session_out.window.counts.commits_filtered_bulk > 0 {
-        findings.push(Finding::new(
-            Layer::Budget,
-            Severity::Warn,
-            messages::session_budget(
-                session_out.window.counts.commits_filtered_bulk,
-                session_out.window.counts.commits_seen,
-                cfg.bulk.max_files,
-                cfg.bulk.max_lines,
-            ),
-        ));
-    }
+    // Window-truncation moved out of the Findings array in v0.8: the
+    // dropped-commits count is analysis metadata describing the
+    // window the analyzer saw, not a finding the agent should act on.
+    // It now surfaces under `analysis.window_truncation` in JSON and a
+    // `Diagnostics:` line in text mode (rendered by `text::write_session`
+    // / `json::write_session`); operational BUDGET (diff-vs-cap, ramp,
+    // session-aggregate overrun) is unchanged.
     if session_n > 0 {
         let session_lines: u64 = session_out
             .session_commits
@@ -265,6 +260,8 @@ fn run_session_summary<O: Write, E: Write>(
             duration_ms,
             blast_ref,
             suppress_window,
+            cfg.bulk.max_files,
+            cfg.bulk.max_lines,
         )?,
         Format::Json => crate::output::json::write_session(
             stdout,

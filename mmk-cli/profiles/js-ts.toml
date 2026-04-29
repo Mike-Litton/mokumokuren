@@ -46,3 +46,14 @@ threshold = 0.10
 [health.ts]
 enabled = true
 patterns = ["registration", "service", "test_pair", "broad_exception"]
+
+# Role-file patterns: STRUCTURE demotes Warn → Info on these. The
+# in-code defaults cover common cross-ecosystem patterns; uncomment
+# and extend with repo-specific suffixes (e.g. "*Resolver",
+# "*.gateway"). `mmk eval --replay` STRUCTURE fire counts surface
+# candidate suffixes.
+# [sensor.structure]
+# role_patterns = [
+#     "*.contribution", "*Factory", "*.action", "*.actions",
+#     "*Registry", "*.module", "*Module", "*.routes", "*.config",
+# ]

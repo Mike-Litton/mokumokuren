@@ -6,6 +6,10 @@ make `mmk` self-acting in three ways. Pick the strictness that fits.
 All three assume `mmk` is on `$PATH` (`cargo install --path mmk-cli`,
 or use a published binary).
 
+> **Drop-in CLAUDE.md content** lives in
+> [`agent-claude-md-template.md`](agent-claude-md-template.md) —
+> calibrated invocation pattern, override discipline, sensor priors.
+
 ## Working-tree vs history
 
 The agent's actual edit loop happens in the **working tree**, not in

@@ -1,9 +1,20 @@
 //! Stable JSON schema version.
 //!
-//! Tracks the `mmk` minor release: every `0.6.x` build emits
-//! `0.6.0`. Additive changes (new optional fields, new top-level
+//! Tracks the `mmk` minor release: every `0.8.x` build emits
+//! `0.8.0`. Additive changes (new optional fields, new top-level
 //! blocks) do not bump the schema version; renames, removals, type
 //! changes, and semantic changes do.
+//!
+//! ## v0.8.0 — contract delta
+//!
+//! Additive: `analysis.window_truncation` block,
+//! `sensor.structure.role_patterns`,
+//! `sensor.complexity.delta_warn_pct` / `delta_warn_abs` in the
+//! `config` echo. Severity field on `findings[]` shifts on COMPLEXITY
+//! (delta-weighted) and STRUCTURE (role demotion). The v0.7
+//! window-truncation `findings[]` entry on session-summary retires;
+//! its data moves to the new metadata block. v0.7 readers parse v0.8
+//! output without modification. See `CHANGELOG.md` for rationale.
 //!
 //! ## v0.7.0 — what's new
 //!
@@ -173,4 +184,4 @@
 //! than the crate version, which they should treat as diagnostic
 //! only.
 
-pub const SCHEMA_VERSION: &str = "0.7.0";
+pub const SCHEMA_VERSION: &str = "0.8.0";

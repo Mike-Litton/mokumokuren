@@ -6,6 +6,44 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-04-29
+
+Calibration pass: tighten existing sensors, no new ones. Driven by
+the N=20 vscode multi-agent experiment and Run-3 follow-up.
+
+### Added
+
+- `[sensor.structure] role_patterns`. Files whose stem matches a
+  shipped pattern (factory / contribution / registration / module
+  / routes / config) emit STRUCTURE divergence as Info, not Warn.
+- `[sensor.complexity] delta_warn_pct` / `delta_warn_abs`.
+  Severity knobs for delta-weighted COMPLEXITY (see *Changed*).
+- `analysis.window_truncation` JSON block on `mmk session-summary`
+  with `commits_dropped`, `total_commits`, `max_files`, `max_lines`.
+- `docs/agent-claude-md-template.md` — canonical CLAUDE.md content
+  for agents using mmk.
+
+### Changed
+
+- COMPLEXITY severity is delta-weighted: pre-existing functions
+  emit Info unless `Δ ≥ 50 %` of HEAD or `Δ ≥ 20` absolute. New
+  files and new functions still emit Warn.
+- TestPair partner discovery covers mirrored `test/` layouts at
+  any ancestor (vscode-style nested test trees).
+- Pre-edit "new file" wording fires only when the path actually
+  isn't in HEAD. Pre-v0.8 the predicate misclassified mature files
+  with no recent churn as new.
+- Window-truncation moves out of `findings[]` into
+  `analysis.window_truncation`. Operational BUDGET (diff-vs-cap,
+  ramp, session-aggregate overrun) is unchanged.
+
+### Schema
+
+`schema_version` → `0.8.0`. Additive on field shapes. v0.7 readers
+parse v0.8 output unchanged; session-summary envelopes that
+previously fired the window-truncation Warn finding now emit one
+fewer `findings[]` entry. See [`docs/schema.md`](docs/schema.md).
+
 ## [0.7.0] - 2026-04-28
 
 Three composable changes that together make agent failure modes

@@ -641,7 +641,7 @@ fn compute_sensor_findings(
             let filtered = filter_complexity_by_head_baseline(&c.path, raw, head_body);
             for cf in filtered {
                 let signal = complexity_monotonic_signal(&cf);
-                out.push((complexity_to_finding(&cf), Some(signal)));
+                out.push((complexity_to_finding(&cf, &cfg.sensor.complexity), Some(signal)));
             }
         }
     }

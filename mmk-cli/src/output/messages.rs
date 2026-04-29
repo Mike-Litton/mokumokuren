@@ -466,6 +466,35 @@ pub fn structure_review_divergent(
     msg
 }
 
+/// `<P>: role file in <D>/; divergence from K sibling <shape> files
+/// is expected — confirm the role peers share the role convention
+/// rather than the directory shape`
+///
+/// Emitted when STRUCTURE detects a role-pattern match (factory,
+/// contribution, registration, …). Severity demotes to `Info`: the
+/// divergence is structurally legitimate, but role-vs-role drift is
+/// still worth the agent's attention. Wording is descriptive — names
+/// the role status without prescribing a fix, since whether the
+/// agent should align with role peers depends on context this
+/// sensor doesn't see.
+#[must_use]
+pub fn structure_review_role(
+    path: &Path,
+    dir: &Path,
+    sibling_count: u32,
+    shape_ext: &str,
+    shape_suffix: &str,
+) -> String {
+    let shape = shape_label(shape_ext, shape_suffix);
+    format!(
+        "{}: role file in {}/; divergence from {sibling_count} sibling {shape} files \
+         is expected — confirm the role peers share the role convention rather than \
+         the directory shape",
+        path.display(),
+        dir.display(),
+    )
+}
+
 /// `<P>: matches <D>/ convention (K sibling baseline)`
 #[must_use]
 pub fn structure_review_conforming(path: &Path, dir: &Path, sibling_count: u32) -> String {

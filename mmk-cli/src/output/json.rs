@@ -39,6 +39,22 @@ struct AnalysisBlock {
     commits_filtered: CommitsFilteredBlock,
     files_ignored: FilesIgnoredBlock,
     duration_ms: u64,
+    /// Present when the per-commit bulk filter dropped at least one
+    /// commit from the analysis window. Descriptive metadata about
+    /// what the analyzer saw, not a Finding the agent should act on
+    /// — operational BUDGET fires on the agent's diff and lives in
+    /// the `findings` array. Added in v0.8 so consumers can render
+    /// the truncation as a Diagnostic instead of as a Finding.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    window_truncation: Option<WindowTruncationBlock>,
+}
+
+#[derive(Serialize)]
+struct WindowTruncationBlock {
+    commits_dropped: u64,
+    total_commits: u64,
+    max_files: u32,
+    max_lines: u32,
 }
 
 #[derive(Serialize)]
@@ -196,6 +212,7 @@ pub fn write<W: Write>(
                 head_paths_ignored: analysis.counts.head_paths_ignored,
             },
             duration_ms,
+            window_truncation: None,
         },
         files,
         blast_radius: blast_block,
@@ -276,6 +293,17 @@ pub fn write_session<W: Write>(
         nodes,
     });
 
+    let window_truncation = if analysis.counts.commits_filtered_bulk > 0 {
+        Some(WindowTruncationBlock {
+            commits_dropped: analysis.counts.commits_filtered_bulk,
+            total_commits: analysis.counts.commits_seen,
+            max_files: config.bulk.max_files,
+            max_lines: config.bulk.max_lines,
+        })
+    } else {
+        None
+    };
+
     let report = SessionReport {
         schema_version: crate::output::schema::SCHEMA_VERSION,
         crate_version: env!("CARGO_PKG_VERSION"),
@@ -297,6 +325,7 @@ pub fn write_session<W: Write>(
                 head_paths_ignored: analysis.counts.head_paths_ignored,
             },
             duration_ms,
+            window_truncation,
         },
         files,
         session_files,
@@ -465,6 +494,7 @@ pub(crate) fn write_review<W: Write>(
                 head_paths_ignored: analysis.counts.head_paths_ignored,
             },
             duration_ms,
+            window_truncation: None,
         },
         review: ReviewBlock {
             mode: mode.as_str(),
@@ -645,6 +675,7 @@ pub(crate) fn write_pre_edit<W: Write>(
                 head_paths_ignored: analysis.counts.head_paths_ignored,
             },
             duration_ms,
+            window_truncation: None,
         },
         pre_edit: PreEditBlock { path: &path },
         findings,
@@ -859,6 +890,7 @@ pub fn write_couples_of<W: Write>(
                 head_paths_ignored: analysis.counts.head_paths_ignored,
             },
             duration_ms,
+            window_truncation: None,
         },
         couples_of: CouplesOfBlock {
             path: path.to_string_lossy().into_owned(),

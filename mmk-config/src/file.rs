@@ -175,6 +175,13 @@ pub struct StructureFile {
     pub report_conformance: Option<bool>,
     #[serde(default)]
     pub linescan_fallback: Option<bool>,
+    /// Override or extend the shipped role-pattern list. When
+    /// supplied, replaces the default list — to *extend* the
+    /// defaults, copy the shipped list into `mokumokuren.toml` and
+    /// add the new patterns. Plain stem-suffix patterns
+    /// (`*<suffix>`); the leading `*` is required.
+    #[serde(default)]
+    pub role_patterns: Option<Vec<String>>,
 }
 
 /// `[sensor.complexity]` block.
@@ -193,6 +200,10 @@ pub struct ComplexityFile {
     pub loc_absolute_max: Option<u32>,
     #[serde(default)]
     pub min_directory_siblings: Option<u32>,
+    #[serde(default)]
+    pub delta_warn_pct: Option<f64>,
+    #[serde(default)]
+    pub delta_warn_abs: Option<u32>,
 }
 
 /// `[sensor.cohesion]` block.

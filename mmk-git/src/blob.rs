@@ -46,6 +46,23 @@ pub fn read_head_blob(repo: &gix::Repository, path: &Path) -> Result<Option<Vec<
     Ok(Some(object.data.clone()))
 }
 
+/// `true` iff `path` resolves to a blob in HEAD's tree.
+///
+/// Cheap predicate for distinguishing "truly new file (absent from
+/// HEAD)" from "in HEAD but with no analyzable history" — the
+/// pre-edit fall-through wording depends on the difference.
+/// `analyze.loc.contains_key()` is *not* a substitute: that map only
+/// covers paths that churned within the analysis window, so any
+/// existing file with no recent churn (or whose touches all fell to
+/// the bulk filter) falsely registers as new.
+#[must_use]
+pub fn path_in_head(work_dir: &Path, path: &Path) -> bool {
+    let Ok(repo) = gix::open(work_dir) else {
+        return false;
+    };
+    matches!(read_head_blob(&repo, path), Ok(Some(_)))
+}
+
 /// Batched HEAD-blob fetch over `paths` rooted at `work_dir`.
 ///
 /// Returns a map from path → UTF-8-decoded body for every path that

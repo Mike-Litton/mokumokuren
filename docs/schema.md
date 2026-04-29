@@ -6,14 +6,17 @@ JSON object whose shape is documented here. The
 against; `crate_version` is the Cargo version of the producing build
 and is diagnostic only.
 
-Subcommands at v0.7.0:
+Subcommands at v0.8.0:
 
 - `mmk analyze` — ranked hotspots over a window.
 - `mmk session-summary` (alias: `mmk session`) — window + session
   ranking, delta block, plus a `findings[]` overlay (DRIFT, BUDGET,
-  ANCHOR on empty session). On empty sessions the WINDOW ranking
-  collapses (the `files` key is omitted) so the ANCHOR pointer
-  isn't buried under generated-artefact rankings.
+  ANCHOR on empty session). v0.8 surfaces window-truncation as
+  `analysis.window_truncation` metadata instead of a finding —
+  operational BUDGET (session-aggregate overrun) is unchanged. On
+  empty sessions the WINDOW ranking collapses (the `files` key is
+  omitted) so the ANCHOR pointer isn't buried under
+  generated-artefact rankings.
 - `mmk review` — diff against history (working tree by default;
   `--staged`, `--range A..B`, `--commit <SHA>`). Surfaces HOTSPOT,
   COUPLING, COHESION (Warn since v0.7), STRUCTURE, COMPLEXITY,
@@ -37,8 +40,8 @@ envelope on stdin, it switches to a hook-shape output envelope
 
 ## Stability contract
 
-`schema_version` tracks the `mmk` minor release: every `0.7.x` build
-emits `0.7.0`.
+`schema_version` tracks the `mmk` minor release: every `0.8.x` build
+emits `0.8.0`.
 
 | Change kind                                             | Schema bump? |
 | ------------------------------------------------------- | :----------: |
@@ -56,7 +59,7 @@ and ignore them rather than fail.
 
 | Field            | Type    | Notes                                                                                |
 | ---------------- | ------- | ------------------------------------------------------------------------------------ |
-| `schema_version` | string  | Pinned to the `mmk` minor (`"0.7.0"`).                                               |
+| `schema_version` | string  | Pinned to the `mmk` minor (`"0.8.0"`).                                               |
 | `crate_version`  | string  | `CARGO_PKG_VERSION` of the producing build. Diagnostic only — do not pin against.    |
 | `repo`           | object  | HEAD metadata + repo-level warnings.                                                 |
 | `config`         | object  | Effective `Config` after merging file + CLI sources.                                 |
@@ -84,6 +87,7 @@ and ignore them rather than fail.
 | `files_ignored.deleted_from_head`  | uint   | Diff events on paths that don't exist at HEAD.              |
 | `files_ignored.head_paths_ignored` | uint   | HEAD-tree paths matched by an ignore glob.                  |
 | `duration_ms`                      | uint   | Wall time for the analyze pipeline.                         |
+| `window_truncation`                | object? | (v0.8) Present on `mmk session-summary` envelopes when `commits_filtered.bulk > 0`. Carries `commits_dropped` (uint), `total_commits` (uint), `max_files` (uint), `max_lines` (uint). Descriptive metadata about what the analyzer saw — operational BUDGET (diff-vs-cap) still fires under `findings[]`. Replaces the v0.7 `findings[]` entry on `Layer::Budget / Severity::Warn` that emitted the same wording. |
 
 ### `files[]` (per hotspot entry)
 
@@ -163,7 +167,10 @@ it to understand exactly what produced the result.
 | `health.ts.patterns`           | string[] | Pattern tokens. v0.4 shipped `registration` / `service` / `test_pair`; v0.7 adds `broad_exception` (EVASION). |
 | `sensor.structure.enabled`     | bool     | (v0.5) Whether the STRUCTURE convention sensor runs.         |
 | `sensor.structure.import_majority` | float | (v0.5) Sibling fraction needed for an import to count as the directory's convention (default 0.85). |
+| `sensor.structure.role_patterns` | string[] | (v0.8) Stem-suffix patterns (`*<suffix>`) marking architectural-role files. Matching files have their `ReviewDivergent` finding demoted from `Warn` to `Info` and the prose reframed. Defaults to `["*.contribution", "*Factory", "*.action", "*.actions", "*Registry", "*.module", "*Module", "*.routes", "*.config"]`. |
 | `sensor.complexity.enabled`    | bool     | (v0.5) Whether the COMPLEXITY per-function sensor runs.      |
+| `sensor.complexity.delta_warn_pct` | float | (v0.8) Δ-percent threshold above which a pre-existing function's finding earns `Warn`. Below this AND below `delta_warn_abs`, the finding demotes to `Info`. New files / new functions still emit `Warn`. Default `0.50`. |
+| `sensor.complexity.delta_warn_abs` | uint  | (v0.8) Δ-absolute threshold above which a pre-existing function's finding earns `Warn`. Default `20`. |
 | `sensor.budget_ramp.enabled`   | bool     | (v0.5) Whether the under-cap BUDGET ramp emits Info @ ≥50% / Warn @ ≥75% (default `true`). |
 | `sensor.cohesion.enabled`      | bool     | (v0.6) Whether the COHESION tangled-diff sensor runs (default `true`). |
 | `sensor.cohesion.confidence_threshold` | float | (v0.6) Wilson 95% lower bound floor for the symmetrized edge metric. Default `0.20` — looser than COUPLING's `0.30` because cohesion gates a graph-connectivity question, not a missed-partner one. |
@@ -190,7 +197,7 @@ before any commit lands.
 
 | Field            | Type    | Notes                                                                                  |
 | ---------------- | ------- | -------------------------------------------------------------------------------------- |
-| `schema_version` | string  | `"0.7.0"`.                                                                             |
+| `schema_version` | string  | `"0.8.0"`.                                                                             |
 | `crate_version`  | string  |                                                                                        |
 | `repo`           | object  | Same as analyze. Present only when there are changes (clean tree skips analyze).       |
 | `config`         | object  | Same as analyze. Present only when there are changes.                                  |
@@ -224,7 +231,7 @@ and *why* (since v0.6) so silence on HOTSPOT/COUPLING reads as
 
 | Field            | Type    | Notes                                                            |
 | ---------------- | ------- | ---------------------------------------------------------------- |
-| `schema_version` | string  | `"0.7.0"`.                                                       |
+| `schema_version` | string  | `"0.8.0"`.                                                       |
 | `crate_version`  | string  |                                                                  |
 | `review`         | object  | `mode` + per-file diff numstat.                                  |
 | `findings`       | array   | One BUDGET finding plus any STRUCTURE / COMPLEXITY findings on the changed paths; HOTSPOT/COUPLING skipped. |
@@ -241,7 +248,7 @@ queried path.
 
 | Field            | Type    | Notes                                                                                  |
 | ---------------- | ------- | -------------------------------------------------------------------------------------- |
-| `schema_version` | string  | `"0.7.0"`.                                                                             |
+| `schema_version` | string  | `"0.8.0"`.                                                                             |
 | `crate_version`  | string  |                                                                                        |
 | `repo`           | object  |                                                                                        |
 | `config`         | object  |                                                                                        |
@@ -275,7 +282,7 @@ K snapshot labels + the climb-majority findings.
 
 | Field                       | Type     | Notes                                                                          |
 | --------------------------- | -------- | ------------------------------------------------------------------------------ |
-| `schema_version`            | string   | `"0.7.0"`.                                                                     |
+| `schema_version`            | string   | `"0.8.0"`.                                                                     |
 | `crate_version`             | string   |                                                                                |
 | `drift.base`                | string?  | Echo of `--base`.                                                              |
 | `drift.sessions`            | uint     | Echo of `--sessions K`.                                                        |
@@ -349,8 +356,37 @@ The argv-fallback path is preserved: invoking `mmk review` /
 `mmk pre-edit` without a stdin envelope produces the
 `--format text` or `--format json` shape documented above.
 
+## Findings vs. Diagnostics
+
+`findings[]` carries signals the agent should **act on** — the
+agent's diff is over the BUDGET cap, a COUPLING partner is missing,
+a function structurally crosses a COMPLEXITY threshold. Each entry
+has a `layer` and `severity`; consumers gate on these.
+
+**Diagnostics** are descriptive metadata about *what the analyzer
+ran*. They aren't actionable — telling the agent "your edit caused
+this" would be wrong, since the diagnostic describes the analysis
+window, not the agent's diff. v0.8 introduces the first explicit
+diagnostic surface: `analysis.window_truncation`. Operational
+BUDGET (the diff-vs-cap signal) stays in `findings[]` because it
+*is* about the agent's diff.
+
+The split exists because the v0.7 calibration pass found agents
+treating window-truncation Warn fires as actionable when they
+described nothing the agent could do. Diagnostics are the right
+home for "here's what the analyzer saw"; Findings are the right
+home for "here's what your work just did."
+
 ## Schema-version history
 
+- **`0.8.0`** — additive: `analysis.window_truncation` block,
+  `sensor.structure.role_patterns`,
+  `sensor.complexity.delta_warn_pct` / `delta_warn_abs` echoed in
+  `config`. Severity semantics shift on COMPLEXITY (delta-weighted)
+  and STRUCTURE (role demotion). Session-summary's v0.7
+  window-truncation `findings[]` entry retires; the data moves to
+  the metadata block. v0.7 readers parse v0.8 output without
+  modification. See [CHANGELOG](../CHANGELOG.md) for the rationale.
 - **`0.7.0`** — `findings[].layer = "cohesion"` severity is **Warn**
   (was Info; consumers running `--gate warn` now exit 2 on tangled
   diffs); optional top-level `cohesion` block with

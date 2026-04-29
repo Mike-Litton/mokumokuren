@@ -167,15 +167,23 @@ fn session_summary_diff_budget_finding_fires_on_oversize_session() {
     let (stdout, _) = run_session(dir.path(), args);
     let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
 
-    let any_budget = v["findings"]
-        .as_array()
-        .expect("findings array")
-        .iter()
-        .any(|f| f["layer"] == "budget");
+    // v0.8: window-truncation moved out of Findings into
+    // `analysis.window_truncation` metadata. Operational BUDGET
+    // (diff-vs-cap, ramp, session-aggregate overrun) is unchanged
+    // and would still fire here if the session weren't entirely
+    // bulk-filtered — but the only commit on the feature branch
+    // exceeds bulk.max_lines and therefore drops out of the
+    // session itself, leaving the truncation block as the right
+    // surface for "the session was oversized."
+    let truncation = &v["analysis"]["window_truncation"];
     assert!(
-        any_budget,
-        "session aggregate exceeding bulk.max_lines × commits must emit BUDGET; got: {}",
-        v["findings"]
+        truncation.is_object(),
+        "expected analysis.window_truncation block when commits dropped to bulk filter; got: {}",
+        v["analysis"]
+    );
+    assert!(
+        truncation["commits_dropped"].as_u64().unwrap_or(0) >= 1,
+        "expected at least one dropped commit; got: {truncation}"
     );
 }
 

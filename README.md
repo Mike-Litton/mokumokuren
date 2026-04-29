@@ -105,6 +105,7 @@ one-shot.
 | What you want                              | Where to go                                            |
 | ------------------------------------------ | ------------------------------------------------------ |
 | Wire mmk into Claude Code in 5 minutes     | [`docs/getting-started.md`](docs/getting-started.md)   |
+| Drop-in agent guidance (CLAUDE.md content) | [`docs/agent-claude-md-template.md`](docs/agent-claude-md-template.md) |
 | Configure ignores and `[coupling]`         | [`docs/configuration.md`](docs/configuration.md)       |
 | Tune coupling for your repo                | [`docs/coupling.md`](docs/coupling.md) + `mmk eval`    |
 | Wire into Claude Code (CLAUDE.md / skill / hooks) | [`docs/claude-code.md`](docs/claude-code.md)    |

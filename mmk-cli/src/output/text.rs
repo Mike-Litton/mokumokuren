@@ -134,6 +134,8 @@ pub fn write_session<W: Write>(
     duration_ms: u64,
     blast: Option<(&Path, f64, &[NeighborhoodNode])>,
     suppress_window: bool,
+    bulk_max_files: u32,
+    bulk_max_lines: u32,
 ) -> Result<()> {
     writeln!(w, "session:")?;
     match &session_out.base {
@@ -202,6 +204,26 @@ pub fn write_session<W: Write>(
         session_out.session_commits.len(),
         duration_ms,
     )?;
+
+    // Diagnostics: descriptive metadata about the analysis itself —
+    // not findings the agent should act on. Window-truncation lives
+    // here as of v0.8 (was a Layer::Budget Warn through v0.7); it
+    // describes what the analyzer saw, while operational BUDGET
+    // (diff-vs-cap) describes what the agent did.
+    let counts = &session_out.window.counts;
+    if counts.commits_filtered_bulk > 0 {
+        writeln!(w, "\nDiagnostics:")?;
+        writeln!(
+            w,
+            "  {}",
+            crate::output::messages::session_budget(
+                counts.commits_filtered_bulk,
+                counts.commits_seen,
+                bulk_max_files,
+                bulk_max_lines,
+            ),
+        )?;
+    }
     Ok(())
 }
 

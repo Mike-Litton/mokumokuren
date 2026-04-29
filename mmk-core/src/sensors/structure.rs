@@ -77,6 +77,14 @@ pub struct StructureFinding {
     pub path: PathBuf,
     pub kind: StructureFindingKind,
     pub convention: DirectoryConvention,
+    /// `true` when the subject's stem matches a configured
+    /// `role_patterns` entry (factory / contribution / registration
+    /// / etc.). Role files legitimately diverge from sibling shape
+    /// conventions — the formatter demotes Warn to Info and reframes
+    /// the prose so the agent sees "role divergence is expected"
+    /// rather than "fix this divergence." See
+    /// [`mmk_config::DEFAULT_STRUCTURE_ROLE_PATTERNS`].
+    pub is_role: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,7 +136,25 @@ pub fn compute_structure_finding(input: &StructureInput<'_>) -> Option<Structure
         path: input.path.to_path_buf(),
         kind,
         convention,
+        is_role: is_role_file(input.path, &input.cfg.role_patterns),
     })
+}
+
+/// `true` iff `path`'s stem matches any role-pattern entry.
+///
+/// Patterns are stem-suffix matches: `*<suffix>` checks whether the
+/// file stem (segment before final extension) ends with `<suffix>`.
+/// Patterns without the `*` prefix are silently skipped — every
+/// shipped pattern carries it.
+#[must_use]
+pub fn is_role_file(path: &Path, patterns: &[String]) -> bool {
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    patterns
+        .iter()
+        .filter_map(|p| p.strip_prefix('*'))
+        .any(|suffix| stem.ends_with(suffix))
 }
 
 fn review_kind(

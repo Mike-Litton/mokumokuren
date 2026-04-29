@@ -257,6 +257,9 @@ pub fn apply_sensor_file(
         if let Some(v) = s.linescan_fallback {
             structure.linescan_fallback = v;
         }
+        if let Some(v) = s.role_patterns.as_ref() {
+            structure.role_patterns.clone_from(v);
+        }
     }
     if let Some(c) = file_s.complexity.as_ref() {
         if let Some(v) = c.enabled {
@@ -276,6 +279,12 @@ pub fn apply_sensor_file(
         }
         if let Some(v) = c.min_directory_siblings {
             complexity.min_directory_siblings = v;
+        }
+        if let Some(v) = c.delta_warn_pct {
+            complexity.delta_warn_pct = v;
+        }
+        if let Some(v) = c.delta_warn_abs {
+            complexity.delta_warn_abs = v;
         }
     }
     if let Some(co) = file_s.cohesion.as_ref() {
@@ -416,13 +425,21 @@ fn augment_peer_paths_with_working_tree(
     for s in list_directory_siblings(repo_root, subject) {
         push(s, &mut out, &mut seen);
     }
-    // `test/` subdirectory (TestPair's third candidate shape).
-    let test_subdir = subject
-        .parent()
-        .unwrap_or_else(|| Path::new(""))
-        .join("test");
-    let abs_test = repo_root.join(&test_subdir);
-    if let Ok(entries) = std::fs::read_dir(&abs_test) {
+    // `test/` subdirectories: TestPair partners may live at the
+    // same level (`<dir>/test/`) or under a mirrored `test/` at any
+    // ancestor (vscode-style, e.g. `vs/editor/test/common/commands/`
+    // mirroring `vs/editor/common/commands/`). Enumerate every such
+    // directory and add the file it contains for the matching stem.
+    let parent = subject.parent().unwrap_or_else(|| Path::new(""));
+    let stem = subject
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    for dir_rel in mmk_health::ts::test_pair::mirrored_test_parents(parent) {
+        let abs_dir = repo_root.join(&dir_rel);
+        let Ok(entries) = std::fs::read_dir(&abs_dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let Ok(ft) = entry.file_type() else { continue };
             if !ft.is_file() {
@@ -432,11 +449,18 @@ fn augment_peer_paths_with_working_tree(
             let Some(name_str) = name.to_str() else {
                 continue;
             };
-            push(test_subdir.join(name_str), &mut out, &mut seen);
+            // Cheap pre-filter: stem must match and the suffix must
+            // look like a test/spec partner. Keeps unrelated files
+            // in `test/` directories out of `peer_paths`.
+            if !name_str.starts_with(stem) {
+                continue;
+            }
+            push(dir_rel.join(name_str), &mut out, &mut seen);
         }
     }
     out
 }
+
 
 /// Extensions the Health TypeScript adapter knows how to parse.
 ///
@@ -579,32 +603,63 @@ pub fn structure_to_finding_with_signal(
             let imports_count = u32::try_from(missing_imports.len()).unwrap_or(u32::MAX);
             let templates_count = u32::try_from(missing_templates.len()).unwrap_or(u32::MAX);
             let key = format!("structure::{}", f.path.display());
-            (
-                Severity::Warn,
-                messages::structure_review_divergent(
-                    &f.path,
-                    &missing_sources,
-                    total,
-                    missing_templates,
-                ),
-                Some(MonotonicSignal {
-                    key,
-                    axes: vec![imports_count, templates_count],
-                }),
-            )
+            // Role-file demotion (v0.8): factories / registrations /
+            // contribution files legitimately diverge from sibling
+            // shape conventions. Demote Warn → Info and reframe the
+            // prose to flag the role status, so the agent reads
+            // "expected divergence" rather than "fix this."
+            if f.is_role {
+                (
+                    Severity::Info,
+                    messages::structure_review_role(
+                        &f.path,
+                        &dir,
+                        f.convention.sibling_count,
+                        &f.convention.shape_ext,
+                        &f.convention.shape_suffix,
+                    ),
+                    Some(MonotonicSignal {
+                        key,
+                        axes: vec![imports_count, templates_count],
+                    }),
+                )
+            } else {
+                (
+                    Severity::Warn,
+                    messages::structure_review_divergent(
+                        &f.path,
+                        &missing_sources,
+                        total,
+                        missing_templates,
+                    ),
+                    Some(MonotonicSignal {
+                        key,
+                        axes: vec![imports_count, templates_count],
+                    }),
+                )
+            }
         }
     };
     (Finding::new(Layer::Structure, severity, message), signal)
 }
 
 /// Translate a [`mmk_core::sensors::ComplexityFinding`] into a CLI
-/// [`Finding`].
+/// [`Finding`] with delta-weighted severity.
 ///
-/// Severity is `Warn` — COMPLEXITY is actionable (refactor / split)
-/// and is intended to pause the agent before it builds further on
-/// top of the deep nest.
+/// Severity rules (v0.8):
+/// - new file / new function (no HEAD baseline) → `Warn`
+/// - existing function with `Δ ≥ delta_warn_pct × head_actual` OR
+///   `Δ ≥ delta_warn_abs` → `Warn`
+/// - otherwise (small Δ on a pre-existing problem) → `Info`
+///
+/// Lets the agent see "you made it materially worse" (Warn) vs.
+/// "you nudged an inherited problem" (Info) without losing the fact
+/// that a borderline metric is still over cap.
 #[must_use]
-pub fn complexity_to_finding(f: &mmk_core::sensors::ComplexityFinding) -> Finding {
+pub fn complexity_to_finding(
+    f: &mmk_core::sensors::ComplexityFinding,
+    cfg: &mmk_config::ComplexityCfg,
+) -> Finding {
     use mmk_core::sensors::ComplexityFindingKind as K;
     let message = match f.kind {
         K::Nesting => messages::complexity_review_nesting(
@@ -624,7 +679,28 @@ pub fn complexity_to_finding(f: &mmk_core::sensors::ComplexityFinding) -> Findin
             f.directory_median,
         ),
     };
-    Finding::new(Layer::Complexity, Severity::Warn, message)
+    let severity = complexity_severity(f, cfg);
+    Finding::new(Layer::Complexity, severity, message)
+}
+
+/// Pick the severity for a complexity finding given the cfg
+/// thresholds. Pulled out so it's unit-testable in isolation —
+/// the formatter is otherwise pure rendering.
+#[must_use]
+pub fn complexity_severity(
+    f: &mmk_core::sensors::ComplexityFinding,
+    cfg: &mmk_config::ComplexityCfg,
+) -> Severity {
+    let Some(head) = f.head_actual else {
+        return Severity::Warn;
+    };
+    let delta = f.actual.saturating_sub(head);
+    let pct_threshold = (f64::from(head) * cfg.delta_warn_pct).ceil() as u32;
+    if delta >= cfg.delta_warn_abs || delta >= pct_threshold {
+        Severity::Warn
+    } else {
+        Severity::Info
+    }
 }
 
 /// Apply the per-key monotonic-worsening gate to a list of findings

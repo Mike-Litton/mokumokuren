@@ -327,12 +327,15 @@ pub fn run<O: Write, E: Write>(
             .iter()
             .find(|e| e.path == path)
             .map(|e| e.hotspot_rank);
-        // `loc.contains_key` answers "is this file in HEAD's tree?"
-        // — distinguishing the truly-new case from the
-        // history-was-filtered case. See `messages::quiet_file`
-        // doc-comment for why conflating those two reads
-        // dangerously.
-        let present_in_head = analysis.loc.contains_key(path.as_path());
+        // `mmk_git::path_in_head` walks HEAD's tree directly so the
+        // predicate answers "is this path tracked at HEAD?" rather
+        // than the previous `analysis.loc.contains_key()` which only
+        // covered paths with churn in the analysis window — every
+        // existing file whose history all fell to the bulk filter
+        // (or simply had no commits in the window) was misreported
+        // as new. See `messages::quiet_file` for the wording the
+        // distinction drives.
+        let present_in_head = mmk_git::path_in_head(&cwd, path.as_path());
         findings.push(Finding::new(
             Layer::Coupling,
             Severity::Ok,

@@ -157,6 +157,39 @@ and `cohesion_components_p95` distribution data, and emits a
 suggested `[sensor.cohesion]` block when > 10 % of sampled commits
 would fire COHESION on default thresholds.
 
+## `[sensor.structure].role_patterns` (v0.8)
+
+Stem-suffix patterns (`*<suffix>`) for architectural-role files.
+Subjects whose stem matches demote STRUCTURE `ReviewDivergent`
+from `Warn` to `Info` — role files legitimately diverge from
+sibling shape conventions. In-code defaults cover
+contribution / factory / registration / module / routes / config;
+extend per-repo:
+
+```toml
+[sensor.structure]
+role_patterns = [
+    "*.contribution", "*Factory", "*.action", "*.actions",
+    "*Registry", "*.module", "*Module", "*.routes", "*.config",
+    "*Resolver",  # repo-specific addition
+]
+```
+
+To find your repo's role patterns: run `mmk eval --replay`, look
+at per-file STRUCTURE fire counts, and add the common stem
+suffix on the obviously-role-bearing files. The full
+`StructureCfg` field set lives on
+`mmk_config::StructureCfg` (`cargo doc -p mmk-config`).
+
+## `[sensor.complexity]` delta knobs (v0.8)
+
+`delta_warn_pct` (default `0.50`) and `delta_warn_abs` (default
+`20`) gate severity on pre-existing functions: a finding emits
+`Warn` only when `Δ ≥ delta_warn_pct × head_actual` OR
+`Δ ≥ delta_warn_abs`; otherwise `Info`. New files and new
+functions stay `Warn`. The full `ComplexityCfg` field set lives
+on `mmk_config::ComplexityCfg`.
+
 ## `[blast_radius]`
 
 Controls the 1-hop co-change neighborhood emitted by

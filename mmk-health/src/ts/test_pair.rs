@@ -25,6 +25,7 @@ pub fn detect(subject: &Path, peer_paths: &[PathBuf]) -> Vec<HealthFinding> {
         return Vec::new();
     }
     related.sort();
+    related.dedup();
     vec![HealthFinding {
         pattern: HealthPattern::TestPair,
         subject: subject.to_path_buf(),
@@ -91,6 +92,49 @@ fn candidate_partner_paths(subject: &Path) -> Vec<PathBuf> {
         out.push(parent.join(format!("{stem}.test.{fext}")));
         out.push(parent.join(format!("{stem}.spec.{fext}")));
         out.push(parent.join("test").join(format!("{stem}.test.{fext}")));
+    }
+    // Mirrored-`test/` layouts (vscode-style): the partner lives
+    // under a sibling `test/` directory at any ancestor level —
+    // e.g. `vs/editor/common/commands/foo.ts` is paired with
+    // `vs/editor/test/common/commands/foo.test.ts`. Walk every
+    // ancestor in `parent`, splice `test` after it, and emit
+    // `.test.<ext>` / `.spec.<ext>` candidates so detection covers
+    // codebases that mirror impl trees under a top-level `test/`.
+    for fext in family_exts {
+        for mirror in mirrored_test_parents(parent) {
+            out.push(mirror.join(format!("{stem}.test.{fext}")));
+            out.push(mirror.join(format!("{stem}.spec.{fext}")));
+        }
+    }
+    out
+}
+
+/// All `<ancestor>/test/<descendant>` directories rooted at `parent`.
+///
+/// For `parent = a/b/c`, yields `a/b/c/test`, `a/b/test/c`,
+/// `a/test/b/c`, `test/a/b/c`. The same-directory `parent/test/` form
+/// duplicates one of the explicit candidates above; that's fine —
+/// the consumer dedupes by exact path match against `peer_paths`.
+///
+/// Public so the CLI's peer-path augmentation enumerates the same
+/// set of directories the detector inspects. Two copies of this
+/// algorithm drifted in v0.7 → v0.8 and made HEALTH silent on
+/// vscode-style mirrored-`test/` layouts; one canonical source
+/// prevents the recurrence.
+#[must_use]
+pub fn mirrored_test_parents(parent: &Path) -> Vec<PathBuf> {
+    let segments: Vec<&std::ffi::OsStr> = parent.iter().collect();
+    let mut out = Vec::with_capacity(segments.len() + 1);
+    for split in 0..=segments.len() {
+        let mut p = PathBuf::new();
+        for s in &segments[..split] {
+            p.push(s);
+        }
+        p.push("test");
+        for s in &segments[split..] {
+            p.push(s);
+        }
+        out.push(p);
     }
     out
 }
@@ -203,6 +247,18 @@ mod tests {
         let peers = vec![PathBuf::from("src/App.test.js")];
         let f = detect(&subject, &peers);
         assert_eq!(f.len(), 1, "jsx ↔ test.js must pair; got {f:?}");
+    }
+
+    #[test]
+    fn vscode_style_mirrored_test_dir_pairs() {
+        // vs/editor/common/commands/foo.ts ↔
+        // vs/editor/test/common/commands/foo.test.ts
+        let subject = PathBuf::from("vs/editor/common/commands/foo.ts");
+        let peers = vec![PathBuf::from(
+            "vs/editor/test/common/commands/foo.test.ts",
+        )];
+        let f = detect(&subject, &peers);
+        assert_eq!(f.len(), 1, "mirrored test dir must pair; got {f:?}");
     }
 
     #[test]
