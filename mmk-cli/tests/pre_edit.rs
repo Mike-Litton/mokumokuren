@@ -146,8 +146,8 @@ fn pre_edit_emits_ok_finding_when_no_signal_fires() {
         "OK finding must name the queried path; got: {msg}"
     );
     assert!(
-        msg.contains("no signal"),
-        "message should call out the absence of signal; got: {msg}"
+        msg.starts_with("[no actionable signal] "),
+        "message must carry the canonical fall-through prefix; got: {msg}"
     );
 }
 

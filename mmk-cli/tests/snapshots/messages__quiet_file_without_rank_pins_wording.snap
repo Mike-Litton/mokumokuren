@@ -2,4 +2,4 @@
 source: mmk-cli/tests/messages.rs
 expression: s
 ---
-quiet.rs: no signal (2 commits in 60-day window)
+[no actionable signal] quiet.rs: 2 commits in 60-day window

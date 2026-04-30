@@ -376,6 +376,10 @@ pub fn run<O: Write, E: Write>(
                 if suppressed { &[] } else { &findings },
                 suppressed,
                 analysis.head_sha.as_deref(),
+                // Pre-edit has no working-tree diff yet — the empty-
+                // findings systemMessage falls back to the no-diff
+                // form `(HEAD <sha>)`.
+                None,
                 block,
             )?;
         }

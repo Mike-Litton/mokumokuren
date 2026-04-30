@@ -2,4 +2,4 @@
 source: mmk-cli/tests/messages.rs
 expression: s
 ---
-brand-new.rs: new file (not yet in HEAD)
+[no actionable signal] brand-new.rs: new file (not yet in HEAD)

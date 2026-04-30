@@ -54,7 +54,19 @@ pub enum ExportKind {
 /// Per-function structural facts COMPLEXITY consumes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FunctionFact {
+    /// Bare declared name as it appears in source (`constructor`,
+    /// `parseApplication`). Two methods with the same name in the
+    /// same file collide on this field — that's why
+    /// [`Self::qualified_name`] exists for downstream identity.
     pub name: String,
+    /// Class-qualified identity: `ClassName::methodName` for methods
+    /// inside a class declaration or class expression; bare
+    /// `functionName` for top-level function declarations. Used by
+    /// the COMPLEXITY HEAD-baseline filter so two methods that share
+    /// a bare name (`constructor`, `dispose`, …) but live in
+    /// different classes don't get cross-attributed when computing
+    /// the `+N vs HEAD` delta.
+    pub qualified_name: String,
     /// Lines from the function header (or first-non-blank body line)
     /// through the closing brace, inclusive — matches what a reader
     /// would point at when saying "this function is N lines."

@@ -31,12 +31,19 @@ impl LanguageAdapter for TsAdapter {
             .to_owned();
 
         let mut facts = StructuredFacts::default();
-        walk(root, body.as_bytes(), &stem, &mut facts);
+        let mut scope: Vec<String> = Vec::new();
+        walk(root, body.as_bytes(), &stem, &mut scope, &mut facts);
         Some(facts)
     }
 }
 
-fn walk(node: Node<'_>, src: &[u8], stem: &str, facts: &mut StructuredFacts) {
+fn walk(
+    node: Node<'_>,
+    src: &[u8],
+    stem: &str,
+    scope: &mut Vec<String>,
+    facts: &mut StructuredFacts,
+) {
     match node.kind() {
         "import_statement" => {
             if let Some(import) = parse_import(node, src) {
@@ -57,9 +64,27 @@ fn walk(node: Node<'_>, src: &[u8], stem: &str, facts: &mut StructuredFacts) {
             // body still needs walking for COMPLEXITY metrics.
         }
         "function_declaration" | "method_definition" => {
-            if let Some(func) = parse_function(node, src) {
+            if let Some(func) = parse_function(node, src, scope) {
                 facts.functions.push(func);
             }
+        }
+        // `class_declaration` covers `class Foo {}`; `class` covers
+        // anonymous class expressions (`const x = class { … }`). Both
+        // push their name (or `<anon>`) onto the scope stack so any
+        // nested `method_definition` can compose its qualified name
+        // with the enclosing class. Nested classes compose with `::`
+        // (`Outer::Inner::method`), the natural extension of the
+        // single-class case.
+        "class_declaration" | "class" => {
+            let class_name = name_field(node, src).unwrap_or_else(|| "<anon>".to_owned());
+            scope.push(class_name);
+            update_type_density(node, src, &mut facts.type_density);
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                walk(child, src, stem, scope, facts);
+            }
+            scope.pop();
+            return;
         }
         _ => {}
     }
@@ -71,7 +96,7 @@ fn walk(node: Node<'_>, src: &[u8], stem: &str, facts: &mut StructuredFacts) {
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        walk(child, src, stem, facts);
+        walk(child, src, stem, scope, facts);
     }
 }
 
@@ -184,7 +209,7 @@ fn name_field(node: Node<'_>, src: &[u8]) -> Option<String> {
     n.utf8_text(src).ok().map(str::to_owned)
 }
 
-fn parse_function(node: Node<'_>, src: &[u8]) -> Option<FunctionFact> {
+fn parse_function(node: Node<'_>, src: &[u8], scope: &[String]) -> Option<FunctionFact> {
     let name = name_field(node, src)?;
     let body = node
         .child_by_field_name("body")
@@ -193,8 +218,14 @@ fn parse_function(node: Node<'_>, src: &[u8]) -> Option<FunctionFact> {
     let end_line = body.end_position().row;
     let loc = u32::try_from(end_line - start_line + 1).unwrap_or(u32::MAX);
     let max_nesting_depth = max_nesting(body, 1);
+    let qualified_name = if scope.is_empty() {
+        name.clone()
+    } else {
+        format!("{}::{name}", scope.join("::"))
+    };
     Some(FunctionFact {
         name,
+        qualified_name,
         loc,
         max_nesting_depth,
     })
@@ -372,6 +403,42 @@ function deep() {
         // body depth=1, outer if=2, inner if=3
         assert_eq!(fun.max_nesting_depth, 3);
         assert!(fun.loc >= 7);
+    }
+
+    #[test]
+    fn qualified_name_distinguishes_methods_across_classes() {
+        // Two classes each with a `constructor` — bare name collides;
+        // qualified_name disambiguates so the COMPLEXITY HEAD-baseline
+        // filter can match the right baseline per method.
+        let body = "class Outer { constructor() { return 1; } }\n\
+                    class Inner { constructor() { return 2; } }\n";
+        let f = TsAdapter
+            .extract(Path::new("a.ts"), body)
+            .expect("ts parse");
+        let names: Vec<&str> = f
+            .functions
+            .iter()
+            .map(|fun| fun.qualified_name.as_str())
+            .collect();
+        assert!(
+            names.contains(&"Outer::constructor"),
+            "expected Outer::constructor; got: {names:?}"
+        );
+        assert!(
+            names.contains(&"Inner::constructor"),
+            "expected Inner::constructor; got: {names:?}"
+        );
+    }
+
+    #[test]
+    fn qualified_name_for_top_level_function_is_bare() {
+        let body = "function topLevel() { return 1; }\n";
+        let f = TsAdapter
+            .extract(Path::new("a.ts"), body)
+            .expect("ts parse");
+        assert_eq!(f.functions.len(), 1);
+        assert_eq!(f.functions[0].name, "topLevel");
+        assert_eq!(f.functions[0].qualified_name, "topLevel");
     }
 
     #[test]

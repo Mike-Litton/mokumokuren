@@ -131,7 +131,7 @@ fn check_nesting(
     if fun.max_nesting_depth > cfg.nesting_absolute_max {
         return Some(ComplexityFinding {
             path: path.to_path_buf(),
-            function: fun.name.clone(),
+            function: fun.qualified_name.clone(),
             kind: ComplexityFindingKind::Nesting,
             actual: fun.max_nesting_depth,
             cap: cfg.nesting_absolute_max,
@@ -147,7 +147,7 @@ fn check_nesting(
         if ratio > cfg.nesting_ratio_threshold {
             return Some(ComplexityFinding {
                 path: path.to_path_buf(),
-                function: fun.name.clone(),
+                function: fun.qualified_name.clone(),
                 kind: ComplexityFindingKind::Nesting,
                 actual: fun.max_nesting_depth,
                 cap: cfg.nesting_absolute_max,
@@ -168,7 +168,7 @@ fn check_size(
     if fun.loc > cfg.loc_absolute_max {
         return Some(ComplexityFinding {
             path: path.to_path_buf(),
-            function: fun.name.clone(),
+            function: fun.qualified_name.clone(),
             kind: ComplexityFindingKind::Size,
             actual: fun.loc,
             cap: cfg.loc_absolute_max,
@@ -184,7 +184,7 @@ fn check_size(
         if ratio > cfg.loc_ratio_threshold {
             return Some(ComplexityFinding {
                 path: path.to_path_buf(),
-                function: fun.name.clone(),
+                function: fun.qualified_name.clone(),
                 kind: ComplexityFindingKind::Size,
                 actual: fun.loc,
                 cap: cfg.loc_absolute_max,

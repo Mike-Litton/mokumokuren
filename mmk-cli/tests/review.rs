@@ -57,16 +57,25 @@ fn run_in_with_verdict(
 
 #[serial(cwd)]
 #[test]
-fn review_silent_on_clean_working_tree() {
+fn review_emits_clean_state_line_on_clean_working_tree() {
+    // v0.9: text mode prints exactly one canonical line on a clean
+    // tree (was silent in v0.8). The 7-char HEAD sha disambiguates
+    // *which* baseline the all-clear was computed against.
     let dir = TempDir::new().unwrap();
     let now = 1_700_000_000_i64;
     build_coupling_fixture(dir.path(), now);
 
     let (stdout, _) = run_in(dir.path(), review_args());
     let text = String::from_utf8(stdout).unwrap();
+    let trimmed = text.trim_end_matches('\n');
+    assert_eq!(
+        trimmed.lines().count(),
+        1,
+        "clean tree must produce exactly one stdout line; got: {text:?}"
+    );
     assert!(
-        text.is_empty(),
-        "clean working tree must produce no text output (no findings); got: {text}"
+        trimmed.starts_with("[no actionable signal] no findings (HEAD "),
+        "clean tree text must carry canonical prefix + HEAD sha; got: {text:?}"
     );
 
     let mut json_args = review_args();
@@ -77,6 +86,49 @@ fn review_silent_on_clean_working_tree() {
     assert!(
         findings.is_empty(),
         "clean working tree must emit empty findings array; got: {findings:?}"
+    );
+}
+
+#[serial(cwd)]
+#[test]
+fn review_emits_clean_state_line_with_diff_size_when_no_findings() {
+    // Cohort feedback (3 agents across 2 runs): a real diff that
+    // cleared every sensor was visually identical to "mmk silently
+    // failed" — text mode rendered nothing, the agent re-ran the
+    // command. The diff-bearing clean-state line names file count,
+    // total LOC churn, and HEAD baseline so the silence is read as
+    // a positive verdict, not a missing-data state.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    build_coupling_fixture(dir.path(), now);
+
+    // core/c.rs has 1 prior commit (sidecar in the fixture), no
+    // COUPLING partner, and falls outside top-1. With `top = 1` only
+    // core/a.rs is the hotspot — editing core/c.rs produces zero
+    // findings while still being a non-empty diff.
+    write(dir.path(), "core/c.rs", "c1\nc2\n");
+
+    let mut args = review_args();
+    args.top = 1;
+    let (stdout, _) = run_in(dir.path(), args);
+    let text = String::from_utf8(stdout).unwrap();
+    let trimmed = text.trim_end_matches('\n');
+    assert_eq!(
+        trimmed.lines().count(),
+        1,
+        "diff-with-no-findings must produce exactly one stdout line; got: {text:?}"
+    );
+    assert!(
+        trimmed.starts_with("[no actionable signal] no findings ("),
+        "expected canonical prefix; got: {text:?}"
+    );
+    assert!(
+        trimmed.contains("1 file, +"),
+        "expected diff size to surface (file count + LOC); got: {text:?}"
+    );
+    assert!(
+        trimmed.contains("vs HEAD "),
+        "expected `vs HEAD <sha>` clause; got: {text:?}"
     );
 }
 
@@ -1293,6 +1345,166 @@ fn complexity_fires_for_newly_added_over_cap_function() {
         complexity_on_newbig,
         "COMPLEXITY must fire on a newly-added over-cap function; got: {:?}",
         v["findings"]
+    );
+}
+
+#[serial(cwd)]
+#[test]
+fn complexity_head_baseline_qualifies_function_by_class() {
+    // Regression: pre-v0.9 the HEAD-baseline filter matched
+    // FunctionFact entries by bare `name`, so a file with two classes
+    // each containing a `constructor` collided. The first match in
+    // AST order won — concretely, an agent that *shrank* the second
+    // class's constructor still saw COMPLEXITY fire on the *first*
+    // class's constructor with a "+N vs HEAD" delta computed against
+    // the wrong baseline. The fix qualifies FunctionFact identity by
+    // enclosing class (`Inner::constructor` vs `Outer::constructor`).
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+
+    // HEAD: Outer::constructor 10 LOC (under cap); Inner::constructor
+    // 100 LOC (well over default loc_absolute_max=80).
+    let mut head = String::from("export class Outer {\n  constructor() {\n");
+    for i in 0..6 {
+        use std::fmt::Write as _;
+        writeln!(head, "    const o{i} = {i};").unwrap();
+    }
+    head.push_str("  }\n}\n\nexport class Inner {\n  constructor() {\n");
+    for i in 0..96 {
+        use std::fmt::Write as _;
+        writeln!(head, "    const i{i} = {i};").unwrap();
+    }
+    head.push_str("  }\n}\n");
+    write(dir.path(), "src/two-class.ts", &head);
+    write(
+        dir.path(),
+        "src/sibling.ts",
+        "export function smallSibling() { return 1; }\n",
+    );
+    commit_all(dir.path(), "seed", now - 5 * DAY);
+
+    // Working tree: shrink Inner::constructor from 100 → 90 LOC.
+    // Still over the 80-LOC cap (so the absolute gate would fire),
+    // but strictly *smaller* than HEAD.
+    let mut working = String::from("export class Outer {\n  constructor() {\n");
+    for i in 0..6 {
+        use std::fmt::Write as _;
+        writeln!(working, "    const o{i} = {i};").unwrap();
+    }
+    working.push_str("  }\n}\n\nexport class Inner {\n  constructor() {\n");
+    for i in 0..86 {
+        use std::fmt::Write as _;
+        writeln!(working, "    const i{i} = {i};").unwrap();
+    }
+    working.push_str("  }\n}\n");
+    write(dir.path(), "src/two-class.ts", &working);
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    // Pre-fix: bare-name find() returned Outer::constructor (10 LOC).
+    // The filter saw 90 > 10 → kept the finding with `head_actual=10`,
+    // and the prose rendered "+80 vs HEAD" against Outer's baseline —
+    // wrong function attribution.
+    //
+    // Post-fix: qualified match on Inner::constructor (100). Working
+    // tree's 90 < 100 → strict-worsening filter suppresses the
+    // finding. The "+N vs HEAD" misattribution is *structurally*
+    // unreachable.
+    let constructor_findings: Vec<String> = v["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .filter(|f| {
+            f["layer"] == "complexity"
+                && f["message"].as_str().unwrap_or("").contains("constructor")
+        })
+        .map(|f| f["message"].as_str().unwrap_or("").to_string())
+        .collect();
+    assert!(
+        constructor_findings.is_empty(),
+        "Inner::constructor shrank vs HEAD; HEAD-baseline filter must \
+         match by qualified function identity and suppress the finding. \
+         Got: {constructor_findings:?}"
+    );
+}
+
+#[serial(cwd)]
+#[test]
+fn complexity_head_baseline_delta_uses_qualified_baseline() {
+    // Sibling assertion to the suppression test: when the agent
+    // grows the second class's constructor, the rendered
+    // "+N vs HEAD" delta must be computed against *that* class's
+    // HEAD baseline — not the first class's collision-named partner.
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+
+    // HEAD: Outer::constructor 10 LOC, Inner::constructor 100 LOC.
+    let mut head = String::from("export class Outer {\n  constructor() {\n");
+    for i in 0..6 {
+        use std::fmt::Write as _;
+        writeln!(head, "    const o{i} = {i};").unwrap();
+    }
+    head.push_str("  }\n}\n\nexport class Inner {\n  constructor() {\n");
+    for i in 0..96 {
+        use std::fmt::Write as _;
+        writeln!(head, "    const i{i} = {i};").unwrap();
+    }
+    head.push_str("  }\n}\n");
+    write(dir.path(), "src/two-class.ts", &head);
+    write(
+        dir.path(),
+        "src/sibling.ts",
+        "export function smallSibling() { return 1; }\n",
+    );
+    commit_all(dir.path(), "seed", now - 5 * DAY);
+
+    // Working tree: grow Inner::constructor from 100 → 115 LOC (+15).
+    let mut working = String::from("export class Outer {\n  constructor() {\n");
+    for i in 0..6 {
+        use std::fmt::Write as _;
+        writeln!(working, "    const o{i} = {i};").unwrap();
+    }
+    working.push_str("  }\n}\n\nexport class Inner {\n  constructor() {\n");
+    for i in 0..111 {
+        use std::fmt::Write as _;
+        writeln!(working, "    const i{i} = {i};").unwrap();
+    }
+    working.push_str("  }\n}\n");
+    write(dir.path(), "src/two-class.ts", &working);
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let inner_msgs: Vec<String> = v["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .filter(|f| {
+            f["layer"] == "complexity"
+                && f["message"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("Inner::constructor")
+        })
+        .map(|f| f["message"].as_str().unwrap_or("").to_string())
+        .collect();
+    assert_eq!(
+        inner_msgs.len(),
+        1,
+        "exactly one COMPLEXITY finding on Inner::constructor; got: {inner_msgs:?}"
+    );
+    assert!(
+        inner_msgs[0].contains("(+15 vs HEAD)"),
+        "delta must be computed against Inner::constructor's HEAD \
+         baseline (100), not Outer::constructor's (10). Got: {}",
+        inner_msgs[0]
     );
 }
 

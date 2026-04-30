@@ -195,10 +195,19 @@ pub fn coupling_findings_with_signal(
                 &p.partner,
                 p.co_change_count,
                 input.n,
+                p.wilson_lower_95,
+                input.cfg.min_sample_size,
+                input.cfg.confidence_threshold,
             ),
-            CouplingProse::PreEditExpected => {
-                messages::coupling_pre_edit(input.subject, &p.partner, p.co_change_count, input.n)
-            }
+            CouplingProse::PreEditExpected => messages::coupling_pre_edit(
+                input.subject,
+                &p.partner,
+                p.co_change_count,
+                input.n,
+                p.wilson_lower_95,
+                input.cfg.min_sample_size,
+                input.cfg.confidence_threshold,
+            ),
         };
         let signal = MonotonicSignal {
             key: format!(

@@ -22,6 +22,7 @@ use serde::Serialize;
 use std::io::Write;
 
 use crate::output::findings::{render_text, Finding, Severity};
+use crate::output::messages::EmptyDiffSummary;
 
 /// `--gate warn` + Warn finding present → block message Claude Code
 /// will surface as a yield to the agent.
@@ -77,6 +78,11 @@ fn body_for_findings(findings: &[Finding]) -> String {
 /// Hook-shape output for `PreToolUse`. Always non-blocking: the
 /// `additionalContext` channel injects the finding body into the
 /// agent's next turn without forcing a yield.
+///
+/// Pre-edit has no working-tree diff yet, so the empty-findings
+/// systemMessage carries no diff size — callers always pass
+/// `diff_summary: None` here. The signature parallels
+/// [`write_post_tool_use`] for consistency.
 pub fn write_pre_tool_use<W: Write>(
     w: &mut W,
     findings: &[Finding],
@@ -87,7 +93,14 @@ pub fn write_pre_tool_use<W: Write>(
     let (additional_context, system_message) = if suppressed {
         (None, Some(dedup_message(head_sha)))
     } else if body.is_empty() {
-        (None, Some("mmk: no findings".to_owned()))
+        let line = head_sha.map_or_else(
+            || "[no actionable signal] no findings".to_owned(),
+            |sha| {
+                let short = if sha.len() >= 7 { &sha[..7] } else { sha };
+                crate::output::messages::empty_review_line(short, None)
+            },
+        );
+        (None, Some(line))
     } else {
         (Some(body), None)
     };
@@ -109,12 +122,20 @@ pub fn write_pre_tool_use<W: Write>(
 /// `--gate warn` and at least one Warn-severity finding fired —
 /// that's the strategic choice Claude Code's hook contract
 /// surfaces as a hard yield.
+///
+/// `diff_summary` shapes the empty-findings systemMessage: `None`
+/// renders the clean-tree form `[no actionable signal] no findings
+/// (HEAD <sha7>)`; `Some` renders the diff-bearing form
+/// `[no actionable signal] no findings (N file[s], +M LOC vs HEAD
+/// <sha7>)`. `mmk review` callers pass `Some` whenever a real diff
+/// produced zero findings; pre-edit always passes `None`.
 pub fn write_post_tool_use<W: Write>(
     w: &mut W,
     event_name: &str,
     findings: &[Finding],
     suppressed: bool,
     head_sha: Option<&str>,
+    diff_summary: Option<EmptyDiffSummary>,
     block_on_warn: bool,
 ) -> Result<()> {
     let body = body_for_findings(findings);
@@ -125,7 +146,14 @@ pub fn write_post_tool_use<W: Write>(
     let (additional_context, system_message, decision, reason) = if suppressed {
         (None, Some(dedup_message(head_sha)), None, None)
     } else if body.is_empty() {
-        (None, Some("mmk: no findings".to_owned()), None, None)
+        let line = head_sha.map_or_else(
+            || "[no actionable signal] no findings".to_owned(),
+            |sha| {
+                let short = if sha.len() >= 7 { &sha[..7] } else { sha };
+                crate::output::messages::empty_review_line(short, diff_summary.as_ref())
+            },
+        );
+        (None, Some(line), None, None)
     } else if block_on_warn && warn_count > 0 {
         let reason_str = format!("{BLOCK_REASON_PREFIX}\n{body}");
         (None, None, Some("block"), Some(reason_str))
@@ -193,6 +221,7 @@ mod tests {
             &[warn_finding()],
             false,
             Some("abc1234"),
+            None,
             true,
         )
         .unwrap();
@@ -210,6 +239,7 @@ mod tests {
             &[warn_finding()],
             false,
             Some("abc1234"),
+            None,
             false,
         )
         .unwrap();
@@ -230,6 +260,7 @@ mod tests {
             &[info_finding()],
             false,
             Some("abc1234"),
+            None,
             true,
         )
         .unwrap();
@@ -239,5 +270,32 @@ mod tests {
             .as_str()
             .unwrap();
         assert!(ctx.contains("quiet"));
+    }
+
+    #[test]
+    fn post_tool_use_empty_findings_with_diff_summary_includes_size() {
+        // The "diff produced zero findings" case carries a diff
+        // summary so the agent can see *what* was reviewed when
+        // nothing surfaced.
+        let mut buf = Vec::new();
+        write_post_tool_use(
+            &mut buf,
+            "PostToolUse",
+            &[],
+            false,
+            Some("4bb7928abc"),
+            Some(EmptyDiffSummary {
+                file_count: 1,
+                loc: 34,
+            }),
+            false,
+        )
+        .unwrap();
+        let v: Value = serde_json::from_slice(&buf).unwrap();
+        let msg = v["systemMessage"].as_str().unwrap();
+        assert!(
+            msg.contains("1 file") && msg.contains("+34 LOC") && msg.contains("HEAD 4bb7928"),
+            "expected diff-bearing clean-state line; got: {msg}"
+        );
     }
 }

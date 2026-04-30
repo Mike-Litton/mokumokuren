@@ -16,31 +16,95 @@
 
 use std::path::Path;
 
-/// `<subject> edited; <partner> co-edited K of N prior commits, not in diff`
+/// Canonical prefix on every "designed quiet case, not uncertainty" surface.
+///
+/// v0.8 scattered six distinct wordings ("no signal", "new file",
+/// "history priors don't apply", "session contains 0 commits", …) —
+/// agents in calibration variously misread these as "the sensor
+/// failed" or "I need to re-run." Pinning a single scannable prefix
+/// lets the agent read all six as the same outcome shape; the
+/// per-case detail follows the prefix unchanged.
+///
+/// Trailing space is intentional — every consumer composes
+/// `{NO_SIGNAL_PREFIX}{reason}`.
+pub const NO_SIGNAL_PREFIX: &str = "[no actionable signal] ";
+
+/// `<subject> edited; <partner> co-edited K of N prior commits, not in diff[ [low-confidence n=N]]`
 ///
 /// The review-mode COUPLING body. Names the partner that *exists* and
 /// is *not* in the diff — the reader infers the implication.
+///
+/// `wilson_lower` and the cfg pair are read by [`coupling_confidence_suffix`]
+/// to append a `[low-confidence n=N]` suffix on fires that gated through
+/// near the floor; high-confidence fires read clean (no suffix).
 #[must_use]
-pub fn coupling_review_missed(subject: &Path, partner: &Path, k: u32, n: u32) -> String {
+pub fn coupling_review_missed(
+    subject: &Path,
+    partner: &Path,
+    k: u32,
+    n: u32,
+    wilson_lower: f64,
+    min_sample_size: u32,
+    confidence_threshold: f64,
+) -> String {
+    let suffix = coupling_confidence_suffix(n, wilson_lower, min_sample_size, confidence_threshold);
     format!(
-        "{} edited; {} co-edited {k} of {n} prior commits, not in diff",
+        "{} edited; {} co-edited {k} of {n} prior commits, not in diff{suffix}",
         subject.display(),
         partner.display(),
     )
 }
 
-/// `<subject> co-edited with <partner> in K of N prior commits`
+/// `<subject> co-edited with <partner> in K of N prior commits[ [low-confidence n=N]]`
 ///
 /// The pre-edit COUPLING body. Pre-edit fires before any change, so
 /// the wording states the historical fact without implying a missed
-/// edit.
+/// edit. Same low-confidence suffix logic as [`coupling_review_missed`].
 #[must_use]
-pub fn coupling_pre_edit(subject: &Path, partner: &Path, k: u32, n: u32) -> String {
+pub fn coupling_pre_edit(
+    subject: &Path,
+    partner: &Path,
+    k: u32,
+    n: u32,
+    wilson_lower: f64,
+    min_sample_size: u32,
+    confidence_threshold: f64,
+) -> String {
+    let suffix = coupling_confidence_suffix(n, wilson_lower, min_sample_size, confidence_threshold);
     format!(
-        "{} co-edited with {} in {k} of {n} prior commits",
+        "{} co-edited with {} in {k} of {n} prior commits{suffix}",
         subject.display(),
         partner.display(),
     )
+}
+
+/// Two-tier COUPLING confidence: low-confidence band gets an explicit
+/// `[low-confidence n=N]` suffix; everything above stays silent so the
+/// agent reads silence as "high confidence." Two tiers (not three)
+/// keep the surface scannable — three-tier (low/medium/strong) was
+/// considered and rejected as over-fitting to one experiment.
+///
+/// A fire is "low-confidence" when:
+/// - `n` is at the floor (`≤ min_sample_size + 1`), or
+/// - `wilson_lower` sits in the band `[confidence_threshold,
+///   2 × confidence_threshold)` — i.e. it cleared the gate but is
+///   closest to it.
+///
+/// Both branches catch the case the cohort flagged: a fire that
+/// gated through but where the agent shouldn't override silently.
+fn coupling_confidence_suffix(
+    n: u32,
+    wilson_lower: f64,
+    min_sample_size: u32,
+    confidence_threshold: f64,
+) -> String {
+    let small_sample = n <= min_sample_size + 1;
+    let near_threshold = wilson_lower < 2.0 * confidence_threshold;
+    if small_sample || near_threshold {
+        format!(" [low-confidence n={n}]")
+    } else {
+        String::new()
+    }
 }
 
 /// `<path>: rank #R of top-T`
@@ -219,17 +283,10 @@ pub fn health_broad_exception(subject: &Path, delta: u32) -> String {
 /// the first case and dangerous in the second. `present_in_head`
 /// disambiguates so the wording matches the actual state.
 ///
-/// Three messages:
-/// - `<path>: new file (not yet in HEAD)` — file absent from HEAD
-///   tree, nothing to score. The truly-new case.
-/// - `<path>: present in HEAD but no analyzable history (file may
-///   be stale or prior touches were filtered as bulk commits)` —
-///   file exists, history exists, but nothing in the window
-///   survived analysis. The agent should not read this as "no
-///   risk" — they should fall back to git log if the change is
-///   substantive.
-/// - `<path>: no signal (N commits in W-day window[, rank #R])` —
-///   the standard "too little history to fire COUPLING" case.
+/// Three messages — all share the canonical [`NO_SIGNAL_PREFIX`]:
+/// - `[no actionable signal] <path>: new file (not yet in HEAD)`
+/// - `[no actionable signal] <path>: present in HEAD but no analyzable history (file may be stale or prior touches were filtered as bulk commits)`
+/// - `[no actionable signal] <path>: N commits in W-day window[, rank #R]`
 #[must_use]
 pub fn quiet_file(
     path: &Path,
@@ -241,21 +298,24 @@ pub fn quiet_file(
     if n_commits == 0 {
         if present_in_head {
             return format!(
-                "{}: present in HEAD but no analyzable history \
+                "{NO_SIGNAL_PREFIX}{}: present in HEAD but no analyzable history \
                  (file may be stale or prior touches were filtered as bulk commits)",
                 path.display()
             );
         }
-        return format!("{}: new file (not yet in HEAD)", path.display());
+        return format!(
+            "{NO_SIGNAL_PREFIX}{}: new file (not yet in HEAD)",
+            path.display()
+        );
     }
     let rank_clause = rank.map_or_else(String::new, |r| format!(", rank #{r}"));
     format!(
-        "{}: no signal ({n_commits} commits in {window_days}-day window{rank_clause})",
+        "{NO_SIGNAL_PREFIX}{}: {n_commits} commits in {window_days}-day window{rank_clause}",
         path.display(),
     )
 }
 
-/// `diff is K of N new files; history priors don't apply`
+/// `[no actionable signal] diff is K of N new files; history priors don't apply (greenfield)`
 ///
 /// Emitted when the working-tree diff is mostly greenfield — the
 /// HOTSPOT/COUPLING/DRIFT layers structurally have nothing to say
@@ -264,7 +324,48 @@ pub fn quiet_file(
 /// guess whether mmk just decided to be quiet.
 #[must_use]
 pub fn greenfield_signal(new_count: usize, total: usize) -> String {
-    format!("diff is {new_count} of {total} new files; history priors don't apply")
+    format!(
+        "{NO_SIGNAL_PREFIX}diff is {new_count} of {total} new files; \
+         history priors don't apply (greenfield)"
+    )
+}
+
+/// Diff-size summary attached to a "no findings" review surface.
+///
+/// `loc` is the total churn (`added + deleted`) across the diff —
+/// matches the same accounting BUDGET uses, so the two surfaces stay
+/// numerically consistent. The `+N LOC` rendering reads naturally
+/// for the dominant additive case and stays unambiguous on rewrites.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmptyDiffSummary {
+    pub file_count: u32,
+    pub loc: u32,
+}
+
+/// `[no actionable signal] no findings (HEAD <sha7>)` on a clean tree;
+/// `[no actionable signal] no findings (N file[s], +M LOC vs HEAD <sha7>)`
+/// when a real diff produced zero findings.
+///
+/// v0.8's text mode silently emitted nothing on either case — agents
+/// across multiple cohort runs read silence as "did mmk run? did it
+/// see my edits? did the gate fail open?" The diff-bearing form
+/// closes that ambiguity: the agent sees mmk *did* see N files and
+/// M lines, computed against a specific HEAD, and chose to surface
+/// nothing. The sha7 matches the one already on hook-mode
+/// `systemMessage` (`hook_json::dedup_message`) so the two surfaces
+/// stay convergent.
+#[must_use]
+pub fn empty_review_line(sha7: &str, diff: Option<&EmptyDiffSummary>) -> String {
+    diff.map_or_else(
+        || format!("{NO_SIGNAL_PREFIX}no findings (HEAD {sha7})"),
+        |d| {
+            let plural = if d.file_count == 1 { "" } else { "s" };
+            format!(
+                "{NO_SIGNAL_PREFIX}no findings ({} file{plural}, +{} LOC vs HEAD {sha7})",
+                d.file_count, d.loc,
+            )
+        },
+    )
 }
 
 /// COHESION indicator: tangled-diff fingerprint.
@@ -327,10 +428,13 @@ pub fn session_overrun(session_lines: u64, session_n: u32, budget: u64) -> Strin
 /// `--base HEAD` or a fresh branch with no commits since base).
 /// Without it the agent reads "0 files" as silent failure; with it
 /// they're pointed at the right subcommand for uncommitted work.
+/// Carries the canonical [`NO_SIGNAL_PREFIX`] so the agent reads it
+/// alongside the other fall-throughs as a designed quiet case, not
+/// a missing-data state.
 #[must_use]
 pub const fn session_empty_nudge() -> &'static str {
-    "session contains 0 commits since the resolved base; for uncommitted \
-     working-tree review, use `mmk review` instead"
+    "[no actionable signal] session contains 0 commits since the resolved base; \
+     for uncommitted working-tree review, use `mmk review` instead"
 }
 
 /// Empty-session window-suppression line.

@@ -1,0 +1,5 @@
+---
+source: mmk-cli/tests/messages.rs
+expression: s
+---
+[no actionable signal] no findings (HEAD abc1234)

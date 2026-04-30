@@ -1,0 +1,5 @@
+---
+source: mmk-cli/tests/messages.rs
+expression: s
+---
+[no actionable signal] no findings (1 file, +34 LOC vs HEAD 4bb7928)

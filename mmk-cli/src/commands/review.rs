@@ -31,7 +31,7 @@ use crate::commands::common::{
 };
 use crate::hook::HookEnvelope;
 use crate::output::findings::{render_text, Finding, Layer, Severity};
-use crate::output::messages;
+use crate::output::messages::{self, EmptyDiffSummary};
 use crate::Verdict;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,11 +94,19 @@ pub fn run<O: Write, E: Write>(
 
     let changed = collect_diff(&cwd, mode, args, &cfg.ignores)?;
 
-    // Clean tree / no-op range: text mode says nothing, JSON mode
-    // emits the envelope with empty findings so harnesses can still
-    // parse a stable shape.
+    // Clean tree / no-op range: emit a one-line "no findings" surface
+    // so each format mode reads as positive confirmation that mmk ran.
+    // v0.8 text mode silently emitted nothing — agents read that as
+    // "did the binary run?" The HEAD sha (when available — `None` on
+    // unborn repos) is threaded through so the line names *which*
+    // baseline the all-clear was computed against; same 7-char form
+    // hook mode already used for dedup-suppress messages.
     if changed.is_empty() {
-        emit_empty(args, envelope, mode, stdout)?;
+        let head_sha = mmk_git::RepoWalker::open(&cwd)
+            .ok()
+            .and_then(|w| w.head_sha_and_time().ok().flatten())
+            .map(|(sha, _)| sha);
+        emit_empty(args, envelope, mode, head_sha.as_deref(), None, stdout)?;
         return Ok(Verdict::Ok);
     }
 
@@ -368,6 +376,18 @@ pub fn run<O: Write, E: Write>(
         return Ok(verdict_for(args.gate, &findings));
     }
 
+    // Diff-with-zero-findings surface: when the analyzer ran but
+    // surfaced nothing, name the diff that was reviewed. Hook mode
+    // and text mode both carry the line; JSON's findings array is
+    // already self-describing for harnesses. `None` for `diff_summary`
+    // when findings are present — the helper only renders the
+    // clean-state line on the empty-findings branch.
+    let diff_summary = if !suppressed && findings.is_empty() {
+        Some(summarize_diff(&changed))
+    } else {
+        None
+    };
+
     if let Some(env) = envelope_for_hook(envelope) {
         crate::output::hook_json::write_post_tool_use(
             stdout,
@@ -375,13 +395,31 @@ pub fn run<O: Write, E: Write>(
             if suppressed { &[] } else { &findings },
             suppressed,
             analysis.head_sha.as_deref(),
+            diff_summary,
             matches!(args.gate, Gate::Warn),
         )?;
         return Ok(verdict_for(args.gate, &findings));
     }
 
     match args.format {
-        Format::Text => render_text(stdout, &findings)?,
+        Format::Text => {
+            if findings.is_empty() {
+                let short = analysis.head_sha.as_deref().map_or("unborn", |sha| {
+                    if sha.len() >= 7 {
+                        &sha[..7]
+                    } else {
+                        sha
+                    }
+                });
+                writeln!(
+                    stdout,
+                    "{}",
+                    messages::empty_review_line(short, diff_summary.as_ref())
+                )?;
+            } else {
+                render_text(stdout, &findings)?;
+            }
+        }
         Format::Json => crate::output::json::write_review(
             stdout,
             mode,
@@ -514,10 +552,27 @@ fn maybe_suppress_review(
     None
 }
 
+/// Sum total diff churn (added + deleted) across `changed` for the
+/// `EmptyDiffSummary` rendering. Saturating arithmetic — a u64
+/// overflow on a single review would itself be a finding.
+fn summarize_diff(changed: &[ChangedFile]) -> EmptyDiffSummary {
+    let file_count = u32::try_from(changed.len()).unwrap_or(u32::MAX);
+    let total: u64 = changed
+        .iter()
+        .map(|c| c.added.saturating_add(c.deleted))
+        .fold(0u64, u64::saturating_add);
+    EmptyDiffSummary {
+        file_count,
+        loc: u32::try_from(total).unwrap_or(u32::MAX),
+    }
+}
+
 fn emit_empty<O: Write>(
     args: &ReviewArgs,
     envelope: Option<&HookEnvelope>,
     mode: ReviewMode,
+    head_sha: Option<&str>,
+    diff_summary: Option<EmptyDiffSummary>,
     stdout: &mut O,
 ) -> Result<()> {
     if let Some(env) = envelope_for_hook(envelope) {
@@ -526,12 +581,29 @@ fn emit_empty<O: Write>(
             &env.hook_event_name,
             &[],
             false,
-            None,
+            head_sha,
+            diff_summary,
             matches!(args.gate, Gate::Warn),
         );
     }
     match args.format {
-        Format::Text => Ok(()),
+        Format::Text => {
+            // v0.9: text mode prints exactly one canonical line on a
+            // clean tree or on a diff that produced zero findings
+            // (was silent in v0.8 in both cases). The diff-bearing
+            // form names *what* mmk reviewed when nothing surfaced
+            // so an agent can't read silence as "did mmk run? did
+            // the gate fail open?" Wording converges with hook
+            // mode's `systemMessage`.
+            let short =
+                head_sha.map_or("unborn", |sha| if sha.len() >= 7 { &sha[..7] } else { sha });
+            writeln!(
+                stdout,
+                "{}",
+                crate::output::messages::empty_review_line(short, diff_summary.as_ref())
+            )?;
+            Ok(())
+        }
         Format::Json => crate::output::json::write_review_empty(stdout, mode),
     }
 }
@@ -554,6 +626,9 @@ fn emit_bulk<O: Write>(
             &env.hook_event_name,
             findings,
             false,
+            None,
+            // Bulk path always carries BUDGET findings — never empty
+            // — so the systemMessage diff-summary branch is unused.
             None,
             matches!(args.gate, Gate::Warn),
         )?;
@@ -1218,14 +1293,23 @@ fn patterns_for_subject(
 /// - newly-added functions (no matching name at HEAD),
 /// - functions whose metric strictly worsened vs. HEAD.
 ///
-/// Function-name matching is by literal string equality on
-/// `FunctionFact.name`. Known weakness: a rename (`parse` →
-/// `parseV4`) leaves the working-tree function with no HEAD match,
-/// so it fires as if it were newly added — even though the body is
-/// structurally identical. This false-fire is acceptable because
-/// renames are rare in feature work and the resulting finding is
-/// still factually true (the renamed function *is* over the cap);
-/// the cost is one extra Warn per rename. A tighter check would
+/// Function identity is compared by `FunctionFact.qualified_name`
+/// (`ClassName::methodName` for methods; bare name for top-level
+/// functions). v0.8 used `FunctionFact.name` and silently
+/// cross-attributed methods that shared a bare name across classes
+/// in one file (`constructor`, `dispose`, `init`, …) — the first
+/// AST match won, so an agent shrinking `Inner::constructor` could
+/// see COMPLEXITY fire on the same file with `+N vs HEAD` computed
+/// against `Outer::constructor`'s baseline. v0.9's qualified-name
+/// match closes that off.
+///
+/// Known weakness: a rename (`parse` → `parseV4`) still leaves the
+/// working-tree function with no HEAD match, so it fires as if it
+/// were newly added — even though the body is structurally
+/// identical. This false-fire is acceptable because renames are
+/// rare in feature work and the resulting finding is still
+/// factually true (the renamed function *is* over the cap); the
+/// cost is one extra Warn per rename. A tighter check would
 /// require structural matching across renames, which costs more
 /// than the false-fire it prevents.
 ///
@@ -1249,7 +1333,11 @@ fn filter_complexity_by_head_baseline(
     findings
         .into_iter()
         .filter_map(|mut f| {
-            let Some(hf) = head_facts.functions.iter().find(|hf| hf.name == f.function) else {
+            let Some(hf) = head_facts
+                .functions
+                .iter()
+                .find(|hf| hf.qualified_name == f.function)
+            else {
                 // Newly-added function: fire (no HEAD baseline to
                 // populate; head_actual stays None).
                 return Some(f);

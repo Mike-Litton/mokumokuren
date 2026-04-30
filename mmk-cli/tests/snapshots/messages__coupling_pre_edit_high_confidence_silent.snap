@@ -1,0 +1,5 @@
+---
+source: mmk-cli/tests/messages.rs
+expression: s
+---
+core/a.rs co-edited with core/b.rs in 80 of 100 prior commits

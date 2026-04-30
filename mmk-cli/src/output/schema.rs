@@ -1,9 +1,25 @@
 //! Stable JSON schema version.
 //!
-//! Tracks the `mmk` minor release: every `0.8.x` build emits
-//! `0.8.0`. Additive changes (new optional fields, new top-level
+//! Tracks the `mmk` minor release: every `0.9.x` build emits
+//! `0.9.0`. Additive changes (new optional fields, new top-level
 //! blocks) do not bump the schema version; renames, removals, type
 //! changes, and semantic changes do.
+//!
+//! ## v0.9.0 — contract delta
+//!
+//! No JSON-shape changes. `findings[].message` content for
+//! COMPLEXITY findings now carries class-qualified function
+//! identity (`<P>::ClassName::methodName`) instead of bare names —
+//! the field is the same string field, longer string. Fall-through
+//! findings (the `quiet_file`, `greenfield_signal`,
+//! `session_empty_nudge`, and clean-state lines) all gain the
+//! canonical `[no actionable signal] ` prefix in their `message`
+//! body; the rest of the message preserves the per-case detail.
+//! COUPLING fires near the gate floor append a
+//! ` [low-confidence n=N]` suffix to `message`. Reason: agents in
+//! the v0.8 cohort variously misread the v0.8 wordings as missing
+//! data and re-ran the command; the prefix gives a single scannable
+//! token. v0.8 readers parse v0.9 output without modification.
 //!
 //! ## v0.8.0 — contract delta
 //!
@@ -184,4 +200,4 @@
 //! than the crate version, which they should treat as diagnostic
 //! only.
 
-pub const SCHEMA_VERSION: &str = "0.8.0";
+pub const SCHEMA_VERSION: &str = "0.9.0";

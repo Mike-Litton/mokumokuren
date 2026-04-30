@@ -6,7 +6,7 @@ JSON object whose shape is documented here. The
 against; `crate_version` is the Cargo version of the producing build
 and is diagnostic only.
 
-Subcommands at v0.8.0:
+Subcommands at v0.9.0:
 
 - `mmk analyze` — ranked hotspots over a window.
 - `mmk session-summary` (alias: `mmk session`) — window + session
@@ -40,8 +40,38 @@ envelope on stdin, it switches to a hook-shape output envelope
 
 ## Stability contract
 
-`schema_version` tracks the `mmk` minor release: every `0.8.x` build
-emits `0.8.0`.
+`schema_version` tracks the `mmk` minor release: every `0.9.x` build
+emits `0.9.0`.
+
+### v0.9.0 — content-shape changes inside string fields
+
+v0.9 introduces no JSON shape changes. Two `findings[].message`
+content shifts are worth calling out for harnesses that parse the
+prose:
+
+- **COMPLEXITY findings carry class-qualified function identity.**
+  v0.8 emitted `<P>::methodName`; v0.9 emits
+  `<P>::ClassName::methodName` for methods inside a class
+  declaration or class expression. Top-level function declarations
+  still render as `<P>::functionName`. Reason: the v0.8 HEAD-baseline
+  filter cross-attributed methods that shared a bare name across
+  classes in the same file (`constructor`, `dispose`, `init`, …); the
+  qualified rendering disambiguates and the underlying matcher is
+  qualified, too.
+- **Fall-through findings carry the canonical `[no actionable
+  signal] ` prefix.** Six v0.8 wordings ("no signal", "new file",
+  "history priors don't apply", "session contains 0 commits",
+  "present in HEAD but no analyzable history", "mmk: no findings")
+  now compose `[no actionable signal] {reason}` so an agent can scan
+  for one prefix instead of six. The reason follows after the prefix
+  unchanged.
+- **COUPLING fires near the gate floor append `
+  [low-confidence n=N]`.** Triggered when `n ≤ min_sample_size + 1`
+  or `wilson_lower_95 < 2 × confidence_threshold`; high-confidence
+  fires are silent. Two-tier surface: any suffix is the canonical
+  low-confidence form; no other tier wording exists.
+
+v0.8 readers parse v0.9 output without modification.
 
 | Change kind                                             | Schema bump? |
 | ------------------------------------------------------- | :----------: |
@@ -59,7 +89,7 @@ and ignore them rather than fail.
 
 | Field            | Type    | Notes                                                                                |
 | ---------------- | ------- | ------------------------------------------------------------------------------------ |
-| `schema_version` | string  | Pinned to the `mmk` minor (`"0.8.0"`).                                               |
+| `schema_version` | string  | Pinned to the `mmk` minor (`"0.9.0"`).                                               |
 | `crate_version`  | string  | `CARGO_PKG_VERSION` of the producing build. Diagnostic only — do not pin against.    |
 | `repo`           | object  | HEAD metadata + repo-level warnings.                                                 |
 | `config`         | object  | Effective `Config` after merging file + CLI sources.                                 |
@@ -197,7 +227,7 @@ before any commit lands.
 
 | Field            | Type    | Notes                                                                                  |
 | ---------------- | ------- | -------------------------------------------------------------------------------------- |
-| `schema_version` | string  | `"0.8.0"`.                                                                             |
+| `schema_version` | string  | `"0.9.0"`.                                                                             |
 | `crate_version`  | string  |                                                                                        |
 | `repo`           | object  | Same as analyze. Present only when there are changes (clean tree skips analyze).       |
 | `config`         | object  | Same as analyze. Present only when there are changes.                                  |
@@ -231,7 +261,7 @@ and *why* (since v0.6) so silence on HOTSPOT/COUPLING reads as
 
 | Field            | Type    | Notes                                                            |
 | ---------------- | ------- | ---------------------------------------------------------------- |
-| `schema_version` | string  | `"0.8.0"`.                                                       |
+| `schema_version` | string  | `"0.9.0"`.                                                       |
 | `crate_version`  | string  |                                                                  |
 | `review`         | object  | `mode` + per-file diff numstat.                                  |
 | `findings`       | array   | One BUDGET finding plus any STRUCTURE / COMPLEXITY findings on the changed paths; HOTSPOT/COUPLING skipped. |
@@ -248,7 +278,7 @@ queried path.
 
 | Field            | Type    | Notes                                                                                  |
 | ---------------- | ------- | -------------------------------------------------------------------------------------- |
-| `schema_version` | string  | `"0.8.0"`.                                                                             |
+| `schema_version` | string  | `"0.9.0"`.                                                                             |
 | `crate_version`  | string  |                                                                                        |
 | `repo`           | object  |                                                                                        |
 | `config`         | object  |                                                                                        |
@@ -282,7 +312,7 @@ K snapshot labels + the climb-majority findings.
 
 | Field                       | Type     | Notes                                                                          |
 | --------------------------- | -------- | ------------------------------------------------------------------------------ |
-| `schema_version`            | string   | `"0.8.0"`.                                                                     |
+| `schema_version`            | string   | `"0.9.0"`.                                                                     |
 | `crate_version`             | string   |                                                                                |
 | `drift.base`                | string?  | Echo of `--base`.                                                              |
 | `drift.sessions`            | uint     | Echo of `--sessions K`.                                                        |

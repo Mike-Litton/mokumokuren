@@ -6,6 +6,48 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-04-29
+
+Calibration II: tighten attribution, surface confidence, harmonize
+silence. No new sensors.
+
+### Changed
+
+- **COMPLEXITY HEAD baseline matches by qualified function identity.**
+  `FunctionFact` carries a new `qualified_name` field
+  (`ClassName::methodName` for methods inside a class declaration or
+  expression; bare `functionName` at top level). The `mmk review`
+  HEAD-baseline filter now matches by `qualified_name`, closing off
+  the v0.8 cross-class collision where the first AST match by bare
+  name (`constructor`, `dispose`, `init`, …) won. The user-visible
+  `<P>::<fn>` rendering now reads `<P>::Inner::constructor` for
+  methods, identifying both the file and the enclosing class.
+- **COUPLING confidence inline on prose.** `coupling_review_missed` /
+  `coupling_pre_edit` append ` [low-confidence n=N]` when the fire
+  cleared the gate near the floor (`n ≤ min_sample_size + 1` or
+  `wilson_lower_95 < 2 × confidence_threshold`). High-confidence
+  fires render silently — the suffix is the override-discipline
+  signal, not a tier label.
+- **Manual `mmk review` text mode prints one canonical clean-state
+  line.** `[no actionable signal] no findings (HEAD <sha7>)` on a
+  clean working tree (was silent in v0.8). Hook mode and JSON
+  envelopes already carried equivalent surfaces; text mode converges.
+- **Canonical `[no actionable signal] ` prefix on every fall-through.**
+  Six distinct v0.8 wordings ("no signal", "new file", "history
+  priors don't apply", "session contains 0 commits", "mmk: no
+  findings", "present in HEAD but no analyzable history") all gain
+  the same prefix. The reason follows after the prefix unchanged.
+
+### Schema
+
+`schema_version` → `0.9.0`. No JSON shape changes:
+`ComplexityFinding.function` field shape is unchanged but its
+content shifts from bare-name to qualified-name strings; v0.8
+readers iterating findings see longer strings, no parse breakage.
+The fall-through prose and the COUPLING confidence suffix are
+text-only changes inside `findings[].message`. See
+[`docs/schema.md`](docs/schema.md).
+
 ## [0.8.0] - 2026-04-29
 
 Calibration pass: tighten existing sensors, no new ones. Driven by
@@ -456,7 +498,10 @@ ecosystem-neutral right answer.
 - 685 ms on a ~650-commit reference repo, 1.7 s on a ~3.1k-commit
   reference repo, 442 ms on a ~1.8k-commit (in-window) reference repo.
 
-[Unreleased]: https://github.com/Mike-Litton/mokumokuren/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Mike-Litton/mokumokuren/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/Mike-Litton/mokumokuren/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/Mike-Litton/mokumokuren/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/Mike-Litton/mokumokuren/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Mike-Litton/mokumokuren/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Mike-Litton/mokumokuren/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Mike-Litton/mokumokuren/compare/v0.3.0...v0.4.0

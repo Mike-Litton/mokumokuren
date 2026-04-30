@@ -15,21 +15,64 @@ use mokumokuren::output::messages as msg;
 use std::path::{Path, PathBuf};
 
 // ---- coupling_review_missed -----------------------------------------------
+//
+// Default cfg pair: min_sample_size=3, confidence_threshold=0.30. Tests
+// that name a *high-confidence* fire pass `wilson_lower=0.95` and large
+// `n`, so neither low-confidence trigger fires — the suffix stays silent.
+// Tests that exercise the suffix pass values inside the gate band.
 
 #[test]
 fn coupling_review_missed_pins_factual_wording() {
+    // n=1 is below `min_sample_size + 1` → low-confidence suffix fires.
+    // The wording-pinning test case carries the suffix because the
+    // fixture's n is small; high-confidence cases live below.
     let s = msg::coupling_review_missed(
         Path::new("src/left/index.tsx"),
         Path::new("src/-components/edge.tsx"),
         1,
         1,
+        0.10,
+        3,
+        0.30,
     );
     insta::assert_snapshot!(s);
 }
 
 #[test]
 fn coupling_review_missed_handles_large_n() {
-    let s = msg::coupling_review_missed(Path::new("core/a.rs"), Path::new("core/b.rs"), 54, 203);
+    // n=203 well past floor; wilson 0.95 well past 2×0.30 → high-conf,
+    // suffix silent.
+    let s = msg::coupling_review_missed(
+        Path::new("core/a.rs"),
+        Path::new("core/b.rs"),
+        54,
+        203,
+        0.95,
+        3,
+        0.30,
+    );
+    insta::assert_snapshot!(s);
+}
+
+#[test]
+fn coupling_review_missed_low_confidence_suffix() {
+    // Locks the rendered low-confidence suffix shape independently of
+    // the wording-pinning fixture above. n=4 just past min_sample_size
+    // floor (3+1), wilson 0.32 inside the [0.30, 0.60) band → suffix
+    // fires from the near-threshold branch.
+    let s = msg::coupling_review_missed(
+        Path::new("core/a.rs"),
+        Path::new("core/b.rs"),
+        2,
+        4,
+        0.32,
+        3,
+        0.30,
+    );
+    assert!(
+        s.ends_with("[low-confidence n=4]"),
+        "expected low-confidence suffix; got: {s}"
+    );
     insta::assert_snapshot!(s);
 }
 
@@ -37,8 +80,99 @@ fn coupling_review_missed_handles_large_n() {
 
 #[test]
 fn coupling_pre_edit_pins_factual_wording() {
-    let s = msg::coupling_pre_edit(Path::new("core/a.rs"), Path::new("core/b.rs"), 3, 5);
+    // n=5 (just past min_sample_size+1=4) and wilson 0.40 inside the
+    // [0.30, 0.60) band — pins the suffix-bearing form. (5 is *not*
+    // ≤ min_sample_size+1=4, but wilson is still in the near-threshold
+    // band, so the suffix still fires.)
+    let s = msg::coupling_pre_edit(
+        Path::new("core/a.rs"),
+        Path::new("core/b.rs"),
+        3,
+        5,
+        0.40,
+        3,
+        0.30,
+    );
     insta::assert_snapshot!(s);
+}
+
+#[test]
+fn coupling_pre_edit_high_confidence_silent() {
+    // High-confidence fire: n large, wilson well past 2×threshold.
+    // Locks the silent-suffix invariant — the prose stays clean.
+    let s = msg::coupling_pre_edit(
+        Path::new("core/a.rs"),
+        Path::new("core/b.rs"),
+        80,
+        100,
+        0.85,
+        3,
+        0.30,
+    );
+    assert!(
+        !s.contains("[low-confidence"),
+        "high-confidence fire must not render the low-confidence suffix; got: {s}"
+    );
+    insta::assert_snapshot!(s);
+}
+
+// ---- coupling confidence suffix property test -----------------------------
+
+#[test]
+fn coupling_confidence_suffix_is_silent_or_low_confidence_only() {
+    // Property: every coupling-fire renders either with no suffix OR
+    // with the canonical `[low-confidence n=N]` suffix — never with
+    // any other tier ([medium], [strong], [hi], …). Two-tier surface
+    // is the design choice; this test locks it across the parameter
+    // space so a future wording tweak can't quietly grow a third
+    // tier.
+    let min_sample_size = 3;
+    let conf = 0.30;
+    for &n in &[1u32, 3, 4, 5, 10, 50, 200] {
+        for &wilson in &[0.05_f64, 0.30, 0.45, 0.60, 0.85, 0.99] {
+            let s_review = msg::coupling_review_missed(
+                Path::new("a.ts"),
+                Path::new("b.ts"),
+                1,
+                n,
+                wilson,
+                min_sample_size,
+                conf,
+            );
+            let s_pre = msg::coupling_pre_edit(
+                Path::new("a.ts"),
+                Path::new("b.ts"),
+                1,
+                n,
+                wilson,
+                min_sample_size,
+                conf,
+            );
+            for s in [&s_review, &s_pre] {
+                if s.contains('[') {
+                    assert!(
+                        s.ends_with(&format!(" [low-confidence n={n}]")),
+                        "any suffix must be the canonical low-confidence form; got: {s}"
+                    );
+                }
+                assert!(
+                    !s.contains("[medium]") && !s.contains("[strong]") && !s.contains("[hi"),
+                    "no other tier wording allowed; got: {s}"
+                );
+            }
+            // Above the threshold-doubled band AND past the floor → suffix must be silent.
+            if n > min_sample_size + 1 && wilson >= 2.0 * conf {
+                assert!(
+                    !s_review.contains("[low-confidence"),
+                    "high-confidence + sufficient n must not render suffix; got: {s_review}"
+                );
+                assert!(
+                    !s_pre.contains("[low-confidence"),
+                    "high-confidence + sufficient n must not render suffix; got: {s_pre}"
+                );
+            }
+        }
+    }
 }
 
 // ---- hotspot --------------------------------------------------------------
@@ -405,6 +539,77 @@ fn session_budget_pins_wording() {
 fn session_overrun_pins_wording() {
     let s = msg::session_overrun(8000, 4, 8000);
     insta::assert_snapshot!(s);
+}
+
+// ---- empty_review_line / no-actionable-signal prefix property ------------
+
+#[test]
+fn empty_review_line_pins_wording() {
+    let s = msg::empty_review_line("abc1234", None);
+    insta::assert_snapshot!(s);
+}
+
+#[test]
+fn empty_review_line_with_diff_summary_includes_size() {
+    // Cohort feedback (3 agents, 2 consecutive runs): a clean
+    // review on a non-empty diff was indistinguishable in text mode
+    // from "mmk didn't run" — no findings rendered, no diff size,
+    // nothing to confirm what was reviewed. The diff-bearing form
+    // closes the ambiguity by naming the file count, churn LOC, and
+    // HEAD baseline.
+    let s = msg::empty_review_line(
+        "4bb7928",
+        Some(&msg::EmptyDiffSummary {
+            file_count: 1,
+            loc: 34,
+        }),
+    );
+    insta::assert_snapshot!(s);
+}
+
+#[test]
+fn empty_review_line_pluralizes_files() {
+    let s = msg::empty_review_line(
+        "4bb7928",
+        Some(&msg::EmptyDiffSummary {
+            file_count: 3,
+            loc: 102,
+        }),
+    );
+    assert!(s.contains("3 files"), "expected plural rendering; got: {s}");
+    insta::assert_snapshot!(s);
+}
+
+#[test]
+fn no_actionable_signal_prefix_covers_every_fall_through() {
+    // Property: every "designed quiet case, not uncertainty" surface
+    // shares the canonical [no actionable signal] prefix. A new
+    // fall-through helper added in a future version that forgets to
+    // compose with NO_SIGNAL_PREFIX falls out of this list and
+    // breaks the test.
+    let cases = vec![
+        msg::quiet_file(Path::new("a.rs"), 0, 60, None, false),
+        msg::quiet_file(Path::new("a.rs"), 0, 60, None, true),
+        msg::quiet_file(Path::new("a.rs"), 5, 60, None, true),
+        msg::quiet_file(Path::new("a.rs"), 5, 60, Some(3), true),
+        msg::greenfield_signal(3, 5),
+        msg::greenfield_signal(7, 7),
+        msg::empty_review_line("abc1234", None),
+        msg::empty_review_line(
+            "abc1234",
+            Some(&msg::EmptyDiffSummary {
+                file_count: 2,
+                loc: 50,
+            }),
+        ),
+        msg::session_empty_nudge().to_string(),
+    ];
+    for s in &cases {
+        assert!(
+            s.starts_with("[no actionable signal] "),
+            "every fall-through must carry the canonical prefix; got: {s}"
+        );
+    }
 }
 
 // ---- quiet_file with paths that happen to contain interesting substrings --
