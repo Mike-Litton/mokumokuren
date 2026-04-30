@@ -8,9 +8,9 @@
 //! at a different granularity (the live edit / the session window)
 //! without changing what the analyzer ranks.
 
-use ahash::AHashMap;
+use ahash::AHashSet;
 use mmk_config::BulkCfg;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// What an edit / session looked like, for budget evaluation.
 #[derive(Debug, Clone, Copy)]
@@ -138,42 +138,25 @@ pub fn check_diff_budget(check: &BudgetCheck, cfg: &BulkCfg) -> Vec<BudgetTrigge
     triggers
 }
 
-/// Fraction of `changed` paths that have no entry in `commits_touching`.
+/// `(count, fraction)` of `changed` paths absent from `at_head`.
 ///
-/// I.e., paths the historical analyzer has never seen. The "new"
-/// definition is *absence from the map*; an explicit zero-count entry
-/// means the file was visible to the walk but didn't churn, which is
-/// structurally different from a brand-new file.
+/// `at_head` is the set of paths present in HEAD's tree, typically
+/// from `mmk_git::paths_in_head`. A file in `changed` but not in
+/// `at_head` is genuinely new (no HEAD blob); a file present at
+/// HEAD is part of the codebase regardless of how recently it
+/// churned. This is the predicate the greenfield gate uses.
 ///
-/// Returns a value in `[0.0, 1.0]`. An empty diff returns `0.0`.
+/// `fraction` is in `[0.0, 1.0]`. An empty diff returns `(0, 0.0)`.
 #[must_use]
-pub fn new_file_fraction(changed: &[PathBuf], commits_touching: &AHashMap<PathBuf, u32>) -> f64 {
+pub fn new_files_at_head(changed: &[PathBuf], at_head: &AHashSet<PathBuf>) -> (usize, f64) {
     if changed.is_empty() {
-        return 0.0;
+        return (0, 0.0);
     }
     let new = changed
         .iter()
-        .filter(|p| !commits_touching.contains_key(p.as_path()))
+        .filter(|p| !at_head.contains(p.as_path()))
         .count();
-    new as f64 / changed.len() as f64
-}
-
-/// Slice-of-`&Path` form of [`new_file_fraction`] for callers that
-/// already have references handy and don't want to allocate
-/// `PathBuf`s.
-#[must_use]
-pub fn new_file_fraction_paths(
-    changed: &[&Path],
-    commits_touching: &AHashMap<PathBuf, u32>,
-) -> f64 {
-    if changed.is_empty() {
-        return 0.0;
-    }
-    let new = changed
-        .iter()
-        .filter(|p| !commits_touching.contains_key(**p))
-        .count();
-    new as f64 / changed.len() as f64
+    (new, new as f64 / changed.len() as f64)
 }
 
 /// Session-aggregate trigger.

@@ -529,6 +529,36 @@ mod tests {
     }
 
     #[test]
+    fn role_patterns_default_exempts_barrel_index_and_extension_files() {
+        // Barrel files and platform extension entry points are
+        // role files: their job is to re-export or register, so
+        // they legitimately diverge from sibling shape conventions.
+        // Pin the default set so the exemption can't silently regress.
+        let patterns: Vec<String> = mmk_config::DEFAULT_STRUCTURE_ROLE_PATTERNS
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        for case in [
+            "src/index.ts",
+            "pkg/sub/index.ts",
+            "src/extension.ts",
+            "src/util.barrel.ts",
+            "src/UserBarrel.ts",
+        ] {
+            assert!(
+                is_role_file(Path::new(case), &patterns),
+                "{case} must be detected as a role file under default patterns"
+            );
+        }
+        // Control: a regular sibling file must NOT be treated as a role file,
+        // otherwise the exemption is too broad and erases real divergence signal.
+        assert!(
+            !is_role_file(Path::new("src/order.ts"), &patterns),
+            "regular files must not match role patterns"
+        );
+    }
+
+    #[test]
     fn review_mode_silent_on_conforming_when_report_conformance_off() {
         let entries = vec![
             ts(

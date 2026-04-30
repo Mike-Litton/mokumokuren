@@ -175,10 +175,11 @@ fn review_post_tool_use_without_gate_uses_additional_context_only() {
 
 #[serial(cwd)]
 #[test]
-fn review_clean_tree_envelope_returns_empty_additional_context() {
-    // Clean tree → no findings to surface. The hook output keeps
-    // its shape but additionalContext is null and a systemMessage
-    // makes the silence explicit.
+fn review_clean_tree_envelope_surfaces_no_findings_via_additional_context() {
+    // Clean tree → no findings. The canonical `[no actionable
+    // signal] no findings (HEAD <sha7>)` line travels via
+    // `additionalContext` (same channel as real findings), not
+    // `systemMessage` (user-only).
     let dir = TempDir::new().unwrap();
     let now = 1_700_000_000_i64;
     init_repo(dir.path());
@@ -189,10 +190,16 @@ fn review_clean_tree_envelope_returns_empty_additional_context() {
     let env = post_tool_use_envelope();
     let stdout = run_review(dir.path(), args, Some(&env));
     let v: Value = serde_json::from_slice(&stdout).expect("valid hook JSON");
-    assert!(v["hookSpecificOutput"]["additionalContext"].is_null());
-    let sys = v["systemMessage"].as_str().unwrap_or_default();
+    let ctx = v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .expect("clean-tree must surface no-findings line in additionalContext");
     assert!(
-        sys.contains("no findings") || sys.contains("unchanged"),
-        "clean-tree must emit systemMessage; got {sys}"
+        ctx.contains("no findings"),
+        "expected `no findings` in additionalContext; got: {ctx}"
+    );
+    assert!(
+        v["systemMessage"].is_null(),
+        "no-findings line must not also fan out to systemMessage; got: {}",
+        v["systemMessage"]
     );
 }

@@ -61,11 +61,17 @@ pub enum Severity {
 }
 
 impl Severity {
+    /// Line-prefix marker shown in text output. `Warn` and `Ok` use
+    /// glyphs that stand out typographically; `Info` uses the
+    /// bracketed `[info]` because the `ⓘ` glyph tokenized too close
+    /// to `⚠` for agent consumers, and the bracketed form matches
+    /// mmk's other low-priority prefixes (`[no actionable signal]`,
+    /// `[low-confidence n=N]`).
     #[must_use]
-    pub const fn glyph(self) -> &'static str {
+    pub const fn marker(self) -> &'static str {
         match self {
             Self::Warn => "⚠",
-            Self::Info => "ⓘ",
+            Self::Info => "[info]",
             Self::Ok => "✓",
         }
     }
@@ -107,7 +113,8 @@ const LAYER_ORDER: [Layer; 9] = [
 ];
 
 /// Group by layer, write `LAYER:` header, then one indented line per
-/// finding. Empty input writes nothing.
+/// finding. Empty input writes nothing. Severity → line prefix
+/// mapping lives on [`Severity::marker`].
 pub fn render_text<W: Write>(w: &mut W, findings: &[Finding]) -> Result<()> {
     if findings.is_empty() {
         return Ok(());
@@ -119,7 +126,7 @@ pub fn render_text<W: Write>(w: &mut W, findings: &[Finding]) -> Result<()> {
         }
         writeln!(w, "{}:", layer.label())?;
         for f in group {
-            writeln!(w, "  {} {}", f.severity.glyph(), f.message)?;
+            writeln!(w, "  {} {}", f.severity.marker(), f.message)?;
         }
     }
     Ok(())

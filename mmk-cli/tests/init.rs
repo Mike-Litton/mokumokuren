@@ -149,12 +149,38 @@ fn init_with_js_ts_profile_writes_expected_keys() {
         "min_sample_size = 1",
         "[health.ts]",
         "test_pair",
+        // Lockfiles must be globified so nested workspace lockfiles
+        // are caught (bare `yarn.lock` only matches at repo root).
+        "**/yarn.lock",
+        "**/package-lock.json",
+        "**/pnpm-lock.yaml",
+        // Yarn 4 vendors its release binary under .yarn/.
+        ".yarn/**",
+        // Auto-generated release notes shouldn't surface as required
+        // co-edits.
+        "**/CHANGELOG.md",
+        // Role patterns ship as an active block, not commented-out:
+        // users see what's exempted without reading mmk source.
+        "[sensor.structure]",
+        "role_patterns",
+        "*Barrel",
     ] {
         assert!(
             body.contains(needle),
             "js-ts profile missing {needle:?}; body was:\n{body}"
         );
     }
+    // Negative pin: the role_patterns block must be active, not
+    // commented out. Find the line that declares the block and
+    // assert it doesn't start with `#`.
+    let active = body
+        .lines()
+        .find(|l| l.trim_start().starts_with("[sensor.structure]"))
+        .expect("expected [sensor.structure] block in js-ts profile");
+    assert!(
+        !active.trim_start().starts_with('#'),
+        "[sensor.structure] block must be active, not commented out"
+    );
 }
 
 #[serial(cwd)]

@@ -37,15 +37,58 @@ silence. No new sensors.
   priors don't apply", "session contains 0 commits", "mmk: no
   findings", "present in HEAD but no analyzable history") all gain
   the same prefix. The reason follows after the prefix unchanged.
+- **Empty-findings line travels via `additionalContext`.** Hook
+  envelopes (PreToolUse, PostToolUse) route the `[no actionable
+  signal] no findings (...)` line through
+  `hookSpecificOutput.additionalContext` instead of `systemMessage`,
+  so the line is visible to the agent's next-turn context (was
+  visible only to the human user before). Real-finding routing is
+  unchanged.
+- **STRUCTURE role-pattern defaults add barrel / index / extension.**
+  `*extension`, `*index`, `*.barrel`, `*Barrel` join the existing
+  role exemptions. Re-exporters and platform extension entry
+  points legitimately diverge from sibling shape conventions, same
+  as factories / registrations / modules.
+- **`mmk init --profile js-ts` ships role_patterns as an active
+  block.** Previously emitted commented-out, which read as opt-in
+  even though the runtime applied the defaults all along. The
+  visible block mirrors the in-code defaults so an agent reading
+  the config sees what's exempted.
+- **`mmk init --profile js-ts` lockfile globs catch nested workspaces.**
+  `yarn.lock` / `package-lock.json` / `pnpm-lock.yaml` are now
+  emitted as `**/yarn.lock` / `**/package-lock.json` /
+  `**/pnpm-lock.yaml`. Bare names only matched at repo root,
+  silently missing nested workspace lockfiles.
+- **`mmk init --profile js-ts` ignores `.yarn/**`.** Yarn 4
+  vendors its release binary under that path; without the ignore
+  it polluted hotspot rank.
+- **`mmk init --profile js-ts` ignores CHANGELOG partners.**
+  `**/CHANGELOG.md` and `**/CHANGELOG_archive.md` join
+  `coupling.ignore_partners`. Auto-generated release notes
+  shouldn't surface as required co-edits.
+- **COMPLEXITY Info renders `[info]` text marker.** Replaces the
+  `ⓘ` glyph in the text-mode finding renderer. The bracketed form
+  matches mmk's other low-priority prefixes (`[no actionable
+  signal]`, `[low-confidence n=N]`) and reads as low-priority
+  without requiring the agent to inspect the JSON `severity` field.
+
+### Fixed
+
+- **Greenfield no longer fires on cold files at HEAD.** The
+  greenfield predicate keys on HEAD presence (via the new
+  `mmk_git::paths_in_head`), not on analysis-window churn (via
+  `commits_touching`). Files committed before the analysis window
+  but still at HEAD are no longer mislabelled greenfield on
+  additive edits.
 
 ### Schema
 
-`schema_version` → `0.9.0`. No JSON shape changes:
-`ComplexityFinding.function` field shape is unchanged but its
-content shifts from bare-name to qualified-name strings; v0.8
-readers iterating findings see longer strings, no parse breakage.
-The fall-through prose and the COUPLING confidence suffix are
-text-only changes inside `findings[].message`. See
+`schema_version` → `0.9.0`. No top-level JSON shape changes for
+`--format json`. Hook-envelope routing of the empty-findings line
+shifts from `systemMessage` to `additionalContext` (see above).
+Other content shifts are confined to `findings[].message`:
+qualified function identity, fall-through prefix, COUPLING
+confidence suffix, COMPLEXITY Info text marker. See
 [`docs/schema.md`](docs/schema.md).
 
 ## [0.8.0] - 2026-04-29

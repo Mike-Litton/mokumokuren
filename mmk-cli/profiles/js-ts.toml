@@ -12,9 +12,13 @@ ignore = [
     "**/coverage/**",
     "**/*.generated.*",
     "**/*.d.ts",
-    "package-lock.json",
-    "pnpm-lock.yaml",
-    "yarn.lock",
+    # Lockfiles — bare-name globs miss nested workspace lockfiles.
+    "**/package-lock.json",
+    "**/pnpm-lock.yaml",
+    "**/yarn.lock",
+    # Yarn 4 vendors its release binary under .yarn/; pollutes
+    # hotspot rank if not excluded.
+    ".yarn/**",
 ]
 
 [coupling]
@@ -29,6 +33,10 @@ ignore_partners = [
     "**/pubspec.yaml",
     "**/openapi*.json",
     "**/*.generated.*",
+    # Auto-generated release notes — not co-edits an agent should
+    # be expected to produce.
+    "**/CHANGELOG.md",
+    "**/CHANGELOG_archive.md",
 ]
 
 [blast_radius]
@@ -48,12 +56,15 @@ enabled = true
 patterns = ["registration", "service", "test_pair", "broad_exception"]
 
 # Role-file patterns: STRUCTURE demotes Warn → Info on these. The
-# in-code defaults cover common cross-ecosystem patterns; uncomment
-# and extend with repo-specific suffixes (e.g. "*Resolver",
-# "*.gateway"). `mmk eval --replay` STRUCTURE fire counts surface
-# candidate suffixes.
-# [sensor.structure]
-# role_patterns = [
-#     "*.contribution", "*Factory", "*.action", "*.actions",
-#     "*Registry", "*.module", "*Module", "*.routes", "*.config",
-# ]
+# block below mirrors the in-code defaults so an agent reading the
+# config can see what's exempted; extend with repo-specific suffixes
+# (e.g. "*Resolver", "*.gateway"). Each pattern is a stem-suffix
+# match: `*<suffix>` matches when the file stem (before its final
+# extension) ends with `<suffix>`. `mmk eval --replay` STRUCTURE
+# fire counts surface candidate suffixes.
+[sensor.structure]
+role_patterns = [
+    "*.contribution", "*Factory", "*.action", "*.actions",
+    "*Registry", "*.module", "*Module", "*.routes", "*.config",
+    "*extension", "*index", "*.barrel", "*Barrel",
+]

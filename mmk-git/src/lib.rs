@@ -17,7 +17,7 @@ pub mod loc;
 pub mod untracked;
 pub mod walker;
 
-pub use blob::{path_in_head, read_head_blob, read_head_bodies};
+pub use blob::{path_in_head, paths_in_head, read_head_blob, read_head_bodies};
 pub use untracked::{list_untracked, UntrackedFile};
 pub use walker::{BaseResolution, BaseResolvedVia, RepoWalker};
 

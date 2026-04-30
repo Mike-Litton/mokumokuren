@@ -3,7 +3,7 @@
 Drop this section into your repo's `CLAUDE.md` (or whatever
 agent-instruction surface your harness honours). It encodes the
 invocation pattern, override discipline, and per-sensor priors that
-the v0.8 N=20 vscode experiment validated.
+the v0.8 N=20 calibration cohort validated.
 
 ---
 
@@ -86,6 +86,20 @@ One paragraph per sensor; tuned from the v0.8 experiment data.
 - **DRIFT**: same file climbing across sessions → you are rewriting,
   not progressing. Step back and check whether the abstraction is
   wrong.
+
+## 5. Reading silence
+
+`[no actionable signal] no findings (...)` is the canonical empty
+output. It fires on a clean tree, on an edited tree where nothing
+crossed a gate, and on dedup-suppressed re-runs. Read it as positive
+confirmation: mmk ran and found nothing to act on — not as a tool
+failure.
+
+Most cold-file or small-diff edits land here, and that is correct.
+The gates key on historical correlation, per-function delta vs HEAD,
+and architectural divergence; an isolated edit to a low-history file
+legitimately doesn't trip them. Quiet on a thin slice is the expected
+baseline — running mmk on a hotter slice is what surfaces signal.
 
 ---
 

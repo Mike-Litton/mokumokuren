@@ -11,7 +11,7 @@
 //! inflate; sub-millisecond for typical files. The caller is
 //! responsible for batching across the changed-set.
 
-use ahash::AHashMap;
+use ahash::{AHashMap, AHashSet};
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
@@ -88,6 +88,28 @@ pub fn read_head_bodies(work_dir: &Path, paths: &[PathBuf]) -> AHashMap<PathBuf,
         };
         if let Ok(body) = String::from_utf8(bytes) {
             out.insert(p.clone(), body);
+        }
+    }
+    out
+}
+
+/// Batched [`path_in_head`] — opens the repo once and returns the
+/// subset of `paths` that resolve to a blob in HEAD's tree.
+///
+/// Unlike [`read_head_bodies`], binary blobs and non-UTF-8 entries
+/// count as present: the predicate is "does HEAD know this path,"
+/// not "can we read it as text." Callers doing greenfield-style
+/// classification should prefer this over `read_head_bodies` to skip
+/// the inflate cost when bodies aren't needed.
+#[must_use]
+pub fn paths_in_head(work_dir: &Path, paths: &[PathBuf]) -> AHashSet<PathBuf> {
+    let mut out = AHashSet::new();
+    let Ok(repo) = gix::open(work_dir) else {
+        return out;
+    };
+    for p in paths {
+        if matches!(read_head_blob(&repo, p), Ok(Some(_))) {
+            out.insert(p.clone());
         }
     }
     out

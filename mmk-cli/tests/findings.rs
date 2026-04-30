@@ -10,6 +10,34 @@ use mokumokuren::output::findings::{render_json, render_text, Finding, Layer, Se
 use serde_json::Value;
 
 #[test]
+fn info_finding_rendered_with_bracket_marker_for_low_priority_distinction() {
+    // Info renders with a `[info]` text marker, not the `ⓘ` glyph:
+    // the glyph tokenized too close to `⚠`, and bracketed prefixes
+    // match mmk's other low-priority forms (`[no actionable signal]`,
+    // `[low-confidence n=N]`). The marker lets agents recognise
+    // low-priority severity from the line itself, without
+    // inspecting the JSON envelope's `severity` field.
+    let findings = vec![Finding::new(
+        Layer::Complexity,
+        Severity::Info,
+        "src/foo.ts::moveCardTo: 47 LOC (+1 vs HEAD), directory median 22 LOC (ratio 2.1)",
+    )];
+
+    let mut buf = Vec::new();
+    render_text(&mut buf, &findings).unwrap();
+    let out = String::from_utf8(buf).unwrap();
+
+    let body_line = out
+        .lines()
+        .find(|l| l.contains("moveCardTo"))
+        .expect("rendered line missing");
+    assert!(
+        body_line.starts_with("  [info] "),
+        "info finding must be prefixed with `[info]` for tokenizer-friendly distinction, got: {body_line}"
+    );
+}
+
+#[test]
 fn finding_renders_text_one_line_per_finding() {
     let findings = vec![Finding::new(
         Layer::Hotspot,

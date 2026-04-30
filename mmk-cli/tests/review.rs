@@ -968,6 +968,52 @@ fn review_signals_greenfield_when_diff_is_mostly_new() {
 
 #[serial(cwd)]
 #[test]
+fn review_does_not_signal_greenfield_for_cold_existing_file_with_additive_edit() {
+    // Files present at HEAD are not greenfield, regardless of
+    // whether they churned in the analysis window. The fixture
+    // anchors HEAD with a recent commit so the window walker has a
+    // start point; seed.ts is committed far enough in the past that
+    // `commits_touching` (window-only) won't see it, exposing any
+    // predicate that conflates "no in-window churn" with "new file".
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    write(dir.path(), "src/seed.ts", "export const x = 1;\n");
+    commit_all(dir.path(), "seed", now - 365 * DAY);
+    write(dir.path(), "other/recent.ts", "export const r = 1;\n");
+    commit_all(dir.path(), "recent", now - 30 * DAY);
+
+    // Working-tree edit of the cold file — additive, still at HEAD.
+    write(
+        dir.path(),
+        "src/seed.ts",
+        "export const x = 1;\nexport const y = 2;\n",
+    );
+
+    let mut args = review_args();
+    args.format = Format::Json;
+    let (stdout, _) = run_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    let greenfield: Vec<&Value> = v["findings"]
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .filter(|f| {
+            f["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("history priors don't apply")
+        })
+        .collect();
+    assert!(
+        greenfield.is_empty(),
+        "edited file present at HEAD must not be classified as greenfield; got: {greenfield:?}"
+    );
+}
+
+#[serial(cwd)]
+#[test]
 fn review_no_greenfield_signal_when_history_layer_fired() {
     // The greenfield finding is a fall-through, not an addition.
     // When HOTSPOT/COUPLING/DRIFT fired, the agent already has

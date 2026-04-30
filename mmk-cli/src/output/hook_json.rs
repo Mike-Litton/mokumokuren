@@ -93,6 +93,10 @@ pub fn write_pre_tool_use<W: Write>(
     let (additional_context, system_message) = if suppressed {
         (None, Some(dedup_message(head_sha)))
     } else if body.is_empty() {
+        // Empty-findings line travels via `additionalContext`, the
+        // same channel real findings use. `systemMessage` alone
+        // surfaces only to the human user, leaving "mmk ran, found
+        // nothing" invisible to the agent.
         let line = head_sha.map_or_else(
             || "[no actionable signal] no findings".to_owned(),
             |sha| {
@@ -100,7 +104,7 @@ pub fn write_pre_tool_use<W: Write>(
                 crate::output::messages::empty_review_line(short, None)
             },
         );
-        (None, Some(line))
+        (Some(line), None)
     } else {
         (Some(body), None)
     };
@@ -146,6 +150,8 @@ pub fn write_post_tool_use<W: Write>(
     let (additional_context, system_message, decision, reason) = if suppressed {
         (None, Some(dedup_message(head_sha)), None, None)
     } else if body.is_empty() {
+        // Same routing as `write_pre_tool_use`: empty-findings line
+        // travels via `additionalContext` so the agent sees it.
         let line = head_sha.map_or_else(
             || "[no actionable signal] no findings".to_owned(),
             |sha| {
@@ -153,7 +159,7 @@ pub fn write_post_tool_use<W: Write>(
                 crate::output::messages::empty_review_line(short, diff_summary.as_ref())
             },
         );
-        (None, Some(line), None, None)
+        (Some(line), None, None, None)
     } else if block_on_warn && warn_count > 0 {
         let reason_str = format!("{BLOCK_REASON_PREFIX}\n{body}");
         (None, None, Some("block"), Some(reason_str))
@@ -274,9 +280,12 @@ mod tests {
 
     #[test]
     fn post_tool_use_empty_findings_with_diff_summary_includes_size() {
-        // The "diff produced zero findings" case carries a diff
-        // summary so the agent can see *what* was reviewed when
-        // nothing surfaced.
+        // A diff with zero findings still names what was reviewed
+        // (file count + LOC) so silence is unambiguous. The line
+        // travels via `additionalContext` — the channel real
+        // findings use — not `systemMessage`, which surfaces only
+        // to the human user and so leaves the line invisible to
+        // the agent's next-turn context.
         let mut buf = Vec::new();
         write_post_tool_use(
             &mut buf,
@@ -292,10 +301,17 @@ mod tests {
         )
         .unwrap();
         let v: Value = serde_json::from_slice(&buf).unwrap();
-        let msg = v["systemMessage"].as_str().unwrap();
+        let ctx = v["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .expect("empty-findings line must reach the agent via additionalContext");
         assert!(
-            msg.contains("1 file") && msg.contains("+34 LOC") && msg.contains("HEAD 4bb7928"),
-            "expected diff-bearing clean-state line; got: {msg}"
+            ctx.contains("1 file") && ctx.contains("+34 LOC") && ctx.contains("HEAD 4bb7928"),
+            "expected diff-bearing clean-state line in additionalContext; got: {ctx}"
+        );
+        assert!(
+            v["systemMessage"].is_null(),
+            "empty-findings line must not also fan-out to systemMessage; got: {}",
+            v["systemMessage"]
         );
     }
 }

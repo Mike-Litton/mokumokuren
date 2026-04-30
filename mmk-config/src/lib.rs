@@ -81,12 +81,12 @@ pub const DEFAULT_STRUCTURE_DIVERGENCE_MIN_MISSING: u32 = 1;
 /// ends with `<suffix>`. Override or extend per-repo via
 /// `[structure] role_patterns = [...]` in `mokumokuren.toml`.
 ///
-/// Defaults derived from the N=20 vscode experiment (2026-04-29):
-/// the `*.contribution`, `*Factory`, `*.action`, `*Registry`,
-/// `*.module`, `*.routes`, `*.config` patterns each accumulated
-/// dismissable Warn fires that read as "role file diverges from
-/// directory shape" — exactly the role / shape conflation this
-/// suppression separates.
+/// The shipped patterns each accumulated dismissable Warn fires that
+/// read as "role file diverges from directory shape" — exactly the
+/// role / shape conflation this suppression separates. v0.9 adds
+/// re-exporter / platform-entry-point patterns (`*index`,
+/// `*extension`, `*.barrel`, `*Barrel`) — same divergence pattern,
+/// same exemption.
 pub const DEFAULT_STRUCTURE_ROLE_PATTERNS: &[&str] = &[
     "*.contribution",
     "*Factory",
@@ -97,6 +97,10 @@ pub const DEFAULT_STRUCTURE_ROLE_PATTERNS: &[&str] = &[
     "*Module",
     "*.routes",
     "*.config",
+    "*extension",
+    "*index",
+    "*.barrel",
+    "*Barrel",
 ];
 
 /// `[bulk] ignore_for_budget` default — empty.
@@ -136,9 +140,9 @@ pub const DEFAULT_COMPLEXITY_MIN_DIRECTORY_SIBLINGS: u32 = 3;
 /// cap, demote to `Info` — the agent's edit is small even if the
 /// function was already over. Only when the delta clears either of
 /// these thresholds does the finding earn `Warn`. Defaults derived
-/// from the N=20 vscode experiment (2026-04-29) where 51 of 51
-/// COMPLEXITY fires landed on pre-existing oversized functions and
-/// only ~6 % converted to refactors.
+/// from the v0.8 N=20 calibration cohort, where 51 of 51 COMPLEXITY
+/// fires landed on pre-existing oversized functions and only ~6 %
+/// converted to refactors.
 pub const DEFAULT_COMPLEXITY_DELTA_WARN_PCT: f64 = 0.50;
 pub const DEFAULT_COMPLEXITY_DELTA_WARN_ABS: u32 = 20;
 

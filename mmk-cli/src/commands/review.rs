@@ -333,14 +333,20 @@ pub fn run<O: Write, E: Write>(
     let mut findings =
         apply_monotonic_gate(&cwd, analysis.head_sha.as_deref(), tagged, args.no_dedup);
 
-    // GREENFIELD signal: when most of the diff is paths the historical
-    // analyzer hasn't seen, the HOTSPOT/COUPLING/DRIFT layers
-    // structurally have nothing to say. Emit one Info finding so the
-    // agent reads silence as expected, not as "mmk decided to be
-    // quiet." HEALTH is structural and may still fire — that's signal,
-    // not noise.
+    // GREENFIELD signal: when most of the diff is paths not present
+    // at HEAD, the HOTSPOT/COUPLING/DRIFT layers structurally have
+    // nothing to say. Emit one Info finding so the agent reads
+    // silence as expected, not as "mmk decided to be quiet." HEALTH
+    // is structural and may still fire — that's signal, not noise.
+    //
+    // Predicate keys on HEAD presence, not `commits_touching`
+    // membership: long-cold files at HEAD are not greenfield no
+    // matter how rarely they churn within the analysis window.
     let changed_paths: Vec<PathBuf> = changed.iter().map(|c| c.path.clone()).collect();
-    let new_frac = mmk_core::budget::new_file_fraction(&changed_paths, &commits_touching);
+    let head_present = mmk_git::discover_work_dir(&cwd)
+        .map(|wd| mmk_git::paths_in_head(&wd, &changed_paths))
+        .unwrap_or_default();
+    let (new_count, new_frac) = mmk_core::budget::new_files_at_head(&changed_paths, &head_present);
     if new_frac > cfg.bulk.greenfield_threshold {
         let history_layer_fired = findings.iter().any(|f| {
             matches!(
@@ -349,10 +355,6 @@ pub fn run<O: Write, E: Write>(
             )
         });
         if !history_layer_fired {
-            let new_count = changed_paths
-                .iter()
-                .filter(|p| !commits_touching.contains_key(p.as_path()))
-                .count();
             findings.push(Finding::new(
                 Layer::Coupling,
                 Severity::Info,

@@ -45,9 +45,10 @@ emits `0.9.0`.
 
 ### v0.9.0 — content-shape changes inside string fields
 
-v0.9 introduces no JSON shape changes. Two `findings[].message`
-content shifts are worth calling out for harnesses that parse the
-prose:
+v0.9 introduces no top-level JSON shape changes for `--format json`.
+One hook-envelope routing change (see the last bullet) and four
+`findings[].message` content shifts are worth calling out for
+harnesses that parse the prose:
 
 - **COMPLEXITY findings carry class-qualified function identity.**
   v0.8 emitted `<P>::methodName`; v0.9 emits
@@ -70,8 +71,23 @@ prose:
   or `wilson_lower_95 < 2 × confidence_threshold`; high-confidence
   fires are silent. Two-tier surface: any suffix is the canonical
   low-confidence form; no other tier wording exists.
+- **COMPLEXITY Info renders the `[info]` text marker, not the `ⓘ`
+  glyph.** Affects the text body in
+  `hookSpecificOutput.additionalContext` for hook mode and the
+  `mmk review --format text` output for CLI mode. The JSON
+  `findings[].severity` field is unchanged.
+- **Empty-findings line shifts from `systemMessage` to
+  `additionalContext`** (hook envelopes only). When a PostToolUse
+  or PreToolUse run produces zero findings, the canonical
+  `[no actionable signal] no findings (...)` line travels via
+  `hookSpecificOutput.additionalContext`. v0.8 placed this line
+  on the top-level `systemMessage`. Real-finding routing is
+  unchanged. Dedup-suppress notices stay on `systemMessage`.
 
-v0.8 readers parse v0.9 output without modification.
+v0.8 readers parse v0.9 output without modification, with one
+caveat: harnesses that pinned to "the empty-findings line is in
+`systemMessage`" should switch to reading
+`hookSpecificOutput.additionalContext`.
 
 | Change kind                                             | Schema bump? |
 | ------------------------------------------------------- | :----------: |

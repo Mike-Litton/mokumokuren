@@ -760,8 +760,8 @@ pub fn apply_monotonic_gate(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_coupling_file, apply_health_file, health_severity_for_review, health_to_finding,
-        resolve_patterns, CouplingDeprecation,
+        apply_coupling_file, apply_health_file, complexity_severity, health_severity_for_review,
+        health_to_finding, resolve_patterns, CouplingDeprecation,
     };
     use mmk_config::{CouplingCfg, CouplingFile, HealthFile, HealthTsCfg, HealthTsFile};
     use mmk_health::{HealthFinding, HealthPattern};
@@ -915,5 +915,50 @@ mod tests {
         assert_eq!(f.severity, Severity::Warn);
         assert!(f.message.contains("src/foo.ts"));
         assert!(f.message.contains("src/foo.test.ts"));
+    }
+
+    #[test]
+    fn complexity_severity_demotes_tiny_delta_on_existing_function_to_info() {
+        // A +1-LOC edit to a pre-existing 46-LOC function (cap 80,
+        // ratio gate) is Info: the agent inherited the over-cap
+        // state, the contribution is below both delta thresholds.
+        use mmk_core::sensors::{ComplexityFinding, ComplexityFindingKind};
+        let f = ComplexityFinding {
+            path: PathBuf::from("a/b.ts"),
+            function: "Lane::moveCardTo".to_owned(),
+            kind: ComplexityFindingKind::Size,
+            actual: 47,
+            cap: 80,
+            head_actual: Some(46),
+            directory_median: Some(22),
+        };
+        let cfg = mmk_config::ComplexityCfg::default();
+        assert_eq!(
+            complexity_severity(&f, &cfg),
+            Severity::Info,
+            "+1 LOC delta on a 46-LOC function must be Info, not Warn"
+        );
+    }
+
+    #[test]
+    fn complexity_severity_warns_when_delta_clears_absolute_threshold() {
+        // Control: +25 LOC clears delta_warn_abs (default 20) and so
+        // earns Warn even on a pre-existing over-cap function.
+        use mmk_core::sensors::{ComplexityFinding, ComplexityFindingKind};
+        let f = ComplexityFinding {
+            path: PathBuf::from("a/b.ts"),
+            function: "Lane::moveCardTo".to_owned(),
+            kind: ComplexityFindingKind::Size,
+            actual: 71,
+            cap: 80,
+            head_actual: Some(46),
+            directory_median: Some(22),
+        };
+        let cfg = mmk_config::ComplexityCfg::default();
+        assert_eq!(
+            complexity_severity(&f, &cfg),
+            Severity::Warn,
+            "+25 LOC delta crosses delta_warn_abs — must be Warn"
+        );
     }
 }

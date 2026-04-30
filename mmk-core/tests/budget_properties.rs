@@ -2,10 +2,10 @@
 //! specific cap-trigger transitions; the properties here lock the
 //! universal post-conditions on the ramp / fraction helpers.
 
-use ahash::AHashMap;
+use ahash::AHashSet;
 use mmk_config::BulkCfg;
 use mmk_core::budget::{
-    budget_progress, budget_tier, new_file_fraction, BudgetCheck, BudgetProgress, BudgetTier,
+    budget_progress, budget_tier, new_files_at_head, BudgetCheck, BudgetProgress, BudgetTier,
 };
 use proptest::collection::vec;
 use proptest::prelude::*;
@@ -35,50 +35,53 @@ const fn cfg(max_files: u32, max_lines: u32) -> BulkCfg {
 }
 
 proptest! {
-    /// `new_file_fraction` is always in `[0.0, 1.0]`. Empty diff is
-    /// 0.0 (defined that way to avoid 0/0); full-greenfield is 1.0.
+    /// `new_files_at_head` fraction is always in `[0.0, 1.0]`. Empty
+    /// diff returns `(0, 0.0)` (defined that way to avoid 0/0);
+    /// full-greenfield returns `(n, 1.0)`. Count never exceeds
+    /// `changed.len()`.
     #[test]
-    fn new_file_fraction_in_unit_interval(
+    fn new_files_at_head_in_unit_interval(
         changed in vec(path_strategy(), 0..30),
-        seen in vec(path_strategy(), 0..30),
+        present in vec(path_strategy(), 0..30),
     ) {
-        let map: AHashMap<PathBuf, u32> = seen.into_iter().map(|p| (p, 1)).collect();
-        let f = new_file_fraction(&changed, &map);
+        let head: AHashSet<PathBuf> = present.into_iter().collect();
+        let (count, frac) = new_files_at_head(&changed, &head);
         prop_assert!(
-            (0.0..=1.0).contains(&f),
-            "new_file_fraction {f} outside [0, 1]",
+            (0.0..=1.0).contains(&frac),
+            "fraction {frac} outside [0, 1]",
         );
-        prop_assert!(f.is_finite());
+        prop_assert!(frac.is_finite());
+        prop_assert!(count <= changed.len(), "count {count} exceeds diff length {}", changed.len());
     }
 
-    /// Empty `changed` ⇒ fraction is exactly 0. Defined this way to
-    /// avoid 0/0; example test pins the value, property locks it
-    /// against an arbitrary `commits_touching` map.
+    /// Empty `changed` ⇒ `(0, 0.0)`. Defined this way to avoid 0/0.
     #[test]
-    fn new_file_fraction_empty_changed_is_zero(
-        seen in vec(path_strategy(), 0..30),
+    fn new_files_at_head_empty_changed_is_zero(
+        present in vec(path_strategy(), 0..30),
     ) {
-        let map: AHashMap<PathBuf, u32> = seen.into_iter().map(|p| (p, 1)).collect();
-        let f = new_file_fraction(&[], &map);
-        prop_assert!(f.abs() < 1e-12, "expected 0.0, got {f}");
+        let head: AHashSet<PathBuf> = present.into_iter().collect();
+        let (count, frac) = new_files_at_head(&[], &head);
+        prop_assert_eq!(count, 0);
+        prop_assert!(frac.abs() < 1e-12, "expected 0.0, got {}", frac);
     }
 
-    /// Fraction is order-independent. Ordering of `changed` is a
+    /// Result is order-independent. Ordering of `changed` is a
     /// caller-side artefact; the proportion of new files isn't.
     #[test]
-    fn new_file_fraction_order_independent(
+    fn new_files_at_head_order_independent(
         mut changed in vec(path_strategy(), 1..15),
-        seen in vec(path_strategy(), 0..15),
+        present in vec(path_strategy(), 0..15),
         swaps in vec((any::<Index>(), any::<Index>()), 0..32),
     ) {
-        let map: AHashMap<PathBuf, u32> = seen.into_iter().map(|p| (p, 1)).collect();
-        let f_canonical = new_file_fraction(&changed, &map);
+        let head: AHashSet<PathBuf> = present.into_iter().collect();
+        let canonical = new_files_at_head(&changed, &head);
         let n = changed.len();
         for (a, b) in &swaps {
             changed.swap(a.index(n), b.index(n));
         }
-        let f_shuffled = new_file_fraction(&changed, &map);
-        prop_assert!((f_canonical - f_shuffled).abs() < 1e-12);
+        let shuffled = new_files_at_head(&changed, &head);
+        prop_assert_eq!(canonical.0, shuffled.0);
+        prop_assert!((canonical.1 - shuffled.1).abs() < 1e-12);
     }
 
     /// `budget_tier` matches the documented ramp boundaries:
