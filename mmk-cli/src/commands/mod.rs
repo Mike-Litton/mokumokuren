@@ -6,4 +6,5 @@ pub mod eval;
 pub mod init;
 pub mod pre_edit;
 pub mod review;
+pub mod sensors;
 pub mod session;

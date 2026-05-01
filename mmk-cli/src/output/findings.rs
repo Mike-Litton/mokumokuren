@@ -85,11 +85,12 @@ pub struct Finding {
 }
 
 impl Finding {
-    pub fn new(layer: Layer, severity: Severity, message: impl Into<String>) -> Self {
+    #[must_use]
+    pub const fn new(layer: Layer, severity: Severity, message: String) -> Self {
         Self {
             layer,
             severity,
-            message: message.into(),
+            message,
         }
     }
 }

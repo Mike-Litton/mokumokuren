@@ -170,7 +170,7 @@ fn run_session_summary<O: Write, E: Write>(
         findings.push(Finding::new(
             Layer::Anchor,
             Severity::Info,
-            messages::session_empty_nudge(),
+            messages::session_empty_nudge().to_string(),
         ));
     }
 

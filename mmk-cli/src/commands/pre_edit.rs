@@ -20,8 +20,7 @@ use crate::commands::analyze::COUPLES_PER_FILE;
 use crate::commands::common::{
     analyze_health_for_subject, apply_coupling_file, apply_health_file, apply_monotonic_gate,
     apply_sensor_file, coupling_findings_with_signal, health_to_finding, list_directory_siblings,
-    load_bodies, load_config_file, resolve_patterns, structure_to_finding_with_signal,
-    CouplingEmission, CouplingProse,
+    load_bodies, load_config_file, resolve_patterns, CouplingEmission, CouplingProse,
 };
 use crate::commands::review::{build_partner_globset, collect_working_tree_diff, verdict_for};
 use crate::hook::HookEnvelope;
@@ -163,29 +162,30 @@ pub fn run<O: Write, E: Write>(
     // STRUCTURE: directory-convention sensor. Pre-edit fires
     // informationally — the agent reads the convention and conforms
     // before writing. Computed early so it joins the rest through
-    // one monotonic-gate pass.
+    // one monotonic-gate pass. COMPLEXITY is skipped at this seam:
+    // pre-edit runs *before* the agent's edit, so there is no
+    // working-tree body to measure.
     if cfg.sensor.structure.enabled {
         let abs = cwd.join(&path);
         let mode = if abs.exists() {
-            mmk_core::sensors::StructureMode::PreEditExisting
+            crate::commands::sensors::PerFileMode::PreEditExisting
         } else {
-            mmk_core::sensors::StructureMode::PreEditNew
+            crate::commands::sensors::PerFileMode::PreEditNew
         };
         let siblings = list_directory_siblings(&cwd, &path);
         let bodies = load_bodies(&cwd, &siblings);
-        let input = mmk_core::sensors::StructureInput {
+        let ctx = crate::commands::sensors::PerFileCtx {
             path: &path,
             siblings: &siblings,
             bodies: &bodies,
             subject_body: None,
-            mode,
-            cfg: &cfg.sensor.structure,
         };
-        if let Some(sf) = mmk_core::sensors::compute_structure_finding(&input) {
-            let cap = cfg.sensor.structure.top_imports_to_show;
-            let pct = (cfg.sensor.structure.import_majority * 100.0).round() as u32;
-            tagged.push(structure_to_finding_with_signal(&sf, cap, pct));
-        }
+        tagged.extend(crate::commands::sensors::compute_per_file_findings(
+            &ctx,
+            &cfg.sensor,
+            mode,
+            None,
+        ));
     }
 
     let mut findings =

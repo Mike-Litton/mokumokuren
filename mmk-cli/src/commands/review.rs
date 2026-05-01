@@ -24,11 +24,11 @@ use crate::args::{Format, Gate, ReviewArgs};
 use crate::commands::analyze::COUPLES_PER_FILE;
 use crate::commands::common::{
     analyze_health_for_subject, apply_coupling_file, apply_health_file, apply_monotonic_gate,
-    apply_sensor_file, complexity_to_finding, coupling_findings_with_signal,
-    health_severity_for_review, health_to_finding, is_health_eligible_path,
-    list_directory_siblings, load_bodies, load_config_file, resolve_patterns,
-    structure_to_finding_with_signal, CouplingEmission, CouplingProse,
+    apply_sensor_file, coupling_findings_with_signal, health_severity_for_review,
+    health_to_finding, is_health_eligible_path, list_directory_siblings, load_bodies,
+    load_config_file, resolve_patterns, CouplingEmission, CouplingProse,
 };
+use crate::commands::sensors as sensors_helper;
 use crate::hook::HookEnvelope;
 use crate::output::findings::{render_text, Finding, Layer, Severity};
 use crate::output::messages::{self, EmptyDiffSummary};
@@ -676,8 +676,6 @@ fn compute_sensor_findings(
     if !(cfg.sensor.structure.enabled || cfg.sensor.complexity.enabled) {
         return out;
     }
-    let cap = cfg.sensor.structure.top_imports_to_show;
-    let pct = (cfg.sensor.structure.import_majority * 100.0).round() as u32;
     for c in changed {
         let siblings = list_directory_siblings(cwd, &c.path);
         let mut all_paths = siblings.clone();
@@ -685,66 +683,22 @@ fn compute_sensor_findings(
             all_paths.push(c.path.clone());
         }
         let bodies = load_bodies(cwd, &all_paths);
-
-        if cfg.sensor.structure.enabled {
-            let subject_body = bodies.get(&c.path).map(String::as_str);
-            let input = mmk_core::sensors::StructureInput {
-                path: &c.path,
-                siblings: &siblings,
-                bodies: &bodies,
-                subject_body,
-                mode: mmk_core::sensors::StructureMode::Review,
-                cfg: &cfg.sensor.structure,
-            };
-            if let Some(sf) = mmk_core::sensors::compute_structure_finding(&input) {
-                out.push(structure_to_finding_with_signal(&sf, cap, pct));
-            }
-        }
-        if cfg.sensor.complexity.enabled {
-            let input = mmk_core::sensors::ComplexityInput {
-                path: &c.path,
-                siblings: &siblings,
-                bodies: &bodies,
-                cfg: &cfg.sensor.complexity,
-            };
-            // Delta-vs-HEAD filter: suppress findings whose
-            // (path, function-name) pair was already at or above the
-            // working-tree metric at HEAD. The agent didn't worsen
-            // it, so re-firing would be first-contact noise without
-            // new signal. New files / new functions / strict
-            // worsening still fire.
-            let raw = mmk_core::sensors::compute_complexity_findings(&input);
-            let head_body = head_bodies.get(&c.path).map(String::as_str);
-            let filtered = filter_complexity_by_head_baseline(&c.path, raw, head_body);
-            for cf in filtered {
-                let signal = complexity_monotonic_signal(&cf);
-                out.push((
-                    complexity_to_finding(&cf, &cfg.sensor.complexity),
-                    Some(signal),
-                ));
-            }
-        }
+        let subject_body = bodies.get(&c.path).map(String::as_str);
+        let head_body = head_bodies.get(&c.path).map(String::as_str);
+        let ctx = sensors_helper::PerFileCtx {
+            path: &c.path,
+            siblings: &siblings,
+            bodies: &bodies,
+            subject_body,
+        };
+        out.extend(sensors_helper::compute_per_file_findings(
+            &ctx,
+            &cfg.sensor,
+            sensors_helper::PerFileMode::Review,
+            head_body,
+        ));
     }
     out
-}
-
-/// Build the per-finding monotonic key + axes for a COMPLEXITY
-/// finding. `kind` is encoded in the key so a Nesting finding and a
-/// Size finding on the same `(path, function)` get independent
-/// suppression — they measure different things and can move
-/// independently.
-fn complexity_monotonic_signal(
-    f: &mmk_core::sensors::ComplexityFinding,
-) -> crate::monotonic::MonotonicSignal {
-    let kind = match f.kind {
-        mmk_core::sensors::ComplexityFindingKind::Nesting => "nesting",
-        mmk_core::sensors::ComplexityFindingKind::Size => "loc",
-    };
-    let key = format!("complexity::{kind}::{}::{}", f.path.display(), f.function);
-    crate::monotonic::MonotonicSignal {
-        key,
-        axes: vec![f.actual],
-    }
 }
 
 /// BUDGET findings emitted on the bulk-self-filter path.
@@ -846,12 +800,25 @@ pub(crate) fn collect_diff(
         }
     }
 
-    let out = cmd
-        .output()
-        .context("failed to invoke `git diff` — is git on PATH?")?;
+    let out = cmd.output().with_context(|| {
+        format!(
+            "failed to invoke `git diff` in {} — is git on PATH?",
+            cwd.display()
+        )
+    })?;
     if !out.status.success() {
+        let range_desc = match mode {
+            ReviewMode::WorkingTree => "HEAD".to_string(),
+            ReviewMode::Staged => "staged".to_string(),
+            ReviewMode::Range => args.range.clone().unwrap_or_else(|| "?".into()),
+            ReviewMode::Commit => args
+                .commit
+                .as_ref()
+                .map_or_else(|| "?".into(), |s| format!("{s}^..{s}")),
+        };
         anyhow::bail!(
-            "git diff exited with {}: {}",
+            "git diff (range: {range_desc}) in {} exited with {}: {}",
+            cwd.display(),
             out.status,
             String::from_utf8_lossy(&out.stderr)
         );
@@ -1287,80 +1254,6 @@ fn patterns_for_subject(
             .collect();
     }
     enabled.to_vec()
-}
-
-/// Drop COMPLEXITY findings whose function exists at HEAD with the
-/// same-or-better metric value. Keeps findings on:
-/// - new files (no HEAD body to compare against),
-/// - newly-added functions (no matching name at HEAD),
-/// - functions whose metric strictly worsened vs. HEAD.
-///
-/// Function identity is compared by `FunctionFact.qualified_name`
-/// (`ClassName::methodName` for methods; bare name for top-level
-/// functions). v0.8 used `FunctionFact.name` and silently
-/// cross-attributed methods that shared a bare name across classes
-/// in one file (`constructor`, `dispose`, `init`, …) — the first
-/// AST match won, so an agent shrinking `Inner::constructor` could
-/// see COMPLEXITY fire on the same file with `+N vs HEAD` computed
-/// against `Outer::constructor`'s baseline. v0.9's qualified-name
-/// match closes that off.
-///
-/// Known weakness: a rename (`parse` → `parseV4`) still leaves the
-/// working-tree function with no HEAD match, so it fires as if it
-/// were newly added — even though the body is structurally
-/// identical. This false-fire is acceptable because renames are
-/// rare in feature work and the resulting finding is still
-/// factually true (the renamed function *is* over the cap); the
-/// cost is one extra Warn per rename. A tighter check would
-/// require structural matching across renames, which costs more
-/// than the false-fire it prevents.
-///
-/// HEAD-parse failures (rare — tree-sitter is error-tolerant) are
-/// treated conservatively: keep the finding rather than silently
-/// drop a real over-cap signal because we couldn't compute a
-/// baseline.
-fn filter_complexity_by_head_baseline(
-    subject: &Path,
-    findings: Vec<mmk_core::sensors::ComplexityFinding>,
-    head_body: Option<&str>,
-) -> Vec<mmk_core::sensors::ComplexityFinding> {
-    let Some(body) = head_body else {
-        // New file: every finding is genuinely new signal.
-        return findings;
-    };
-    let Some(head_facts) = mmk_health::extract(subject, body) else {
-        // HEAD parse failed: be conservative, keep findings.
-        return findings;
-    };
-    findings
-        .into_iter()
-        .filter_map(|mut f| {
-            let Some(hf) = head_facts
-                .functions
-                .iter()
-                .find(|hf| hf.qualified_name == f.function)
-            else {
-                // Newly-added function: fire (no HEAD baseline to
-                // populate; head_actual stays None).
-                return Some(f);
-            };
-            let head_actual = match f.kind {
-                mmk_core::sensors::ComplexityFindingKind::Nesting => hf.max_nesting_depth,
-                mmk_core::sensors::ComplexityFindingKind::Size => hf.loc,
-            };
-            if f.actual > head_actual {
-                // Worsened: keep, and populate head_actual so the
-                // formatter can render `+N vs HEAD`. Lets the agent
-                // see how much they grew a pre-existing function vs.
-                // inheriting the bulk of an existing problem.
-                f.head_actual = Some(head_actual);
-                Some(f)
-            } else {
-                // Same-or-better: suppress.
-                None
-            }
-        })
-        .collect()
 }
 
 /// Canonical signature for a cohesion-fire's qualifying clusters.

@@ -191,10 +191,10 @@ mod tests {
     use serde_json::Value;
 
     fn warn_finding() -> Finding {
-        Finding::new(Layer::Coupling, Severity::Warn, "noisy")
+        Finding::new(Layer::Coupling, Severity::Warn, "noisy".to_string())
     }
     fn info_finding() -> Finding {
-        Finding::new(Layer::Coupling, Severity::Info, "quiet")
+        Finding::new(Layer::Coupling, Severity::Info, "quiet".to_string())
     }
 
     #[test]

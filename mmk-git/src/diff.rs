@@ -166,7 +166,12 @@ pub fn diff_commit(
                         skipped += 1;
                         return Ok(Action::Continue);
                     }
-                    let blob = id.object().context("blob load")?;
+                    let blob = id.object().with_context(|| {
+                        format!(
+                            "blob load for {}",
+                            bstr_to_pathbuf(location.as_bytes()).display()
+                        )
+                    })?;
                     if crate::binary::is_binary(&blob.data) {
                         return Ok(Action::Continue);
                     }
@@ -192,7 +197,12 @@ pub fn diff_commit(
                         skipped += 1;
                         return Ok(Action::Continue);
                     }
-                    let blob = id.object().context("blob load")?;
+                    let blob = id.object().with_context(|| {
+                        format!(
+                            "blob load for {}",
+                            bstr_to_pathbuf(location.as_bytes()).display()
+                        )
+                    })?;
                     if crate::binary::is_binary(&blob.data) {
                         return Ok(Action::Continue);
                     }

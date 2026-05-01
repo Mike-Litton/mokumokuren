@@ -20,7 +20,8 @@ fn info_finding_rendered_with_bracket_marker_for_low_priority_distinction() {
     let findings = vec![Finding::new(
         Layer::Complexity,
         Severity::Info,
-        "src/foo.ts::moveCardTo: 47 LOC (+1 vs HEAD), directory median 22 LOC (ratio 2.1)",
+        "src/foo.ts::moveCardTo: 47 LOC (+1 vs HEAD), directory median 22 LOC (ratio 2.1)"
+            .to_string(),
     )];
 
     let mut buf = Vec::new();
@@ -42,7 +43,7 @@ fn finding_renders_text_one_line_per_finding() {
     let findings = vec![Finding::new(
         Layer::Hotspot,
         Severity::Warn,
-        "core/a.rs ranks #2 (top-20 hotspot)",
+        "core/a.rs ranks #2 (top-20 hotspot)".to_string(),
     )];
 
     let mut buf = Vec::new();
@@ -72,10 +73,10 @@ fn finding_renders_text_one_line_per_finding() {
 #[test]
 fn findings_serialize_to_json_with_stable_keys() {
     let findings = vec![
-        Finding::new(Layer::Hotspot, Severity::Warn, "h"),
-        Finding::new(Layer::Coupling, Severity::Info, "c"),
-        Finding::new(Layer::Drift, Severity::Ok, "d"),
-        Finding::new(Layer::Budget, Severity::Warn, "b"),
+        Finding::new(Layer::Hotspot, Severity::Warn, "h".to_string()),
+        Finding::new(Layer::Coupling, Severity::Info, "c".to_string()),
+        Finding::new(Layer::Drift, Severity::Ok, "d".to_string()),
+        Finding::new(Layer::Budget, Severity::Warn, "b".to_string()),
     ];
 
     let mut buf = Vec::new();
@@ -112,9 +113,9 @@ fn findings_serialize_to_json_with_stable_keys() {
 #[test]
 fn findings_grouping_renders_layer_header_in_text_only() {
     let findings = vec![
-        Finding::new(Layer::Hotspot, Severity::Warn, "h1"),
-        Finding::new(Layer::Coupling, Severity::Info, "c1"),
-        Finding::new(Layer::Hotspot, Severity::Info, "h2"),
+        Finding::new(Layer::Hotspot, Severity::Warn, "h1".to_string()),
+        Finding::new(Layer::Coupling, Severity::Info, "c1".to_string()),
+        Finding::new(Layer::Hotspot, Severity::Info, "h2".to_string()),
     ];
 
     // Text mode: groups by layer, header per layer, body lines

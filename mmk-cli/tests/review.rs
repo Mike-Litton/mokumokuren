@@ -2038,3 +2038,31 @@ fn review_default_gate_suppresses_wilson_one_of_one() {
         v["findings"]
     );
 }
+
+#[serial(cwd)]
+#[test]
+fn review_bad_range_error_names_range_and_repo() {
+    let dir = TempDir::new().unwrap();
+    let now = 1_700_000_000_i64;
+    init_repo(dir.path());
+    write(dir.path(), "a.rs", "x\n");
+    commit_all(dir.path(), "A: initial", now);
+
+    let mut args = review_args();
+    args.range = Some("nonexistent..HEAD".into());
+
+    let (res, _stdout, _stderr) = common::with_cwd(dir.path(), |so, se| {
+        mokumokuren::commands::review::run(&args, None, so, se)
+    });
+    let err = res.expect_err("bad range must error");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("nonexistent..HEAD"),
+        "error must name the offending range: {msg}"
+    );
+    let repo_marker = dir.path().display().to_string();
+    assert!(
+        msg.contains(&repo_marker),
+        "error must name the repo path ({repo_marker}): {msg}"
+    );
+}

@@ -23,3 +23,6 @@
 # OS
 .DS_Store
 Thumbs.db
+
+# Per-developer Claude Code instructions (project-local, not shared)
+CLAUDE.local.md

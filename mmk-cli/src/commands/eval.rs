@@ -198,10 +198,16 @@ fn list_recent_commits(cwd: &Path, n: usize) -> Result<Vec<String>> {
         .args(["log", "--no-merges", &format!("-{n}"), "--format=%H"])
         .current_dir(cwd)
         .output()
-        .context("failed to invoke `git log` — is git on PATH?")?;
+        .with_context(|| {
+            format!(
+                "failed to invoke `git log` in {} — is git on PATH?",
+                cwd.display()
+            )
+        })?;
     if !out.status.success() {
         anyhow::bail!(
-            "git log exited with {}: {}",
+            "git log in {} exited with {}: {}",
+            cwd.display(),
             out.status,
             String::from_utf8_lossy(&out.stderr)
         );

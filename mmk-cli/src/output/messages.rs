@@ -14,7 +14,7 @@
 //! Negative oracles in `mmk-cli/tests/messages.rs` lock these
 //! invariants so a future format-string tweak can't regress them.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Canonical prefix on every "designed quiet case, not uncertainty" surface.
 ///
@@ -226,7 +226,7 @@ pub fn drift(
 
 /// `<subject>: action-registration; precedents: <Y>, <Z>`
 #[must_use]
-pub fn health_registration<P: AsRef<Path>>(subject: &Path, related: &[P]) -> String {
+pub fn health_registration(subject: &Path, related: &[PathBuf]) -> String {
     format!(
         "{}: action-registration; precedents: {}",
         subject.display(),
@@ -236,7 +236,7 @@ pub fn health_registration<P: AsRef<Path>>(subject: &Path, related: &[P]) -> Str
 
 /// `<subject>: service-decl; consumers: <Y>, <Z>`
 #[must_use]
-pub fn health_service<P: AsRef<Path>>(subject: &Path, related: &[P]) -> String {
+pub fn health_service(subject: &Path, related: &[PathBuf]) -> String {
     format!(
         "{}: service-decl; consumers: {}",
         subject.display(),
@@ -246,7 +246,7 @@ pub fn health_service<P: AsRef<Path>>(subject: &Path, related: &[P]) -> String {
 
 /// `<subject>: test partner <Y> not in diff`
 #[must_use]
-pub fn health_test_pair<P: AsRef<Path>>(subject: &Path, related: &[P]) -> String {
+pub fn health_test_pair(subject: &Path, related: &[PathBuf]) -> String {
     format!(
         "{}: test partner {} not in diff",
         subject.display(),
@@ -451,10 +451,10 @@ pub const fn session_window_suppressed() -> &'static str {
      for window hotspots"
 }
 
-fn join_paths<P: AsRef<Path>>(paths: &[P]) -> String {
+fn join_paths(paths: &[PathBuf]) -> String {
     paths
         .iter()
-        .map(|p| p.as_ref().display().to_string())
+        .map(|p| p.display().to_string())
         .collect::<Vec<_>>()
         .join(", ")
 }

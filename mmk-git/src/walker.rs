@@ -193,7 +193,8 @@ impl RepoWalker {
 
         let mut out = Vec::new();
         for info in walk {
-            let info = info.context("revision walk error")?;
+            let info =
+                info.with_context(|| format!("revision walk error starting from {start}"))?;
             let commit = info.object().context("failed to load commit object")?;
             let ts = commit
                 .time()
