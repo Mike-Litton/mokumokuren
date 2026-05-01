@@ -103,6 +103,25 @@ pub const DEFAULT_STRUCTURE_ROLE_PATTERNS: &[&str] = &[
     "*Barrel",
 ];
 
+/// `[bulk] review_quality_lines` default.
+///
+/// Empirical lineage: Jureczko 2020 (*Code review effectiveness: an
+/// empirical study on selected factors influence*, IET Software,
+/// doi:10.1049/iet-sen.2020.0134) replicates the SmartBear/Cisco
+/// case-study finding (Cohen 2006) under controls for developer
+/// ability and team dynamics — review rate ≤ ~200 LOC/h is a
+/// significant predictor of defect-removal effectiveness.
+/// Demeyer et al. 2024 (*Developer perceptions of modern code
+/// review processes in practice*, JSS) reaffirms patch size as
+/// the dominant lever on review duration / comment density.
+/// mmk's BUDGET layer carries this as a *floor* below the per-diff
+/// cap: an Info fires once a working-tree-vs-HEAD diff crosses 200
+/// LOC even when far under `max_lines` (1000 default). Absolute,
+/// not proportional — tying it to `max_lines` would mean a user
+/// who raises the cap silently weakens the threshold. Set to 0 in
+/// `mokumokuren.toml` to disable.
+pub const DEFAULT_REVIEW_QUALITY_LINES: u32 = 200;
+
 /// `[bulk] ignore_for_budget` default — empty.
 ///
 /// Globs in this list are excluded from the *diff-time* BUDGET
@@ -209,6 +228,13 @@ pub struct HotspotCfg {
 pub struct BulkCfg {
     pub max_files: u32,
     pub max_lines: u32,
+    /// Review-effectiveness floor in absolute LOC. A working-tree-
+    /// vs-HEAD diff that crosses this threshold emits a BUDGET Info
+    /// finding even when far under `max_lines`. Independent of the
+    /// per-diff cap on purpose — see
+    /// [`DEFAULT_REVIEW_QUALITY_LINES`] for the empirical lineage.
+    /// Set to 0 to disable.
+    pub review_quality_lines: u32,
     /// Fraction in `[0.0, 1.0]`. When the working-tree diff's
     /// new-file fraction exceeds this, `mmk review` emits a single
     /// explicit greenfield acknowledgement so the agent doesn't have
@@ -480,6 +506,7 @@ impl Default for BulkCfg {
         Self {
             max_files: 15,
             max_lines: 1000,
+            review_quality_lines: DEFAULT_REVIEW_QUALITY_LINES,
             greenfield_threshold: DEFAULT_GREENFIELD_THRESHOLD,
             ignore_for_budget: DEFAULT_BULK_IGNORE_FOR_BUDGET
                 .iter()

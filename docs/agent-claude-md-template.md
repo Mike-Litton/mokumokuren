@@ -36,11 +36,14 @@ change with its tests. Commit each slice as you complete it; do not
 accumulate slices into one large diff.
 
 **When BUDGET fires: stop, commit the current slice, continue.**
-BUDGET is a signal to *cut*, not to ignore. mmk's BUDGET sensor is
-calibrated against Cohen 2006's review-effectiveness threshold (~200
-LOC) — once a diff crosses that line, review quality drops sharply.
-Treat each BUDGET fire as the system telling you the diff has crossed
-into "no longer one slice" territory.
+BUDGET fires in two registers, calibrated independently:
+
+- **Info at +200 LOC** (review-effectiveness floor). The diff has
+  crossed the threshold past which review effectiveness degrades.
+  This fire *is* the slice boundary — finish the slice and commit
+  before adding more.
+- **Warn at 75% / Over at 100% of the per-diff cap (1000 LOC default).**
+  The diff is too big to review well. Split it.
 
 The pattern compounds: small commits make BUDGET fires meaningful,
 which makes the cut-and-commit response cheap, which keeps commits
@@ -75,7 +78,10 @@ One paragraph per sensor; tuned from the v0.8 experiment data.
   A partner you've already touched in this diff is not a finding.
 - **COMPLEXITY**: delta-weighted (v0.8). Warn = you made it worse;
   Info = your edit is small but the function was already over.
-- **BUDGET**: cut, commit, continue. See section 2.
+- **BUDGET**: two registers. Info at +200 LOC (review-
+  effectiveness floor — the slice is done; commit). Warn / Over
+  near and past the per-diff cap (1000 LOC default — split). See
+  section 2.
 - **STRUCTURE**: divergence is real signal except on role files.
   Role-file findings (Info) name the role status; act on them only
   when the divergence is from peer role files.

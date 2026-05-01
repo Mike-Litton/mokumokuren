@@ -88,3 +88,18 @@ ignore = [
 # [health.ts]
 # enabled = true
 # patterns = ["registration", "service", "test_pair"]
+
+# `[bulk]` carries two diff-time guardrails calibrated independently:
+# `max_files` / `max_lines` are the per-diff cap (agentic-context
+# safety) — diffs over either one silence HOTSPOT/COUPLING.
+# `review_quality_lines` is the review-effectiveness floor (defect-
+# detection during review degrades sharply past ~200 LOC; replicated
+# in Jureczko 2020 IET Software, 10.1049/iet-sen.2020.0134). The
+# block below mirrors the in-code defaults so an agent reading the
+# config sees both thresholds; bump `max_lines` / `max_files` for
+# repos with naturally wider commit grain. Set `review_quality_lines
+# = 0` to disable the floor; the cap stays.
+[bulk]
+max_files            = 15
+max_lines            = 1000
+review_quality_lines = 200  # review-effectiveness floor

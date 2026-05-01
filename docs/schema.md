@@ -201,7 +201,8 @@ it to understand exactly what produced the result.
 | `window.tau_days`              | uint     | Recency-decay 1/e point.                                     |
 | `hotspot.top_n`                | uint     | Effective `--top`.                                           |
 | `bulk.max_files`               | uint     | Bulk-filter file threshold (default `15`; v0.6 made this overridable from `mokumokuren.toml`). |
-| `bulk.max_lines`               | uint     | Bulk-filter line threshold (default `1000`; v0.6 made this overridable from `mokumokuren.toml`). The line cap is the literature-backed half (Cohen 2006 SmartBear/Cisco data); the file cap is an engineering heuristic. |
+| `bulk.max_lines`               | uint     | Per-diff line cap (default `1000`; v0.6 made this overridable). Agentic-context safety half of BUDGET. Independent of `bulk.review_quality_lines` — the cap and the review-effectiveness floor encode different evidence. |
+| `bulk.review_quality_lines`    | uint     | (v0.10) Review-effectiveness floor in absolute LOC (default `200`). A working-tree-vs-HEAD diff that crosses this line emits a BUDGET Info finding even when far under `max_lines`. Set to `0` to disable. |
 | `bulk.greenfield_threshold`    | float    | Fraction of changed paths the analyzer must not have seen before `mmk review` emits the greenfield-acknowledgement Info finding (default `0.5`). |
 | `bulk.ignore_for_budget`       | string[] | (v0.6) Glob patterns excluded from diff-time BUDGET accounting. The full diff still appears in `review.diff.files[]`. |
 | `blast_radius.threshold`       | float    | Min Jaccard for `--blast-radius` neighborhood.               |

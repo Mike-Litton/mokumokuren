@@ -232,6 +232,16 @@ pub fn run<O: Write, E: Write>(
             };
             let progress = mmk_core::budget::budget_progress(&check, &cfg.bulk);
             match mmk_core::budget::budget_tier(&progress) {
+                mmk_core::budget::BudgetTier::ReviewQuality => {
+                    findings.push(Finding::new(
+                        Layer::Budget,
+                        Severity::Info,
+                        messages::budget_review_quality(
+                            progress.lines.0,
+                            u64::from(progress.review_quality_lines),
+                        ),
+                    ));
+                }
                 mmk_core::budget::BudgetTier::Approaching => {
                     findings.push(Finding::new(
                         Layer::Budget,

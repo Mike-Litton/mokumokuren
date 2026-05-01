@@ -5,7 +5,8 @@
 use ahash::AHashSet;
 use mmk_config::BulkCfg;
 use mmk_core::budget::{
-    check_diff_budget, check_session_aggregate, new_files_at_head, BudgetCheck, BudgetTrigger,
+    budget_progress, budget_tier, check_diff_budget, check_session_aggregate, new_files_at_head,
+    BudgetCheck, BudgetTier, BudgetTrigger,
 };
 use rstest::rstest;
 use std::path::PathBuf;
@@ -14,6 +15,17 @@ const fn cfg(max_files: u32, max_lines: u32) -> BulkCfg {
     BulkCfg {
         max_files,
         max_lines,
+        review_quality_lines: 0,
+        greenfield_threshold: mmk_config::DEFAULT_GREENFIELD_THRESHOLD,
+        ignore_for_budget: Vec::new(),
+    }
+}
+
+const fn cfg_with_floor(max_files: u32, max_lines: u32, review_quality_lines: u32) -> BulkCfg {
+    BulkCfg {
+        max_files,
+        max_lines,
+        review_quality_lines,
         greenfield_threshold: mmk_config::DEFAULT_GREENFIELD_THRESHOLD,
         ignore_for_budget: Vec::new(),
     }
@@ -150,4 +162,48 @@ fn new_files_at_head_cold_file_at_head_is_not_new() {
         (frac - 0.5).abs() < 1e-12,
         "cold file at HEAD must not be new; got {frac}"
     );
+}
+
+// ---- ReviewQuality floor (review-effectiveness) ---------------------------
+
+/// The review-effectiveness floor sits *below* `Approaching`: a
+/// diff under 50% of the per-diff cap fires `ReviewQuality` once
+/// it crosses the absolute LOC threshold. Above 50% the
+/// proportional `Approaching` tier wins (precedence).
+#[rstest]
+#[case::just_under_floor(199, BudgetTier::Quiet)]
+#[case::at_floor(200, BudgetTier::ReviewQuality)]
+#[case::between_floor_and_50pct(214, BudgetTier::ReviewQuality)]
+#[case::approaching_wins_above_50pct(500, BudgetTier::Approaching)]
+fn review_quality_tier_transitions(#[case] lines: u64, #[case] expect: BudgetTier) {
+    // 200 LOC floor, 1000 LOC cap → 50% of cap (500 LOC) is where
+    // Approaching takes over.
+    let progress = budget_progress(
+        &BudgetCheck {
+            files_changed: 0,
+            lines_changed: lines,
+        },
+        &cfg_with_floor(15, 1000, 200),
+    );
+    assert_eq!(
+        budget_tier(&progress),
+        expect,
+        "{lines} LOC against 200/1000 floor/cap"
+    );
+}
+
+/// `review_quality_lines = 0` disables the floor — a 199-or-200 LOC
+/// diff under 50% of the cap stays Quiet. The test catches an
+/// accidental "always fire when lines >= 0" condition where the
+/// disabled-knob branch and the active-knob branch share code.
+#[test]
+fn review_quality_floor_disabled_stays_quiet() {
+    let progress = budget_progress(
+        &BudgetCheck {
+            files_changed: 0,
+            lines_changed: 250,
+        },
+        &cfg_with_floor(15, 1000, 0),
+    );
+    assert_eq!(budget_tier(&progress), BudgetTier::Quiet);
 }

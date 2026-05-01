@@ -74,6 +74,13 @@ When invoked:
 4. If `session.base_resolved_via` is anything other than `explicit`
    or `since_commit`, mark the session block as informational only.
 
+5. **If `mmk review` surfaced a BUDGET Info at the review-
+   effectiveness floor** (`review effectiveness degrades past
+   ~200 lines`), treat that fire as the slice boundary — commit
+   the current slice before adding more. The floor sits below
+   the per-diff cap on purpose; it surfaces the slice cue earlier
+   than the cap does.
+
 Treat the output as guidance, not gates. Tests and review still apply.
 ```
 
@@ -143,6 +150,39 @@ a top-level `systemMessage` ("mmk: prior findings unchanged since
 HEAD <sha7>") so the agent can distinguish "consulted, quiet" from
 "wasn't run." That replaces the silent no-op older `2>/dev/null ||
 true` recipes used to mask.
+
+### Wiring `session-summary` to `git commit`
+
+`mmk session-summary` is the post-commit / pre-PR view (window vs
+session, DRIFT + BUDGET overlay) — it reads committed state, so
+running it on uncommitted work returns a nudge toward `mmk review`.
+The `PostToolUse:Bash(git commit:*)` matcher fires it automatically
+the moment a commit lands, closing the gap where session-summary
+otherwise has to be remembered as an explicit step.
+
+```jsonc
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash(git commit:*)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mmk session-summary --base $(git symbolic-ref --quiet refs/remotes/origin/HEAD | sed 's@.*/@@' || echo main) --drift-sessions 5"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The `git symbolic-ref` substitution resolves the upstream's default
+branch when present (`origin/HEAD` → `main` / `master` /
+whatever); the `|| echo main` fallback handles repos where
+`origin/HEAD` isn't set, so the hook works on freshly-cloned trees
+and offline repos without manual `--base` configuration.
 
 ### CI gating with `--gate`
 

@@ -39,7 +39,9 @@ Pick the path that matches what you're trying to do.
    For drop-in CLAUDE.md content describing how the agent should
    read mmk's output, copy
    [`agent-claude-md-template.md`](agent-claude-md-template.md) into
-   your repo's `CLAUDE.md`.
+   your repo's `CLAUDE.md`. To wire `mmk session-summary` to fire
+   automatically on every commit, see
+   [`claude-code.md` § Wiring `session-summary` to `git commit`](claude-code.md#wiring-session-summary-to-git-commit).
 
 4. Edit a service file with Claude. The hook fires after every edit;
    the agent sees layer-labeled findings before its next turn:

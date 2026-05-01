@@ -126,9 +126,10 @@ pub fn hotspot(path: &Path, rank: u32, top: usize) -> String {
 /// hotspot." Per-file sensors (STRUCTURE, COMPLEXITY) still run —
 /// their cost and signal both scale per-file, not with diff size.
 ///
-/// The rollback / review-slowdown tail is the empirical Cohen-2006
-/// SmartBear / Cisco data point on review-quality degradation past
-/// ~200 LOC; it stays as the descriptive implication.
+/// The rollback / review-slowdown tail is the empirical observation
+/// from the SmartBear/Cisco case study (Cohen 2006), replicated under
+/// controls in Jureczko 2020 (IET Software): review effectiveness
+/// degrades past ~200 LOC and continues to degrade as size grows.
 ///
 /// When `gross` is `Some(g)` and `g > actual`, the prose reports
 /// both the net (post-`ignore_for_budget`) and gross totals so the
@@ -173,6 +174,24 @@ pub fn budget_lines(actual: u64, max: u64, gross: Option<u64>, suppressed: bool)
     };
     format!(
         "diff is {actual} lines{gross_clause}; cap {max}{tail}; large diffs concentrate rollback risk and slow review"
+    )
+}
+
+/// `diff at N lines; review effectiveness degrades past ~M lines. Commit this slice before continuing.`
+///
+/// Absolute review-effectiveness floor (default 200 LOC). Fires Info
+/// once the working-tree-vs-HEAD diff crosses the threshold while
+/// still under 50% of the per-diff cap — the band the under-cap
+/// ramp's 50% Approaching tier doesn't reach. The message anchors
+/// to the behavior (review effectiveness degrades) rather than to a
+/// paper citation an agent can't verify. The threshold's empirical
+/// grounding lives in the docstring on `BulkCfg::review_quality_lines`
+/// (Jureczko 2020 IET Software replication of the SmartBear/Cisco
+/// review-rate findings).
+#[must_use]
+pub fn budget_review_quality(actual: u64, threshold: u64) -> String {
+    format!(
+        "diff at {actual} lines; review effectiveness degrades past ~{threshold} lines. Commit this slice before continuing."
     )
 }
 

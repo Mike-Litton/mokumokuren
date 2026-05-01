@@ -21,6 +21,17 @@ ignore = [
     ".yarn/**",
 ]
 
+# `[bulk]` carries two diff-time guardrails calibrated independently:
+# `max_files` / `max_lines` are the per-diff cap (agentic-context
+# safety); `review_quality_lines` is the review-effectiveness floor
+# (defect-detection during review degrades sharply past ~200 LOC).
+# Mirrored here so the defaults are visible — set
+# `review_quality_lines = 0` to disable the floor.
+[bulk]
+max_files            = 15
+max_lines            = 1000
+review_quality_lines = 200  # review-effectiveness floor
+
 [coupling]
 confidence_threshold = 0.20
 min_sample_size = 1

@@ -91,13 +91,33 @@ session-summary (also routed to `confidence_threshold`).
 
 ## `[bulk]`
 
-Controls the per-commit / per-diff size guardrails. The line cap
-sits in literature-backed territory (Cohen 2006 SmartBear/Cisco
-data: defect-detection during review degrades sharply past
-~200 LOC and floors out past ~400 LOC; mmk's default sits well
-above that for whole-diff size since an agent often splits a
-review into multiple chunks). The file cap is an engineering
-heuristic — the published change-review literature is almost
+Controls the per-commit / per-diff size guardrails. BUDGET ships
+two complementary thresholds calibrated independently:
+
+- **Per-diff cap** (`max_lines` / `max_files`, default 1000 / 15):
+  *agentic-context safety*. Diffs over the cap silence
+  HOTSPOT/COUPLING because their signal collapses at scale, and
+  the analyzer drops over-cap commits from the historical
+  baseline. Warn at 75 %, Over at 100 %.
+- **Review-effectiveness floor** (`review_quality_lines`, default
+  200): an absolute LOC threshold past which defect-detection
+  during code review degrades sharply. Empirical lineage: Jureczko
+  2020 (*Code review effectiveness: an empirical study on selected
+  factors influence*, IET Software,
+  [doi:10.1049/iet-sen.2020.0134](https://digital-library.theiet.org/doi/full/10.1049/iet-sen.2020.0134))
+  replicates the SmartBear/Cisco case-study finding under controls
+  for developer ability and team dynamics; Demeyer et al. 2024
+  (*Developer perceptions of modern code review processes in
+  practice*, JSS) reaffirms patch size as the dominant lever on
+  review duration / comment density. v0.10 surfaces the threshold
+  as an Info-severity floor below the cap so the agent sees the
+  slice-boundary cue at the empirical threshold, not at 50 % of
+  an engineering-heuristic ceiling.
+
+The two thresholds encode different evidence and stay independent:
+raising the cap doesn't drag the floor up proportionally — that
+would silently weaken the floor. The file cap is an engineering
+heuristic; the published change-review literature is almost
 entirely LOC-based and there is no peer-reviewed file-count
 threshold to derive a default from.
 
@@ -105,6 +125,7 @@ threshold to derive a default from.
 [bulk]
 max_files            = 15
 max_lines            = 1000
+review_quality_lines = 200
 greenfield_threshold = 0.5
 ignore_for_budget = [
     "**/routeTree.gen.ts",
@@ -115,7 +136,8 @@ ignore_for_budget = [
 | Field                  | Default | Notes                                                                       |
 | ---------------------- | ------- | --------------------------------------------------------------------------- |
 | `max_files`            | `15`    | Per-commit / per-diff file cap. Affects both the historical-baseline filter (commits with > this many files don't contribute to coupling priors) and the working-tree bulk-self-filter (diffs over the cap silence HOTSPOT/COUPLING). v0.6 made this overridable from `mokumokuren.toml`. **Repos with naturally wider feature-commit grain** (workspace projects, infra repos, scaffold-heavy histories) need to bump this — at the default 15, every wide-grain commit gets dropped from the analyzer's commit set, leaving cross-cutting files reading as "no analyzable history" even with rich edit history. |
-| `max_lines`            | `1000`  | Per-commit / per-diff line cap. Same dual purpose as `max_files`. v0.6 made this overridable. The 1000-line ceiling is calibrated for whole-diff size; a per-review-session ceiling of 200 LOC (Cohen 2006) is a different cap that the agent applies through review behaviour, not through this knob. |
+| `max_lines`            | `1000`  | Per-commit / per-diff line cap (agentic-context safety half of BUDGET). Same dual purpose as `max_files`. v0.6 made this overridable. Independent of the review-effectiveness floor below — the cap and the floor encode different evidence. |
+| `review_quality_lines` | `200`   | (v0.10) Review-effectiveness floor in absolute LOC. A working-tree-vs-HEAD diff that crosses this line emits a BUDGET Info finding even when far under `max_lines`. Independent of `max_lines`: tying them together would mean a user who raises the cap silently weakens the floor. Empirical lineage in the docstring on `mmk_config::DEFAULT_REVIEW_QUALITY_LINES` (Jureczko 2020 IET Software replication; Demeyer et al. 2024 JSS reaffirmation). Set to `0` to disable; the per-diff cap stays. |
 | `greenfield_threshold` | `0.5`   | When the working-tree diff's new-file fraction exceeds this, `mmk review` emits one explicit greenfield-acknowledgement Info finding so the agent reads HOTSPOT/COUPLING/DRIFT silence as expected, not as "mmk decided to be quiet." |
 | `ignore_for_budget`    | `[]`    | (v0.6) Globs whose paths are excluded from diff-time BUDGET accounting (bulk-self-filter, over-cap trigger, under-cap ramp). Generated-file regenerations no longer trip BUDGET on every edit and silence HOTSPOT/COUPLING. The full diff still appears in `review.diff.files[]`; the optional `review.diff.budget` JSON sub-block surfaces gross / net counts plus the active glob list so silent dropping never recurs. |
 

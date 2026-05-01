@@ -84,11 +84,19 @@ pub struct BulkFile {
     #[serde(default)]
     pub max_files: Option<u32>,
     /// Override the per-commit / per-diff line cap. Default 1000.
-    /// The line cap is the literature-backed half of BUDGET
-    /// (Cohen 2006 SmartBear/Cisco data); the file cap above is
+    /// Agentic-context safety half of BUDGET; the review-
+    /// effectiveness floor below fires a separate Info at a lower
+    /// absolute threshold (default 200 LOC). The file cap above is
     /// an engineering heuristic.
     #[serde(default)]
     pub max_lines: Option<u32>,
+    /// Override the review-effectiveness floor (absolute LOC).
+    /// Default 200. Set to 0 to disable. Independent of `max_lines`
+    /// — the per-diff cap and the review-effectiveness floor are
+    /// calibrated against different evidence (see the docstring on
+    /// [`crate::DEFAULT_REVIEW_QUALITY_LINES`] for the lineage).
+    #[serde(default)]
+    pub review_quality_lines: Option<u32>,
 }
 
 /// `[coupling]` block in `mokumokuren.toml`.

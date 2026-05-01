@@ -6,6 +6,57 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-01
+
+### Added
+
+- **`bulk.review_quality_lines` config field (default `200`).** Adds
+  a `BudgetTier::ReviewQuality` Info finding that fires once the
+  working-tree-vs-HEAD diff crosses the absolute LOC threshold
+  while still under 50 % of the per-diff cap. Threshold is absolute,
+  not proportional to `max_lines` — the cap (agentic-context
+  safety) and the floor (review effectiveness) are calibrated
+  against different evidence and stay independent. Set to `0` to
+  disable. Empirical lineage on `mmk_config::DEFAULT_REVIEW_QUALITY_LINES`
+  (Jureczko 2020 IET Software,
+  [doi:10.1049/iet-sen.2020.0134](https://digital-library.theiet.org/doi/full/10.1049/iet-sen.2020.0134),
+  replicates the SmartBear/Cisco case-study finding under controls
+  for developer ability and team dynamics; Demeyer et al. 2024 JSS
+  reaffirms patch size as the dominant lever on review duration /
+  comment density). Per-key `MonotonicSignal`
+  (`budget::review_quality`) suppresses re-fires on unchanged diffs.
+  `findings[].message` body: `diff at N lines; review effectiveness
+  degrades past ~M lines. Commit this slice before continuing.`
+- **`[bulk]` block in all five `mmk init` profiles** (`default`,
+  `js-ts`, `rust`, `python`, `go`). Mirrors the in-code defaults
+  (`max_files = 15`, `max_lines = 1000`, `review_quality_lines =
+  200`) so adopters see the active thresholds in their committed
+  config, not silent inheritance. Same precedent as v0.9's
+  `role_patterns`.
+- **`PostToolUse:Bash(git commit:*)` hook recipe.**
+  [`docs/claude-code.md`](docs/claude-code.md) documents wiring
+  `mmk session-summary` to fire after every commit, with a
+  `git symbolic-ref ... || echo main` substitution for the
+  `--base` argument so the recipe works on repos whose
+  `origin/HEAD` isn't set.
+
+### Changed
+
+- **`agent-claude-md-template.md` BUDGET passage now describes two
+  registers.** Section 2 previously stated BUDGET enforces ~200
+  LOC; it didn't (the implementation cap was 1000). Updated to
+  describe the actual two-threshold shape: Info at +200 LOC
+  (review-effectiveness floor), Warn / Over near and past the
+  per-diff cap. Section 4's BUDGET prior matches.
+- **`docs/configuration.md` `[bulk]` section** restructured around
+  the two-threshold model. The v0.9 prose at line 118 (which
+  noted ~200 LOC as a cap "the agent applies through review
+  behaviour, not through this knob") referenced behavior that had
+  no corresponding knob; both halves are now knobs.
+- **`docs/claude-code.md` Skill body** gains one bullet linking
+  the `BUDGET` Info at the review-effectiveness floor to a stop-
+  and-commit response.
+
 ## [0.9.0] - 2026-04-29
 
 Calibration II: tighten attribution, surface confidence, harmonize

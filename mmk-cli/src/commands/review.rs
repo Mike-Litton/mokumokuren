@@ -148,6 +148,9 @@ pub fn run<O: Write, E: Write>(
         if let Some(v) = file_b.max_lines {
             cfg.bulk.max_lines = v;
         }
+        if let Some(v) = file_b.review_quality_lines {
+            cfg.bulk.review_quality_lines = v;
+        }
     }
     // Explicit --coupling-threshold wins; fall back to the
     // (deprecated) --blast-radius-threshold so existing CLI
@@ -202,11 +205,14 @@ pub fn run<O: Write, E: Write>(
     // cost scales per changed file (not with diff size) and their
     // signal stays meaningful per-file at any total diff size.
     //
-    // The LOC-cap framing is research-grounded (Cohen 2006
-    // SmartBear/Cisco data: defect-detection-rate degrades sharply
-    // past ~200 LOC per review and floors out past ~400 LOC). The
-    // file-count cap is an engineering heuristic — there is no
-    // peer-reviewed file-count threshold in the literature.
+    // The LOC-cap framing is research-grounded: the original
+    // SmartBear/Cisco case study (Cohen 2006) found defect-
+    // detection-rate degrades sharply past ~200 LOC per review and
+    // floors out past ~400 LOC. Jureczko 2020 (IET Software,
+    // doi:10.1049/iet-sen.2020.0134) replicates the finding under
+    // controls for developer ability and team dynamics. The file-
+    // count cap is an engineering heuristic — there is no peer-
+    // reviewed file-count threshold in the literature.
     //
     // The `ignore_for_budget` globset removes generated-file class
     // paths from the BUDGET-trigger denominator. Both gross (full
@@ -1079,6 +1085,22 @@ pub(crate) fn compute_findings_with_signals(
                 u32::try_from(counts.lines_net).unwrap_or(u32::MAX),
             ];
             match mmk_core::budget::budget_tier(&progress) {
+                mmk_core::budget::BudgetTier::ReviewQuality => {
+                    findings.push((
+                        Finding::new(
+                            Layer::Budget,
+                            Severity::Info,
+                            messages::budget_review_quality(
+                                progress.lines.0,
+                                u64::from(progress.review_quality_lines),
+                            ),
+                        ),
+                        Some(crate::monotonic::MonotonicSignal {
+                            key: "budget::review_quality".into(),
+                            axes: ramp_axes,
+                        }),
+                    ));
+                }
                 mmk_core::budget::BudgetTier::Approaching => {
                     findings.push((
                         Finding::new(
