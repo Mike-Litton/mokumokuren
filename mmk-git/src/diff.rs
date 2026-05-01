@@ -10,8 +10,38 @@ use std::path::PathBuf;
 
 use crate::binary::count_lines;
 
+// Unix paths are arbitrary bytes; lossy UTF-8 conversion would replace
+// invalid sequences with U+FFFD and produce a PathBuf that no longer
+// matches the file on disk. On Windows, gix yields UTF-8 path bytes, so
+// the lossy fallback is faithful there.
 fn bstr_to_pathbuf(bytes: &[u8]) -> PathBuf {
-    PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
+    #[cfg(unix)]
+    {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        PathBuf::from(OsStr::from_bytes(bytes))
+    }
+    #[cfg(not(unix))]
+    {
+        PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Unix paths are arbitrary bytes; non-UTF-8 filenames must survive the
+    // gix-BStr → PathBuf conversion intact, or downstream filesystem
+    // comparisons silently miss the file.
+    #[cfg(unix)]
+    #[test]
+    fn bstr_to_pathbuf_preserves_non_utf8_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+        let bytes: &[u8] = b"src/caf\xc3\x28.rs";
+        let path = bstr_to_pathbuf(bytes);
+        assert_eq!(path.as_os_str().as_bytes(), bytes);
+    }
 }
 
 /// Type alias for the HEAD-path filter: byte-slice keys so we can probe
