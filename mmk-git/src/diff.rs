@@ -27,14 +27,13 @@ fn bstr_to_pathbuf(bytes: &[u8]) -> PathBuf {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
     // Unix paths are arbitrary bytes; non-UTF-8 filenames must survive the
     // gix-BStr → PathBuf conversion intact, or downstream filesystem
     // comparisons silently miss the file.
-    #[cfg(unix)]
     #[test]
     fn bstr_to_pathbuf_preserves_non_utf8_bytes() {
         use std::os::unix::ffi::OsStrExt;
