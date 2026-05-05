@@ -6,6 +6,21 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Claude Code plugin (`mokumokuren@mokumokuren-plugins`).** In-repo
+  marketplace at the project root wires the post-edit `mmk review`
+  hook, the post-commit `mmk session-summary` hook, the `mmk-on-edit`
+  / `mmk-findings` skills, and the `mmk-assessor` subagent in one
+  install. Plugin scripts gracefully fall back to a one-shot install
+  nudge if the `mmk` binary isn't on `PATH`. Source under
+  [`plugins/mokumokuren/`](plugins/mokumokuren/); install instructions
+  in [`docs/claude-code.md`](docs/claude-code.md) Option 0 and the
+  [plugin README](plugins/mokumokuren/README.md). The plugin's
+  skills are now the canonical copies; `docs/claude-code.md` Option 2
+  and `docs/agent-claude-md-template.md` link to them rather than
+  inlining a second drifting copy.
+
 ## [0.11.0] - 2026-05-05
 
 `mmk explain` — verify a borderline COUPLING claim before acting on

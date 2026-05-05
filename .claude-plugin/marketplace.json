@@ -1,0 +1,12 @@
+{
+  "name": "mokumokuren-plugins",
+  "owner": { "name": "Mike Litton", "url": "https://github.com/Mike-Litton" },
+  "description": "Mokumokuren plugins for Claude Code.",
+  "plugins": [
+    {
+      "name": "mokumokuren",
+      "source": "./plugins/mokumokuren",
+      "description": "Wire the mmk CLI into Claude Code's edit loop: post-edit review, post-commit session summary, plus skills for interpreting findings. Requires the mmk binary on PATH (see plugin README)."
+    }
+  ]
+}

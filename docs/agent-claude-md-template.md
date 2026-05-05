@@ -1,5 +1,12 @@
 # mmk agent guidance — CLAUDE.md template
 
+> **If you're on Claude Code, install the `mokumokuren` plugin
+> instead** — see [`docs/claude-code.md`](claude-code.md) Option 0.
+> The plugin's `mmk-findings` skill is the canonical home for the
+> override discipline and sensor priors below; this template stays
+> for non-Claude-Code harnesses or repos that prefer the
+> CLAUDE.md-only path.
+
 Drop this section into your repo's `CLAUDE.md` (or whatever
 agent-instruction surface your harness honours). It encodes the
 invocation pattern, override discipline, and per-sensor priors that

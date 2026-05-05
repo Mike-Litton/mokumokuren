@@ -104,11 +104,12 @@ one-shot.
 
 | What you want                              | Where to go                                            |
 | ------------------------------------------ | ------------------------------------------------------ |
+| Wire mmk into Claude Code with one command | `/plugin marketplace add Mike-Litton/mokumokuren && /plugin install mokumokuren@mokumokuren-plugins` ([README](plugins/mokumokuren/README.md)) |
 | Wire mmk into Claude Code in 5 minutes     | [`docs/getting-started.md`](docs/getting-started.md)   |
 | Drop-in agent guidance (CLAUDE.md content) | [`docs/agent-claude-md-template.md`](docs/agent-claude-md-template.md) |
 | Configure ignores and `[coupling]`         | [`docs/configuration.md`](docs/configuration.md)       |
 | Tune coupling for your repo                | [`docs/coupling.md`](docs/coupling.md) + `mmk eval`    |
-| Wire into Claude Code (CLAUDE.md / skill / hooks) | [`docs/claude-code.md`](docs/claude-code.md)    |
+| Wire into Claude Code (plugin / CLAUDE.md / skill / hooks) | [`docs/claude-code.md`](docs/claude-code.md) |
 | Read the JSON schema                       | [`docs/schema.md`](docs/schema.md)                     |
 | Understand each metric                     | [`docs/metrics.md`](docs/metrics.md)                   |
 
@@ -143,6 +144,7 @@ the topology layer in depth.
 | macOS / Linux | `curl -LsSf https://github.com/Mike-Litton/mokumokuren/releases/latest/download/mokumokuren-installer.sh \| sh` |
 | Windows | `iwr https://github.com/Mike-Litton/mokumokuren/releases/latest/download/mokumokuren-installer.ps1 \| iex` |
 | From source | clone the repo, then `cargo install --path mmk-cli --locked` |
+| Claude Code plugin (after binary install) | `/plugin marketplace add Mike-Litton/mokumokuren` then `/plugin install mokumokuren@mokumokuren-plugins` ([details](plugins/mokumokuren/README.md)) |
 
 Both `mokumokuren` and `mmk` land on `$PATH`.
 

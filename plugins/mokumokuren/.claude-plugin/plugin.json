@@ -1,0 +1,9 @@
+{
+  "name": "mokumokuren",
+  "description": "Git-history findings (HOTSPOT, COUPLING, BUDGET, DRIFT) wired into Claude Code's edit loop.",
+  "author": { "name": "Mike Litton" },
+  "homepage": "https://github.com/Mike-Litton/mokumokuren",
+  "repository": "https://github.com/Mike-Litton/mokumokuren",
+  "license": "MIT OR Apache-2.0",
+  "keywords": ["git", "review", "hotspot", "coupling", "code-review"]
+}

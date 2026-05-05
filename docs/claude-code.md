@@ -23,6 +23,27 @@ loop:
 across K sessions) operate at coarser grain — useful in CI gates and
 triage, not in the per-edit hook.
 
+## Option 0 — Plugin (recommended)
+
+If you're on a recent Claude Code, the cleanest path is the
+in-repo marketplace:
+
+```
+/plugin marketplace add Mike-Litton/mokumokuren
+/plugin install mokumokuren@mokumokuren-plugins
+```
+
+That wires the `PostToolUse:Edit|Write` review hook, the
+`PostToolUse:Bash(git commit:*)` session-summary hook, the
+`mmk-on-edit` and `mmk-findings` skills, and the `mmk-assessor`
+subagent in one step. Plugin defaults to advisory
+(`additionalContext`); for `--gate warn` strict mode, layer a
+project-level hook on top — see Option 3.
+
+The plugin only wires the integration; the `mmk` binary still
+ships separately (installer / `cargo install`). Plugin source
+lives at [`plugins/mokumokuren/`](../plugins/mokumokuren/).
+
 ## Option 1 — `CLAUDE.md` (advisory, easiest)
 
 Auto-loads per project. Copy
@@ -38,51 +59,20 @@ than principles ("be careful around hot files").
 
 ## Option 2 — Skill (auto-invokes on description match)
 
-Place this at `.claude/skills/mmk-on-edit/SKILL.md` in your repo.
+Place a skill at `.claude/skills/mmk-on-edit/SKILL.md` in your repo.
 Claude auto-invokes it when its trigger logic matches the
-description, or you can call it explicitly as `/mmk-on-edit`:
+description, or you can call it explicitly as `/mmk-on-edit`.
 
-```markdown
----
-name: mmk-on-edit
-description: Run mmk to surface Git-history findings about an edit. Use after editing a file to check for missed coupling partners and hotspot risk, before staging, or at end of feature for session summary.
----
+The canonical body is the one the plugin (Option 0) installs:
+[`plugins/mokumokuren/skills/mmk-on-edit/SKILL.md`](../plugins/mokumokuren/skills/mmk-on-edit/SKILL.md).
+Copy it into your repo if you want a single skill without the
+plugin's hooks, or want to customize the workflow.
 
-# mmk-on-edit
-
-When invoked:
-
-1. **Right after an Edit tool use** — run `mmk review`. Surface
-   every finding. Prioritize COUPLING misses: they're the most
-   actionable (partner you didn't touch).
-
-2. **About to edit a file `<PATH>`** — run `mmk pre-edit <PATH>`
-   and surface the HOTSPOT, COUPLING, and STRUCTURE findings. The
-   partners in COUPLING are files the agent should re-read before
-   editing `<PATH>`.
-
-2a. **About to create a new file `<PATH>`** — run `mmk pre-edit
-    <PATH>` even though `<PATH>` doesn't yet exist. STRUCTURE may
-    surface the directory's convention (common imports, export
-    shape) the new file should match.
-
-3. **End of feature / wrapping up** — run
-   `mmk session-summary --base main --drift-sessions 5`. Surface
-   findings, `entered_top_n`, `churn_of_churn`, and
-   `base_resolved_via`. (Add `--format json` for structured fields.)
-
-4. If `session.base_resolved_via` is anything other than `explicit`
-   or `since_commit`, mark the session block as informational only.
-
-5. **If `mmk review` surfaced a BUDGET Info at the review-
-   effectiveness floor** (`review effectiveness degrades past
-   ~200 lines`), treat that fire as the slice boundary — commit
-   the current slice before adding more. The floor sits below
-   the per-diff cap on purpose; it surfaces the slice cue earlier
-   than the cap does.
-
-Treat the output as guidance, not gates. Tests and review still apply.
-```
+A second skill, `mmk-findings`
+([source](../plugins/mokumokuren/skills/mmk-findings/SKILL.md)),
+covers the interpretation side — sensor priors, override
+discipline, reading silence — and auto-invokes when findings are
+present.
 
 **Reliability:** higher than CLAUDE.md because the skill body only
 loads when invoked. Auto-invocation depends on Claude's trigger

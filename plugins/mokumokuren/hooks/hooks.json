@@ -1,0 +1,20 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [{
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/review-on-edit.sh"
+        }]
+      },
+      {
+        "matcher": "Bash(git commit:*)",
+        "hooks": [{
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/session-summary.sh"
+        }]
+      }
+    ]
+  }
+}
