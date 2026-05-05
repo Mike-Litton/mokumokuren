@@ -24,7 +24,7 @@ use serial_test::serial;
 use std::fs;
 use tempfile::TempDir;
 
-const SKIP_TOKENS: &[&str] = &["init", "cache", "eval"];
+const SKIP_TOKENS: &[&str] = &["init", "cache", "eval", "explain"];
 
 fn extract_shell_blocks(readme: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -101,7 +101,7 @@ fn run_cmd_against_fixture(cmd: &[String]) -> Result<(), String> {
         Command::Review(a) => mokumokuren::commands::review::run(&a, None, so, se).map(|_| ()),
         Command::PreEdit(a) => mokumokuren::commands::pre_edit::run(&a, None, so, se).map(|_| ()),
         Command::Drift(a) => mokumokuren::commands::drift::run(&a, so, se),
-        Command::Init(_) | Command::Eval(_) | Command::Cache(_) => {
+        Command::Init(_) | Command::Eval(_) | Command::Cache(_) | Command::Explain(_) => {
             unreachable!("filtered by SKIP_TOKENS")
         }
     });

@@ -67,6 +67,9 @@ don't act.
   share the *role* convention rather than the directory shape.
 - "I read this and chose to override because <X>" is a complete
   response; "I didn't address this" is not.
+- When a finding is borderline or surprising, run
+  `mmk explain --finding <id>` to see the underlying commits before
+  deciding.
 
 ## 4. Sensor priors
 

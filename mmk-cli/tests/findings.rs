@@ -93,10 +93,15 @@ fn findings_serialize_to_json_with_stable_keys() {
         let keys: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
         assert_eq!(
             keys,
-            ["layer", "message", "severity"]
+            ["id", "layer", "message", "severity"]
                 .into_iter()
                 .collect::<std::collections::BTreeSet<_>>(),
-            "findings[{i}] must have exactly {{layer, severity, message}} keys, got {keys:?}"
+            "findings[{i}] must have exactly {{layer, severity, message, id}} keys, got {keys:?}"
+        );
+        assert!(
+            entry["id"].is_null(),
+            "findings without an explain id must serialize id as null (explicit absence), got {:?}",
+            entry["id"],
         );
     }
 
@@ -155,6 +160,46 @@ fn findings_grouping_renders_layer_header_in_text_only() {
         v.is_array(),
         "JSON findings render is a flat array, not a grouping object"
     );
+}
+
+#[test]
+fn finding_with_id_renders_trailing_id_tag_in_text_mode() {
+    // The `[id=…]` tag is the agent's join-key for `mmk explain
+    // --finding <id>`. Rendered at the end of the line so a grep on
+    // the message prose still works, and so the id never visually
+    // competes with the severity glyph.
+    let findings = vec![Finding::with_id(
+        Layer::Coupling,
+        Severity::Warn,
+        "core/a.rs edited; core/b.rs co-edited 8 of 12 prior commits, not in diff".to_string(),
+        "coupling:core/a.rs:core/b.rs".to_string(),
+    )];
+    let mut buf = Vec::new();
+    render_text(&mut buf, &findings).unwrap();
+    let out = String::from_utf8(buf).unwrap();
+    let body = out
+        .lines()
+        .find(|l| l.contains("co-edited"))
+        .expect("rendered line missing");
+    assert!(
+        body.ends_with(" [id=coupling:core/a.rs:core/b.rs]"),
+        "id tag must sit at end of line, got: {body}"
+    );
+}
+
+#[test]
+fn finding_with_id_serializes_to_json_with_id_field() {
+    let findings = vec![Finding::with_id(
+        Layer::Coupling,
+        Severity::Warn,
+        "msg".to_string(),
+        "coupling:a.rs:b.rs".to_string(),
+    )];
+    let mut buf = Vec::new();
+    render_json(&mut buf, &findings).unwrap();
+    let v: Value = serde_json::from_slice(&buf).unwrap();
+    let arr = v.as_array().unwrap();
+    assert_eq!(arr[0]["id"], "coupling:a.rs:b.rs");
 }
 
 #[test]

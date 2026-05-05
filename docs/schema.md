@@ -323,6 +323,23 @@ for `mmk eval --sample N`; not on the agent edit-loop hot path.
 | `replay_histogram`     | object?  | (v0.5) Present only with `--replay`. `{ commits_sampled: uint, layers: [{ layer: string, commits_with_fire: uint, fire_rate: float, distinct_paths: uint, total_findings: uint, severity: { ok: uint, info: uint, warn: uint } }] }`. Designed for cross-repo aggregation. |
 | `duration_ms`          | uint     |                                                                    |
 
+### `mmk explain`
+
+Per-commit evidence behind a finding's claim. Pass `--finding <id>`
+(the `[id=…]` tag from a `mmk review` / `mmk pre-edit` finding);
+get back the chronological co-change commits + aggregate timeline.
+v0.11 covers `coupling:<subject>:<partner>` ids only.
+
+| Field                       | Type     | Notes                                                                          |
+| --------------------------- | -------- | ------------------------------------------------------------------------------ |
+| `finding`                   | string   | Echo of the requested fingerprint.                                             |
+| `co_change_count`           | uint     | Commits that touched both pair members.                                        |
+| `commits_touching_either`   | uint     | Commits in the window that touched at least one pair member. Difference from `co_change_count` is the partner-only count. |
+| `co_change_span_days`       | uint     | Days between first and last co-change. `0` when there are no co-changes.       |
+| `co_change_first_ts`        | int?     | Unix timestamp of the earliest co-change. `null` when there are no co-changes. |
+| `co_change_last_ts`         | int?     | Unix timestamp of the latest co-change. `null` when there are no co-changes.   |
+| `evidence`                  | array    | One entry per co-change commit, sorted newest-first. Each entry: `{ sha, ts, deltas: [{ path, added, deleted }] }`. |
+
 ### `mmk drift`
 
 K snapshot labels + the climb-majority findings.
@@ -344,6 +361,7 @@ K snapshot labels + the climb-majority findings.
 | `layer`    | string | One of `"hotspot"`, `"coupling"`, `"cohesion"` (v0.6 — populated), `"drift"`, `"budget"`, `"health"` (v0.4 — populated), `"structure"` (v0.5 — populated), `"complexity"` (v0.5 — populated), `"anchor"` (v0.5 — populated; previously reserved). |
 | `severity` | string | `"warn"`, `"info"`, `"ok"`. v0.4 actually populates `"ok"` (pre-edit quiet-file fall-through).      |
 | `message`  | string | Human-readable, terse, one-line. The structured detail lives in `layer` / `severity`.                |
+| `id`       | string? | (v0.11) Stable fingerprint for `mmk explain --finding <id>`. Populated for COUPLING as `coupling:<subject>:<partner>`; `null` for layers that don't yet support explain. Always present in the JSON envelope (explicit absence beats inferring from a missing key). |
 
 ### `health` block (v0.4)
 

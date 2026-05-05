@@ -58,6 +58,9 @@ pub fn run() -> ExitCode {
         args::Command::Cache(a) => {
             commands::cache::run(&a, &mut out, &mut err).map(|()| Verdict::Ok)
         }
+        args::Command::Explain(a) => {
+            commands::explain::run(&a, &mut out, &mut err).map(|()| Verdict::Ok)
+        }
     };
 
     match result {

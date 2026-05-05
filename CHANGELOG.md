@@ -6,6 +6,39 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-05-05
+
+`mmk explain` — verify a borderline COUPLING claim before acting on
+it. The K-of-N summary in a COUPLING finding hides whether the
+co-change pattern is a sustained convention or a single merge storm;
+agents reading it had to act on the claim, ignore it, or stop and
+ask. `explain` adds a fourth option: ground-truth commits. Scoped
+to COUPLING in v0.11 — DRIFT and HOTSPOT drill-down are deferred
+because their summaries don't destroy information the agent can't
+recover cheaper elsewhere.
+
+### Added
+
+- **`mmk explain --finding <id>`.** Pass the `[id=…]` tag from any
+  COUPLING finding; get back the co-change commits behind it, with
+  span, dates, and per-commit deltas. Text mode is short factual
+  sentences plus a table; JSON for harnesses. On-demand only — not
+  wired into hooks, no per-edit latency cost.
+- **`id` field on findings.** COUPLING findings now carry a stable
+  fingerprint (`coupling:<subject>:<partner>`) the agent passes back
+  to `explain`. Text output appends `[id=…]` at line end; JSON
+  always has the key (null for layers that don't yet support
+  explain — explicit absence beats inference from a missing field).
+- **CLAUDE.md template guidance.** One new bullet: when a finding
+  is borderline or surprising, run `mmk explain` before deciding.
+
+### Schema
+
+`schema_version` stays at `0.9.0`. The new `id` key on
+`findings[]` is additive — old consumers ignore it. The `mmk
+explain` JSON envelope is new; its shape is documented in
+`docs/schema.md` and locked by `tests/schema.rs`.
+
 ## [0.10.0] - 2026-05-01
 
 ### Added

@@ -6,7 +6,9 @@
 mod common;
 
 use common::{build_canonical_fixture, build_coupling_fixture, build_session_fixture, write};
-use mokumokuren::args::{AnalyzeArgs, DriftArgs, Format, PreEditArgs, ReviewArgs, SessionArgs};
+use mokumokuren::args::{
+    AnalyzeArgs, DriftArgs, ExplainArgs, Format, PreEditArgs, ReviewArgs, SessionArgs,
+};
 use serde_json::Value;
 use serial_test::serial;
 use std::collections::BTreeSet;
@@ -464,7 +466,11 @@ fn run_drift_in(repo: &std::path::Path, args: DriftArgs) -> Vec<u8> {
 }
 
 fn finding_keys() -> Vec<&'static str> {
-    vec!["layer", "severity", "message"]
+    // `id` is the v0.11 explain join-key — always present in the JSON
+    // (null for layers without explain support, the addressable string
+    // for COUPLING). The schema-shape lock treats it as a required key
+    // so harnesses can rely on the field always being there.
+    vec!["layer", "severity", "message", "id"]
 }
 
 #[serial(cwd)]
@@ -616,6 +622,69 @@ fn schema_pre_edit_shape() {
     let findings = v["findings"].as_array().expect("findings array");
     for (i, f) in findings.iter().enumerate() {
         expect_required_keys(f, &finding_keys(), &format!("findings[{i}]"));
+    }
+}
+
+fn run_explain_in(repo: &std::path::Path, args: ExplainArgs) -> Vec<u8> {
+    let (res, stdout, _) = common::with_cwd(repo, |so, se| {
+        mokumokuren::commands::explain::run(&args, so, se)
+    });
+    res.expect("explain should succeed on fixture");
+    stdout
+}
+
+#[serial(cwd)]
+#[test]
+fn schema_explain_shape_locks_evidence_envelope() {
+    // Pin the v0.11 explain JSON shape: top-level metadata, the
+    // `evidence[]` array, and the per-row sub-shape. Adding a field
+    // without updating this test fails the build.
+    let dir = TempDir::new().unwrap();
+    let now: i64 = 1_700_000_000;
+    build_coupling_fixture(dir.path(), now);
+
+    let args = ExplainArgs {
+        finding: "coupling:core/a.rs:core/b.rs".into(),
+        since: "60days".into(),
+        format: Format::Json,
+        ignores: Vec::new(),
+        config: None,
+        verbose: false,
+    };
+    let stdout = run_explain_in(dir.path(), args);
+    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
+
+    expect_required_keys(
+        &v,
+        &[
+            "finding",
+            "co_change_count",
+            "commits_touching_either",
+            "co_change_span_days",
+            "co_change_first_ts",
+            "co_change_last_ts",
+            "evidence",
+        ],
+        "top-level explain envelope",
+    );
+
+    let evidence = v["evidence"].as_array().expect("evidence array");
+    assert!(
+        !evidence.is_empty(),
+        "coupling fixture's a/b pair must yield evidence rows"
+    );
+    for (i, row) in evidence.iter().enumerate() {
+        expect_required_keys(row, &["sha", "ts", "deltas"], &format!("evidence[{i}]"));
+        let deltas = row["deltas"]
+            .as_array()
+            .unwrap_or_else(|| panic!("evidence[{i}].deltas missing"));
+        for (j, d) in deltas.iter().enumerate() {
+            expect_required_keys(
+                d,
+                &["path", "added", "deleted"],
+                &format!("evidence[{i}].deltas[{j}]"),
+            );
+        }
     }
 }
 

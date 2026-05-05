@@ -217,8 +217,9 @@ pub fn coupling_findings_with_signal(
             ),
             axes: vec![p.co_change_count, input.n],
         };
+        let id = messages::coupling_id(input.subject, &p.partner);
         out.push((
-            Finding::new(Layer::Coupling, input.severity, message),
+            Finding::with_id(Layer::Coupling, input.severity, message, id),
             Some(signal),
         ));
     }

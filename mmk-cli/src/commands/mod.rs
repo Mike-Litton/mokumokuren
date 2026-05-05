@@ -3,6 +3,7 @@ pub mod cache;
 pub mod common;
 pub mod drift;
 pub mod eval;
+pub mod explain;
 pub mod init;
 pub mod pre_edit;
 pub mod review;

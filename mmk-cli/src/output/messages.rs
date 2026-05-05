@@ -16,6 +16,20 @@
 
 use std::path::{Path, PathBuf};
 
+/// Stable fingerprint for a COUPLING finding — the join-key
+/// `mmk explain --finding <id>` accepts.
+///
+/// The path components use the same `Display` form already in the
+/// finding message, so a reader can copy either segment back without
+/// translating between `PathBuf` debug-print and message-prose forms.
+/// Aligns with the existing `MonotonicSignal::key` convention
+/// (`coupling::<subject>::<partner>`); shorter colon-only form here
+/// because the id is grep-friendly text, not a dedup key.
+#[must_use]
+pub fn coupling_id(subject: &Path, partner: &Path) -> String {
+    format!("coupling:{}:{}", subject.display(), partner.display())
+}
+
 /// Canonical prefix on every "designed quiet case, not uncertainty" surface.
 ///
 /// v0.8 scattered six distinct wordings ("no signal", "new file",

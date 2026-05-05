@@ -48,6 +48,14 @@ pub enum Command {
     Eval(EvalArgs),
     /// Inspect or clear the per-commit delta cache.
     Cache(CacheArgs),
+    /// Return the per-commit evidence behind a finding's claim.
+    ///
+    /// Pass `--finding <id>` (the `[id=…]` tag emitted alongside any
+    /// COUPLING finding). Output is the chronological list of commits
+    /// that produced the K-of-N summary, plus aggregate timeline
+    /// shape — the substrate an agent uses to verify a borderline
+    /// claim before acting on it. v0.11 covers COUPLING only.
+    Explain(ExplainArgs),
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -426,6 +434,38 @@ pub struct CacheClearArgs {
     /// Which cache(s) to clear.
     #[arg(long, value_enum, default_value_t = CacheScope::All)]
     pub scope: CacheScope,
+}
+
+#[derive(Debug, Parser)]
+pub struct ExplainArgs {
+    /// Finding fingerprint — the `[id=…]` tag from `mmk review` /
+    /// `mmk pre-edit` output. v0.11 supports `coupling:<a>:<b>`.
+    #[arg(long, value_name = "ID")]
+    pub finding: String,
+
+    /// Window for the historical evidence walk. Defaults to the same
+    /// 180-day window the rest of the CLI uses; widen with
+    /// `--since 365days` to surface evidence past the default horizon.
+    #[arg(long, default_value = "180days")]
+    pub since: String,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = Format::Text)]
+    pub format: Format,
+
+    /// Ignore paths matching this glob. Repeatable. Unioned with
+    /// `mokumokuren.toml`.
+    #[arg(long = "ignore", value_name = "GLOB")]
+    pub ignores: Vec<String>,
+
+    /// Path to a config file. Defaults to `mokumokuren.toml` at the
+    /// repo root if present.
+    #[arg(long, value_name = "PATH")]
+    pub config: Option<PathBuf>,
+
+    /// Print extra progress on stderr.
+    #[arg(short, long)]
+    pub verbose: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

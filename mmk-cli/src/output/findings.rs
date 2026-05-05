@@ -82,15 +82,37 @@ pub struct Finding {
     pub layer: Layer,
     pub severity: Severity,
     pub message: String,
+    /// Stable fingerprint for `mmk explain --finding <id>` — the
+    /// addressable join-key the agent passes back when it wants the
+    /// per-commit evidence behind a borderline claim. Populated for
+    /// COUPLING in v0.11; `None` for layers that don't yet have
+    /// explain support, serialised as `null` so the absence is
+    /// explicit instead of inferred from a missing key.
+    pub id: Option<String>,
 }
 
 impl Finding {
+    /// Constructor without an explain id. Kept so the 30-plus existing
+    /// emission sites compile unchanged; new COUPLING emissions go
+    /// through [`Finding::with_id`].
     #[must_use]
     pub const fn new(layer: Layer, severity: Severity, message: String) -> Self {
         Self {
             layer,
             severity,
             message,
+            id: None,
+        }
+    }
+
+    /// Constructor that attaches the addressable [`mmk explain`] id.
+    #[must_use]
+    pub const fn with_id(layer: Layer, severity: Severity, message: String, id: String) -> Self {
+        Self {
+            layer,
+            severity,
+            message,
+            id: Some(id),
         }
     }
 }
@@ -127,7 +149,10 @@ pub fn render_text<W: Write>(w: &mut W, findings: &[Finding]) -> Result<()> {
         }
         writeln!(w, "{}:", layer.label())?;
         for f in group {
-            writeln!(w, "  {} {}", f.severity.marker(), f.message)?;
+            match &f.id {
+                Some(id) => writeln!(w, "  {} {} [id={id}]", f.severity.marker(), f.message)?,
+                None => writeln!(w, "  {} {}", f.severity.marker(), f.message)?,
+            }
         }
     }
     Ok(())
