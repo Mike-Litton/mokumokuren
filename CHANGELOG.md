@@ -640,7 +640,9 @@ ecosystem-neutral right answer.
 - 685 ms on a ~650-commit reference repo, 1.7 s on a ~3.1k-commit
   reference repo, 442 ms on a ~1.8k-commit (in-window) reference repo.
 
-[Unreleased]: https://github.com/Mike-Litton/mokumokuren/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/Mike-Litton/mokumokuren/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/Mike-Litton/mokumokuren/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/Mike-Litton/mokumokuren/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/Mike-Litton/mokumokuren/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Mike-Litton/mokumokuren/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Mike-Litton/mokumokuren/compare/v0.6.0...v0.7.0

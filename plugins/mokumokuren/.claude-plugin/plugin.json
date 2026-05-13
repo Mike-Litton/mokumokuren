@@ -1,5 +1,6 @@
 {
   "name": "mokumokuren",
+  "version": "0.11.0",
   "description": "Git-history findings (HOTSPOT, COUPLING, BUDGET, DRIFT) wired into Claude Code's edit loop.",
   "author": { "name": "Mike Litton" },
   "homepage": "https://github.com/Mike-Litton/mokumokuren",

@@ -1,6 +1,6 @@
 {
   "name": "mokumokuren-plugins",
-  "owner": { "name": "Mike Litton", "url": "https://github.com/Mike-Litton" },
+  "owner": { "name": "Mike Litton" },
   "description": "Mokumokuren plugins for Claude Code.",
   "plugins": [
     {

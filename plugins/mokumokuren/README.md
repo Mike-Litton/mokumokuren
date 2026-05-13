@@ -51,6 +51,14 @@ In Claude Code:
 /plugin install mokumokuren@mokumokuren-plugins
 ```
 
+### 3. Verify the install
+
+Edit any tracked file in a Git repo with some history. The
+`PostToolUse:Edit` hook should fire and findings (or an `[no
+actionable signal]` line) should arrive as `additionalContext` in
+the next turn. If you see the "mmk not on PATH" advisory instead,
+step 1 didn't put `mmk` on this shell's `PATH` — see below.
+
 ## "mmk not on PATH" warning
 
 If you see

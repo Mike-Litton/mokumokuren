@@ -47,7 +47,7 @@ Pick the path that matches what you're trying to do.
    the agent sees layer-labeled findings before its next turn:
    ```
    COUPLING:
-     ⚠ src/foo.ts edited; expected partner src/foo.test.ts not touched (jaccard 0.67)
+     ⚠ src/foo.ts edited; src/foo.test.ts co-edited 16 of 24 prior commits, not in diff [id=coupling:src/foo.ts:src/foo.test.ts]
    ```
 
 5. After a real session, measure your repo's noise floor:
@@ -138,6 +138,7 @@ co-change layer.
 | `mmk analyze`            | Ranked top-N hotspots over a window. Triage and CI gating.                  |
 | `mmk pre-edit <PATH>`    | Rank, expected partners, optional drift for a path the agent is about to edit. |
 | `mmk review`             | Diff vs history. The per-edit hot path; also `--staged` / `--range` / `--commit`. |
+| `mmk explain --finding <id>` | Per-commit evidence behind a specific COUPLING finding. On-demand drill-down. |
 | `mmk session-summary`    | End-of-feature view: window vs session, DRIFT + BUDGET overlay.             |
 | `mmk drift --sessions K` | Climb signal across K session boundaries. Slow path; PR review.             |
 | `mmk eval --sample N`    | Sample N recent commits, aggregate noise-floor report. Tune your config.    |

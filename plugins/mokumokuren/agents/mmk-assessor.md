@@ -69,7 +69,7 @@ Return a single Markdown report. Keep the body under 200 words.
 - (up to 3 entries)
 
 **Working-set context:**
-- `path/x.ts` — coupled with `path/x.test.ts` (jaccard 0.8); STRUCTURE: matches sibling shape. Re-read the partner before editing.
+- `path/x.ts` — co-edited with `path/x.test.ts` in 18 of 24 prior commits; STRUCTURE: matches sibling shape. Re-read the partner before editing.
 - (one line per named path, or "no paths named")
 
 **Recommendation:** [one sentence — where to start, where to be careful]

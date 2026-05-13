@@ -61,9 +61,9 @@ mmk review
 
 ```
 HOTSPOT:
-  ⚠ core/a.rs ranks #1 (top-20 hotspot)
+  ⚠ core/a.rs: rank #1 of top-20
 COUPLING:
-  ⚠ core/a.rs edited; expected partner core/b.rs not touched (jaccard 0.75)
+  ⚠ core/a.rs edited; core/b.rs co-edited 18 of 24 prior commits, not in diff [id=coupling:core/a.rs:core/b.rs]
 ```
 
 The full menu of sensors `mmk review` and `mmk pre-edit` emit:
@@ -72,13 +72,18 @@ The full menu of sensors `mmk review` and `mmk pre-edit` emit:
 | ------------ | ------------------------------------------------------------------------------------------------- | ---------------- |
 | `HOTSPOT`    | "Is this file near the top of the rank?"                                                          | Warn             |
 | `COUPLING`   | "Is a historical co-change partner missing from this diff?"                                       | Warn / Info      |
-| `COHESION`   | "Does this diff decompose into multiple disjoint clusters?"                                       | Warn (v0.7)      |
+| `COHESION`   | "Does this diff decompose into multiple disjoint clusters?"                                       | Warn             |
 | `STRUCTURE`  | "Does this file diverge from its directory's import / export shape?"                              | Warn / Info / Ok |
 | `COMPLEXITY` | "Is this function structurally over the cap (nesting / LOC)?"                                    | Warn             |
 | `HEALTH`     | "Is the test pair / registration peer / service consumer absent? Did a broad catch get added?"   | Warn / Info      |
-| `EVASION`    | "Did this diff add a broad TS/JS catch handler not in HEAD?" (v0.7, under `HEALTH.broad_exception`) | Warn             |
+| `EVASION`    | "Did this diff add a broad TS/JS catch handler not in HEAD?" (surfaced under `HEALTH.broad_exception`) | Warn             |
 | `BUDGET`     | "Is the diff over the size cap, or ramping toward it?"                                            | Warn / Info      |
 | `DRIFT`      | "Is this file climbing the rank across recent sessions?"                                          | Warn             |
+
+When a COUPLING finding is borderline or surprising, `mmk explain
+--finding <id>` drills from the K-of-N summary to the underlying
+co-change commits (span, dates, per-commit deltas). On-demand only —
+not wired into the edit-loop hooks.
 
 JSON output (`--format json`) is the same data with a stable
 schema for harness consumers. See
