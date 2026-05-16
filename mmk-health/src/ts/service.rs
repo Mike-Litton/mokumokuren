@@ -85,6 +85,7 @@ pub fn detect(subject: &Path, body: &str, peer_paths: &[PathBuf]) -> Vec<HealthF
         pattern: HealthPattern::Service,
         subject: subject.to_path_buf(),
         related: consumers,
+        detail: None,
     }]
 }
 

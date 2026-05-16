@@ -59,6 +59,7 @@ fn service_finds_consumers_importing_the_interface() {
         None,
         &peers,
         &[HealthPattern::Service],
+        &[],
     );
     assert_eq!(findings.len(), 1, "got {findings:?}");
     let f = &findings[0];
@@ -89,6 +90,7 @@ fn service_silent_without_register_call() {
         None,
         std::slice::from_ref(&subject_abs),
         &[HealthPattern::Service],
+        &[],
     );
     assert!(
         findings.is_empty(),
@@ -111,6 +113,7 @@ fn service_silent_without_iprefixed_interface() {
         None,
         std::slice::from_ref(&subject_abs),
         &[HealthPattern::Service],
+        &[],
     );
     assert!(
         findings.is_empty(),

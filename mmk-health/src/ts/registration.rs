@@ -43,6 +43,7 @@ pub fn detect(subject: &Path, body: &str, peer_paths: &[PathBuf]) -> Vec<HealthF
         pattern: HealthPattern::Registration,
         subject: subject.to_path_buf(),
         related: peers,
+        detail: None,
     }]
 }
 

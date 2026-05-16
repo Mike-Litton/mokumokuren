@@ -49,6 +49,8 @@ loop, each emitting line-by-line, sensor-labeled findings:
 | Reviewing a committed range| `mmk review --range A..B`   | Committed diff vs history (PR-style review).        |
 | End of feature / PR        | `mmk session-summary`       | Committed session vs base + DRIFT/BUDGET overlay.   |
 | Across recent sessions     | `mmk drift --sessions K`    | Climb signal across K boundaries (slow path).       |
+| One-shot codebase snapshot | `mmk audit`                 | STRUCTURE / COMPLEXITY / non-delta HEALTH per file at HEAD; no diff or history. |
+| Discover the sensor matrix | `mmk sensors list`          | Which subcommand emits each finding; `describe <name>` for the per-sensor reference. |
 
 The `mmk review` hot path is the agent's real edit loop:
 `PostToolUse:Edit` → `mmk review` → findings about what just

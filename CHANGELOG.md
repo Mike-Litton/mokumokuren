@@ -6,20 +6,59 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-05-15
+
+Two gaps closed for codebases that already accumulated debt before
+mmk was wired in. `mmk audit` is the static-mode counterpart to
+`review` — walks every TS/JS file at HEAD and reports per-file
+STRUCTURE / COMPLEXITY / HEALTH without needing a diff. EVASION's
+broad-catch predicate now picks up the dominant TypeScript
+log-and-swallow shape (`catch (e) { logger.warn(...); }`), and a
+new `broad_catch_debt` HEALTH pattern surfaces the static count of
+broad handlers per file. `mmk sensors` makes the sensor-to-command
+matrix discoverable without reading source. Additive only.
+
 ### Added
 
-- **Claude Code plugin (`mokumokuren@mokumokuren-plugins`).** In-repo
-  marketplace at the project root wires the post-edit `mmk review`
-  hook, the post-commit `mmk session-summary` hook, the `mmk-on-edit`
-  / `mmk-findings` skills, and the `mmk-assessor` subagent in one
-  install. Plugin scripts gracefully fall back to a one-shot install
-  nudge if the `mmk` binary isn't on `PATH`. Source under
-  [`plugins/mokumokuren/`](plugins/mokumokuren/); install instructions
-  in [`docs/claude-code.md`](docs/claude-code.md) Option 0 and the
-  [plugin README](plugins/mokumokuren/README.md). The plugin's
-  skills are now the canonical copies; `docs/claude-code.md` Option 2
-  and `docs/agent-claude-md-template.md` link to them rather than
-  inlining a second drifting copy.
+- **`mmk audit`** for one-shot codebase snapshots. Walks
+  `git ls-files`, runs the per-file sensors, skips history- and
+  diff-dependent layers. JSON envelope adds `health.matches[]`
+  alongside `findings[]` so `jq '.health.matches[] |
+  select(.detail.count >= 10)'` works without regex-parsing the
+  message. `--gate {none,warn,error}` for CI use.
+- **`mmk sensors {list,describe}`.** `list` prints the
+  sensor-to-command matrix (text or JSON); `describe <name>`
+  returns the per-sensor reference (mode, severity, config knob,
+  since-version). Single catalog also drives the new "Sensor
+  coverage" line on every `mmk <cmd> --help`.
+- **EVASION log-and-swallow predicate.** `catch (e) {
+  logger.warn(e); }` (single-statement body of member-calls on a
+  configured log identifier, no rethrow) now counts as broad.
+  Tunable via `[health.ts.broad_exception] log_identifiers`,
+  default `["logger", "log", "console"]`.
+- **`broad_catch_debt` HEALTH pattern** — audit-mode counterpart
+  to `broad_exception`. Static count + line numbers, no HEAD
+  comparison. Severity Info; emitted under `mmk audit` only.
+- **Claude Code plugin (`mokumokuren@mokumokuren-plugins`)** — the
+  v0.11 unreleased item, now shipped. One-command install wires
+  the post-edit and post-commit hooks plus the bundled skills /
+  subagent. See [`docs/claude-code.md`](docs/claude-code.md).
+
+### Fixed
+
+- **Flaky `count_lines_invariant_on_terminator` proptest** in
+  `mmk-git/tests/binary.rs`. Two latent bugs (single `pop()` of a
+  trailing newline; no empty-body guard); replaced with a
+  `prop_filter` that generates the no-trailing-newline form
+  directly.
+
+### Schema
+
+`schema_version` stays at `0.9.0`. New `BroadCatchDebt` variant
+extends the `pattern` field; new optional `detail` field on
+`health.matches[]` is skipped when absent. The `mmk sensors` and
+`mmk audit` JSON envelopes are new and locked by their respective
+integration tests.
 
 ## [0.11.0] - 2026-05-05
 
@@ -640,7 +679,8 @@ ecosystem-neutral right answer.
 - 685 ms on a ~650-commit reference repo, 1.7 s on a ~3.1k-commit
   reference repo, 442 ms on a ~1.8k-commit (in-window) reference repo.
 
-[Unreleased]: https://github.com/Mike-Litton/mokumokuren/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/Mike-Litton/mokumokuren/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/Mike-Litton/mokumokuren/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/Mike-Litton/mokumokuren/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/Mike-Litton/mokumokuren/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/Mike-Litton/mokumokuren/compare/v0.8.0...v0.9.0

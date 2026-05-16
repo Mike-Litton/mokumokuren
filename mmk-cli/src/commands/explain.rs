@@ -6,12 +6,12 @@
 //! deltas touch either pair member, and emit the chronological
 //! evidence + aggregate timeline.
 //!
-//! v0.11 covers COUPLING only. The information-theoretic argument for
-//! that scope lives in the v0.11 plan: drill-down is required only
-//! when the finding's summary statistic destroys information the
-//! agent needs to make the decision, and COUPLING's K-of-N
-//! collapses temporal distribution that the agent otherwise has no
-//! way to recover.
+//! Scoped to COUPLING. The information-theoretic argument for that
+//! scope: drill-down is required only when the finding's summary
+//! statistic destroys information the agent needs to make the
+//! decision, and COUPLING's K-of-N collapses temporal distribution
+//! that the agent otherwise has no way to recover. (Introduced in
+//! v0.11.)
 
 use anyhow::{anyhow, Context, Result};
 use mmk_config::Config;
@@ -79,8 +79,8 @@ fn parse_finding_id(id: &str) -> Result<FingerprintFields> {
     // both rendered through `Path::display()` so paths containing
     // forward slashes (the common case) survive the round-trip
     // unchanged. A path with an embedded `:` in its components would
-    // make this ambiguous; that case isn't supported in v0.11 — the
-    // explicit error below points the caller at the limitation.
+    // make this ambiguous; that case isn't supported — the explicit
+    // error below points the caller at the limitation.
     let mut parts = id.splitn(2, ':');
     let layer = parts.next().unwrap_or("");
     let body = parts.next().ok_or_else(|| {
@@ -114,7 +114,7 @@ fn parse_finding_id(id: &str) -> Result<FingerprintFields> {
             })
         }
         other => Err(anyhow!(
-            "unknown finding layer `{other}` — v0.11 supports `coupling:<a>:<b>` only"
+            "unknown finding layer `{other}` — only `coupling:<a>:<b>` is supported"
         )),
     }
 }

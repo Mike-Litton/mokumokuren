@@ -1,10 +1,12 @@
 pub mod analyze;
+pub mod audit;
 pub mod cache;
 pub mod common;
 pub mod drift;
 pub mod eval;
 pub mod explain;
 pub mod init;
+pub mod per_file_sensors;
 pub mod pre_edit;
 pub mod review;
 pub mod sensors;

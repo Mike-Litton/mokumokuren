@@ -1,183 +1,438 @@
-//! Per-file sensor seam.
+//! `mmk sensors` — sensor-to-command discovery surface.
 //!
-//! `STRUCTURE` and `COMPLEXITY` are per-file sensors: their cost
-//! scales with the count of subject files, not the history graph.
-//! `review` invokes both for every changed file; `pre-edit` invokes
-//! `STRUCTURE` only (complexity needs the working-tree body to
-//! compare against, and pre-edit fires *before* the agent's edit, so
-//! there is nothing to measure yet). This helper centralizes that
-//! asymmetry — when a third per-file sensor lands, this is the one
-//! place to wire it.
+//! Two modes:
+//!   - `mmk sensors list` prints the sensor-to-command matrix so an
+//!     operator without source access can see which findings each
+//!     subcommand emits.
+//!   - `mmk sensors describe <name>` prints the per-sensor reference
+//!     (purpose, when it fires, severity, configuration knob).
 //!
-//! Returns `(Finding, Option<MonotonicSignal>)` pairs in the order
-//! produced by each sensor. The caller hands the result to
-//! `apply_monotonic_gate`; layer ordering is applied at render time
-//! by `output::findings::LAYER_ORDER`, not here.
+//! The single source of truth is [`SENSOR_CATALOG`]: the matrix
+//! rendering, the JSON envelope, the per-command "Sensor coverage"
+//! help lines (consumed by `args.rs`), and the `describe` lookup all
+//! read from this table. Adding a new sensor → add one row here.
 
-use std::path::{Path, PathBuf};
+use anyhow::{anyhow, Result};
+use serde::Serialize;
+use std::io::Write;
 
-use mmk_config::SensorCfg;
-use mmk_core::sensors::{
-    self, ComplexityFinding, ComplexityFindingKind, ComplexityInput, FilesMap, StructureInput,
-    StructureMode,
-};
+use crate::args::{Format, SensorsAction, SensorsArgs};
 
-use crate::commands::common::{complexity_to_finding, structure_to_finding_with_signal};
-use crate::monotonic::MonotonicSignal;
-use crate::output::findings::Finding;
-
-/// Which command is asking, and (for `Structure`) what mode to use.
-/// `Review` runs both sensors; pre-edit modes run `STRUCTURE` only.
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum PerFileMode {
-    Review,
-    PreEditNew,
-    PreEditExisting,
-}
-
-/// Inputs that all per-file sensors share. Caller is responsible for
-/// loading sibling bodies (`load_bodies`) and the subject body where
-/// applicable; the helper does no I/O.
-pub(crate) struct PerFileCtx<'a> {
-    pub path: &'a Path,
-    pub siblings: &'a [PathBuf],
-    pub bodies: &'a FilesMap,
-    /// Subject's working-tree body. `Some` for `Review`; `None` for
-    /// pre-edit (the subject hasn't been read because the agent is
-    /// about to edit it).
-    pub subject_body: Option<&'a str>,
-}
-
-/// Run all enabled per-file sensors against `ctx`. Caller dedups /
-/// orders downstream.
+/// One row in the sensor-to-command matrix.
 ///
-/// `head_body` is the subject's body at HEAD, used by COMPLEXITY's
-/// delta-vs-HEAD baseline filter (suppress findings where the
-/// function's metric didn't worsen vs. HEAD). Ignored when
-/// `mode != Review` because pre-edit doesn't run COMPLEXITY.
-pub(crate) fn compute_per_file_findings(
-    ctx: &PerFileCtx<'_>,
-    cfg: &SensorCfg,
-    mode: PerFileMode,
-    head_body: Option<&str>,
-) -> Vec<(Finding, Option<MonotonicSignal>)> {
-    let mut out = Vec::new();
-    if cfg.structure.enabled {
-        let structure_mode = match mode {
-            PerFileMode::Review => StructureMode::Review,
-            PerFileMode::PreEditNew => StructureMode::PreEditNew,
-            PerFileMode::PreEditExisting => StructureMode::PreEditExisting,
-        };
-        let input = StructureInput {
-            path: ctx.path,
-            siblings: ctx.siblings,
-            bodies: ctx.bodies,
-            subject_body: ctx.subject_body,
-            mode: structure_mode,
-            cfg: &cfg.structure,
-        };
-        if let Some(sf) = sensors::compute_structure_finding(&input) {
-            let cap = cfg.structure.top_imports_to_show;
-            let pct = (cfg.structure.import_majority * 100.0).round() as u32;
-            out.push(structure_to_finding_with_signal(&sf, cap, pct));
+/// `commands` lists every subcommand that can emit this finding.
+/// `mode` distinguishes delta-vs-history detectors (HOTSPOT, COUPLING,
+/// EVASION, …) from static / per-file detectors (STRUCTURE,
+/// COMPLEXITY, BroadCatchDebt, …) — agents that filter by mode
+/// (`jq '.sensors[] | select(.mode == "delta")'`) get a clean cut.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct SensorEntry {
+    pub name: &'static str,
+    pub layer: &'static str,
+    /// Optional pattern token under HEALTH (`broad_exception`,
+    /// `broad_catch_debt`, etc.). `None` for non-HEALTH sensors.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<&'static str>,
+    pub mode: &'static str,
+    pub default_severity: &'static str,
+    pub description: &'static str,
+    pub config_key: &'static str,
+    pub config_subkeys: &'static [&'static str],
+    pub commands: &'static [&'static str],
+    pub since: &'static str,
+}
+
+/// Catalog of every sensor mmk emits, plus which commands surface
+/// each one. Read by:
+///   - `mmk sensors list` (text matrix + JSON envelope)
+///   - `mmk sensors describe <name>` (per-sensor lookup)
+///   - `args.rs` per-command help text (the "Sensor coverage" line
+///     on every subcommand's clap doc-comment is sourced from here)
+///
+/// Order matches the layer-rendering order in
+/// `output::findings::LAYER_ORDER`, then HEALTH patterns, then
+/// audit-only HEALTH patterns.
+pub const SENSOR_CATALOG: &[SensorEntry] = &[
+    SensorEntry {
+        name: "HOTSPOT",
+        layer: "Hotspot",
+        pattern: None,
+        mode: "history",
+        default_severity: "Warn",
+        description: "Changed file ranks within the top-N by weighted churn × LOC.",
+        config_key: "[hotspot] top_n",
+        config_subkeys: &[],
+        commands: &["analyze", "review", "pre-edit", "drift", "session-summary", "eval"],
+        since: "0.1.0",
+    },
+    SensorEntry {
+        name: "COUPLING",
+        layer: "Coupling",
+        pattern: None,
+        mode: "history",
+        default_severity: "Warn",
+        description: "Changed file's expected co-edit partner is missing from the diff (Wilson lower-bound on conditional co-change probability).",
+        config_key: "[coupling]",
+        config_subkeys: &["confidence_threshold", "min_sample_size", "ignore_partners"],
+        commands: &["analyze", "review", "pre-edit", "session-summary", "eval"],
+        since: "0.1.0",
+    },
+    SensorEntry {
+        name: "COHESION",
+        layer: "Cohesion",
+        pattern: None,
+        mode: "history",
+        default_severity: "Warn",
+        description: "Working-tree diff partitions into multiple disjoint clusters on the historical co-change graph (tangled-diff fingerprint).",
+        config_key: "[sensor.cohesion]",
+        config_subkeys: &[
+            "confidence_threshold",
+            "min_sample_size",
+            "min_files_per_cluster",
+        ],
+        commands: &["review"],
+        since: "0.6.0",
+    },
+    SensorEntry {
+        name: "DRIFT",
+        layer: "Drift",
+        pattern: None,
+        mode: "history",
+        default_severity: "Info",
+        description: "File climbed in rank across a majority of the K most recent session boundaries.",
+        config_key: "(driven by `--drift-sessions` / `--top`)",
+        config_subkeys: &[],
+        commands: &["drift", "session-summary"],
+        since: "0.3.0",
+    },
+    SensorEntry {
+        name: "BUDGET",
+        layer: "Budget",
+        pattern: None,
+        mode: "static",
+        default_severity: "Warn",
+        description: "Working-tree diff exceeds the per-diff cap (file count or LOC), or crosses the 200-LOC review-effectiveness floor.",
+        config_key: "[bulk]",
+        config_subkeys: &["max_files", "max_lines", "review_quality_lines", "ignore_for_budget"],
+        commands: &["review"],
+        since: "0.1.0",
+    },
+    SensorEntry {
+        name: "STRUCTURE",
+        layer: "Structure",
+        pattern: None,
+        mode: "static",
+        default_severity: "Warn",
+        description: "File diverges from a directory-shape convention (≥3 sibling files share an import / export template the subject is missing).",
+        config_key: "[sensor.structure]",
+        config_subkeys: &[
+            "min_siblings",
+            "import_majority",
+            "export_template_majority",
+            "role_patterns",
+        ],
+        commands: &["review", "pre-edit", "audit"],
+        since: "0.5.0",
+    },
+    SensorEntry {
+        name: "COMPLEXITY",
+        layer: "Complexity",
+        pattern: None,
+        mode: "static",
+        default_severity: "Warn",
+        description: "Per-function nesting depth or LOC exceeds the directory ratio or absolute cap.",
+        config_key: "[sensor.complexity]",
+        config_subkeys: &[
+            "nesting_ratio_threshold",
+            "nesting_absolute_max",
+            "loc_ratio_threshold",
+            "loc_absolute_max",
+            "delta_warn_pct",
+            "delta_warn_abs",
+        ],
+        commands: &["review", "audit"],
+        since: "0.5.0",
+    },
+    SensorEntry {
+        name: "HEALTH:test_pair",
+        layer: "Health",
+        pattern: Some("test_pair"),
+        mode: "static",
+        default_severity: "Warn",
+        description: "File has a `<name>.test.ts` / `<name>.spec.ts` partner not present in the diff.",
+        config_key: "[health.ts] patterns",
+        config_subkeys: &[],
+        commands: &["review", "audit"],
+        since: "0.4.0",
+    },
+    SensorEntry {
+        name: "HEALTH:registration",
+        layer: "Health",
+        pattern: Some("registration"),
+        mode: "static",
+        default_severity: "Info",
+        description: "File matches the action / contribution registration shape; surfaces sibling registration files as architectural precedent.",
+        config_key: "[health.ts] patterns",
+        config_subkeys: &[],
+        commands: &["review", "audit"],
+        since: "0.4.0",
+    },
+    SensorEntry {
+        name: "HEALTH:service",
+        layer: "Health",
+        pattern: Some("service"),
+        mode: "static",
+        default_severity: "Info",
+        description: "File declares an `interface IFoo` plus `registerSingleton(IFoo, FooImpl)`; surfaces top consumers importing the interface.",
+        config_key: "[health.ts] patterns",
+        config_subkeys: &[],
+        commands: &["review", "audit"],
+        since: "0.4.0",
+    },
+    SensorEntry {
+        name: "HEALTH:broad_exception",
+        layer: "Health",
+        pattern: Some("broad_exception"),
+        mode: "delta",
+        default_severity: "Warn",
+        description: "Newly added non-top-level broad TS/JS catch handler (empty body, no parameter, typed any/unknown/Error, or log-and-swallow shape) not present at HEAD.",
+        config_key: "[health.ts] patterns",
+        config_subkeys: &["[health.ts.broad_exception] log_identifiers"],
+        commands: &["review"],
+        since: "0.7.0",
+    },
+    SensorEntry {
+        name: "HEALTH:broad_catch_debt",
+        layer: "Health",
+        pattern: Some("broad_catch_debt"),
+        mode: "static",
+        default_severity: "Info",
+        description: "Static count of non-top-level broad TS/JS catch handlers in the working tree, no HEAD comparison.",
+        config_key: "[health.ts] patterns",
+        config_subkeys: &["[health.ts.broad_exception] log_identifiers"],
+        commands: &["audit"],
+        since: "0.12.0",
+    },
+];
+
+/// Every subcommand the matrix considers, in display order. Column
+/// ordering must match the matrix-rendering loop below.
+pub const COMMANDS_IN_MATRIX: &[&str] = &[
+    "analyze",
+    "review",
+    "pre-edit",
+    "drift",
+    "audit",
+    "session-summary",
+    "eval",
+];
+
+/// Comma-separated coverage list for a given subcommand, drawn
+/// from `SENSOR_CATALOG`.
+///
+/// The "Sensor coverage:" lines in `args.rs` clap doc-comments are
+/// the operator-facing surface but are inlined string literals
+/// (clap doc-comments are compile-time only — they can't call
+/// functions). This helper is kept so downstream tooling can
+/// programmatically derive the same coverage matrix without
+/// scraping `--help` output, and so a follow-up parity test can
+/// assert the inline strings match what the catalog says.
+#[must_use]
+pub fn coverage_for_command(cmd: &str) -> String {
+    let mut names: Vec<&'static str> = SENSOR_CATALOG
+        .iter()
+        .filter(|e| e.commands.contains(&cmd))
+        .map(|e| e.name)
+        .collect();
+    // Stable order (catalog order is already deliberate).
+    names.dedup();
+    names.join(", ")
+}
+
+pub fn run<O: Write, E: Write>(args: &SensorsArgs, out: &mut O, _err: &mut E) -> Result<()> {
+    match &args.action {
+        SensorsAction::List(list_args) => render_list(list_args.format, out),
+        SensorsAction::Describe(describe_args) => {
+            render_describe(&describe_args.name, describe_args.format, out)
         }
     }
-
-    if matches!(mode, PerFileMode::Review) && cfg.complexity.enabled {
-        let input = ComplexityInput {
-            path: ctx.path,
-            siblings: ctx.siblings,
-            bodies: ctx.bodies,
-            cfg: &cfg.complexity,
-        };
-        let raw = sensors::compute_complexity_findings(&input);
-        let filtered = filter_complexity_by_head_baseline(ctx.path, raw, head_body);
-        for cf in filtered {
-            let signal = complexity_monotonic_signal(&cf);
-            out.push((complexity_to_finding(&cf, &cfg.complexity), Some(signal)));
-        }
-    }
-    out
 }
 
-/// Build the per-finding monotonic key + axes for a COMPLEXITY
-/// finding. `kind` is encoded in the key so a Nesting finding and a
-/// Size finding on the same `(path, function)` get independent
-/// suppression — they measure different things and can move
-/// independently.
-fn complexity_monotonic_signal(f: &ComplexityFinding) -> MonotonicSignal {
-    let kind = match f.kind {
-        ComplexityFindingKind::Nesting => "nesting",
-        ComplexityFindingKind::Size => "loc",
-    };
-    let key = format!("complexity::{kind}::{}::{}", f.path.display(), f.function);
-    MonotonicSignal {
-        key,
-        axes: vec![f.actual],
+fn render_list<O: Write>(format: Format, out: &mut O) -> Result<()> {
+    match format {
+        Format::Text => render_list_text(out),
+        Format::Json => render_list_json(out),
     }
 }
 
-/// Drop COMPLEXITY findings whose function exists at HEAD with the
-/// same-or-better metric value. Keeps findings on:
-/// - new files (no HEAD body to compare against),
-/// - newly-added functions (no matching name at HEAD),
-/// - functions whose metric strictly worsened vs. HEAD.
-///
-/// Function identity is compared by `FunctionFact.qualified_name`
-/// (`ClassName::methodName` for methods; bare name for top-level
-/// functions). v0.8 used `FunctionFact.name` and silently
-/// cross-attributed methods that shared a bare name across classes
-/// in one file (`constructor`, `dispose`, `init`, …) — the first
-/// AST match won, so an agent shrinking `Inner::constructor` could
-/// see COMPLEXITY fire on the same file with `+N vs HEAD` computed
-/// against `Outer::constructor`'s baseline. v0.9's qualified-name
-/// match closes that off.
-///
-/// Known weakness: a rename (`parse` → `parseV4`) still leaves the
-/// working-tree function with no HEAD match, so it fires as if it
-/// were newly added — even though the body is structurally
-/// identical. This false-fire is acceptable because renames are
-/// rare in feature work and the resulting finding is still
-/// factually true (the renamed function *is* over the cap); the
-/// cost is one extra Warn per rename. A tighter check would
-/// require structural matching across renames, which costs more
-/// than the false-fire it prevents.
-///
-/// HEAD-parse failures (rare — tree-sitter is error-tolerant) are
-/// treated conservatively: keep the finding rather than silently
-/// drop a real over-cap signal because we couldn't compute a
-/// baseline.
-fn filter_complexity_by_head_baseline(
-    subject: &Path,
-    findings: Vec<ComplexityFinding>,
-    head_body: Option<&str>,
-) -> Vec<ComplexityFinding> {
-    let Some(body) = head_body else {
-        return findings;
-    };
-    let Some(head_facts) = mmk_health::extract(subject, body) else {
-        return findings;
-    };
-    findings
-        .into_iter()
-        .filter_map(|mut f| {
-            let Some(hf) = head_facts
-                .functions
-                .iter()
-                .find(|hf| hf.qualified_name == f.function)
-            else {
-                return Some(f);
-            };
-            let head_actual = match f.kind {
-                ComplexityFindingKind::Nesting => hf.max_nesting_depth,
-                ComplexityFindingKind::Size => hf.loc,
-            };
-            if f.actual > head_actual {
-                f.head_actual = Some(head_actual);
-                Some(f)
+fn render_list_text<O: Write>(out: &mut O) -> Result<()> {
+    // Compute column widths once for alignment.
+    let name_width = SENSOR_CATALOG
+        .iter()
+        .map(|e| e.name.len())
+        .max()
+        .unwrap_or(8)
+        .max("sensor".len());
+    write!(out, "{:<name_width$}", "sensor")?;
+    for cmd in COMMANDS_IN_MATRIX {
+        write!(out, "  {cmd:<8}")?;
+    }
+    writeln!(out)?;
+    for entry in SENSOR_CATALOG {
+        write!(out, "{:<name_width$}", entry.name)?;
+        for cmd in COMMANDS_IN_MATRIX {
+            let cell = if entry.commands.contains(cmd) {
+                "✓"
             } else {
-                None
-            }
-        })
-        .collect()
+                ""
+            };
+            write!(out, "  {cell:<8}")?;
+        }
+        writeln!(out)?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct ListEnvelope<'a> {
+    schema_version: &'static str,
+    sensors: &'a [SensorEntry],
+}
+
+fn render_list_json<O: Write>(out: &mut O) -> Result<()> {
+    let env = ListEnvelope {
+        schema_version: crate::output::schema::SCHEMA_VERSION,
+        sensors: SENSOR_CATALOG,
+    };
+    serde_json::to_writer_pretty(&mut *out, &env)?;
+    writeln!(out)?;
+    Ok(())
+}
+
+fn lookup(name: &str) -> Option<&'static SensorEntry> {
+    SENSOR_CATALOG
+        .iter()
+        .find(|e| e.name.eq_ignore_ascii_case(name) || matches_pattern_token(e, name))
+}
+
+fn matches_pattern_token(entry: &SensorEntry, name: &str) -> bool {
+    entry.pattern.is_some_and(|p| p.eq_ignore_ascii_case(name))
+}
+
+fn render_describe<O: Write>(name: &str, format: Format, out: &mut O) -> Result<()> {
+    let entry = lookup(name).ok_or_else(|| {
+        anyhow!("no sensor named `{name}`. Run `mmk sensors list` to see available sensors.")
+    })?;
+    match format {
+        Format::Text => render_describe_text(entry, out),
+        Format::Json => render_describe_json(entry, out),
+    }
+}
+
+fn render_describe_text<O: Write>(entry: &SensorEntry, out: &mut O) -> Result<()> {
+    writeln!(out, "{}", entry.name)?;
+    writeln!(out, "  layer:            {}", entry.layer)?;
+    if let Some(p) = entry.pattern {
+        writeln!(out, "  pattern:          {p}")?;
+    }
+    writeln!(out, "  mode:             {}", entry.mode)?;
+    writeln!(out, "  default severity: {}", entry.default_severity)?;
+    writeln!(out, "  commands:         {}", entry.commands.join(", "))?;
+    writeln!(out, "  config:           {}", entry.config_key)?;
+    if !entry.config_subkeys.is_empty() {
+        writeln!(
+            out,
+            "  config knobs:     {}",
+            entry.config_subkeys.join(", ")
+        )?;
+    }
+    writeln!(out, "  since:            {}", entry.since)?;
+    writeln!(out)?;
+    writeln!(out, "{}", entry.description)?;
+    if let Some(extra) = long_description(entry) {
+        writeln!(out)?;
+        writeln!(out, "{extra}")?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct DescribeEnvelope<'a> {
+    schema_version: &'static str,
+    #[serde(flatten)]
+    entry: &'a SensorEntry,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    long_description: Option<&'static str>,
+}
+
+fn render_describe_json<O: Write>(entry: &'static SensorEntry, out: &mut O) -> Result<()> {
+    let env = DescribeEnvelope {
+        schema_version: crate::output::schema::SCHEMA_VERSION,
+        entry,
+        long_description: long_description(entry),
+    };
+    serde_json::to_writer_pretty(&mut *out, &env)?;
+    writeln!(out)?;
+    Ok(())
+}
+
+/// Optional reference text shown alongside the catalog row. Kept
+/// terse — operators read `--help` for the one-liner and `describe`
+/// for the multi-paragraph background.
+fn long_description(entry: &SensorEntry) -> Option<&'static str> {
+    match entry.name {
+        "HEALTH:broad_exception" => Some(
+            "EVASION targets the \"evasive repairs with try-except blocks\" failure mode named in arXiv:2509.13941. \
+             The detector compares working tree against HEAD; only the *addition* of a broad non-top-level catch handler fires. \
+             The set of \"broad\" shapes covers empty body, missing parameter, parameter typed `any`/`unknown`/`Error`, and \
+             (v0.12) the log-and-swallow shape — body composed exclusively of member-call expressions on a configured log \
+             identifier (default `logger`, `log`, `console`; extend via `[health.ts.broad_exception] log_identifiers`).",
+        ),
+        "HEALTH:broad_catch_debt" => Some(
+            "Static-mode counterpart to EVASION. Reports the count of broad non-top-level catch handlers in the working \
+             tree at HEAD without comparing to a previous body. Use this on first contact with a codebase that accumulated \
+             evasion debt before mmk was enabled. Reuses the same `is_broad` predicate as EVASION, so the log-and-swallow \
+             shape and the `log_identifiers` config knob apply uniformly.",
+        ),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catalog_entries_have_unique_names() {
+        let mut seen = std::collections::HashSet::new();
+        for entry in SENSOR_CATALOG {
+            assert!(
+                seen.insert(entry.name),
+                "duplicate sensor name in catalog: {}",
+                entry.name
+            );
+        }
+    }
+
+    #[test]
+    fn coverage_for_review_mentions_health() {
+        let cov = coverage_for_command("review");
+        assert!(cov.contains("HEALTH:broad_exception"), "got: {cov}");
+        assert!(!cov.contains("HEALTH:broad_catch_debt"), "got: {cov}");
+    }
+
+    #[test]
+    fn coverage_for_audit_includes_broad_catch_debt() {
+        let cov = coverage_for_command("audit");
+        assert!(cov.contains("HEALTH:broad_catch_debt"), "got: {cov}");
+        assert!(cov.contains("STRUCTURE"), "got: {cov}");
+        assert!(!cov.contains("HOTSPOT"), "got: {cov}");
+    }
+
+    #[test]
+    fn lookup_supports_full_name_and_pattern_token() {
+        assert!(lookup("HEALTH:broad_catch_debt").is_some());
+        assert!(lookup("broad_catch_debt").is_some());
+        assert!(lookup("nonexistent_sensor").is_none());
+    }
 }

@@ -238,22 +238,41 @@ file, or a newly-added broad TS/JS catch handler that wasn't in HEAD.
 ```toml
 [health.ts]
 enabled  = true
-patterns = ["registration", "service", "test_pair", "broad_exception"]
+patterns = ["registration", "service", "test_pair", "broad_exception", "broad_catch_debt"]
 ```
 
 | Field      | Default     | Notes                                                                                                                  |
 | ---------- | ----------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `enabled`  | `false`     | Off by default outside the `js-ts` profile so non-TS users aren't surprised.                                           |
-| `patterns` | all four    | Subset of `"registration"`, `"service"`, `"test_pair"`, `"broad_exception"`. Unknown tokens are dropped silently.       |
+| `patterns` | all five    | Subset of `"registration"`, `"service"`, `"test_pair"`, `"broad_exception"`, `"broad_catch_debt"`. Unknown tokens are dropped silently. `broad_catch_debt` fires under `mmk audit` only; it's silently dropped in `review` / `pre-edit`. |
 
-Pattern semantics (review/pre-edit):
+Pattern semantics:
 
-| Pattern           | Trigger                                                                                                                                | Severity                            |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| `registration`    | `*.contribution.ts` or imports/extends from `vs/platform/actions/...`.                                                                 | Info (architectural precedent).     |
-| `service`         | Declares `interface IFoo` + `registerSingleton(IFoo, ...)` / `createDecorator`.                                                        | Info (consumer list).               |
-| `test_pair`       | Implementation file with a sibling `*.test.{ts,tsx,js,jsx}` / `*.spec.{ts,tsx,js,jsx}`. Pairs across the TS family (`.ts` ↔ `.tsx`) and the JS family (`.js` ↔ `.jsx`); cross-family rejected. | Warn in review when the test partner isn't in the diff; Info in pre-edit. |
-| `broad_exception` | Working tree adds a non-top-level broad TS/JS catch handler not present at HEAD (empty body, no parameter, or `any`/`unknown`/`Error` type). v0.7. | Warn in review; suppressed in pre-edit (no working-vs-HEAD diff yet). |
+| Pattern             | Trigger                                                                                                                                                                                                                                                                                                          | Severity                                                                  | Emitted by         |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------ |
+| `registration`      | `*.contribution.ts` or imports/extends from `vs/platform/actions/...`.                                                                                                                                                                                                                                           | Info (architectural precedent).                                           | review, audit      |
+| `service`           | Declares `interface IFoo` + `registerSingleton(IFoo, ...)` / `createDecorator`.                                                                                                                                                                                                                                  | Info (consumer list).                                                     | review, audit      |
+| `test_pair`         | Implementation file with a sibling `*.test.{ts,tsx,js,jsx}` / `*.spec.{ts,tsx,js,jsx}`. Pairs across the TS family (`.ts` ↔ `.tsx`) and the JS family (`.js` ↔ `.jsx`); cross-family rejected.                                                                                                                  | Warn in review when the test partner isn't in the diff; Info in pre-edit. | review, audit      |
+| `broad_exception`   | Working tree adds a non-top-level broad TS/JS catch handler not present at HEAD: empty body, no parameter, typed `any`/`unknown`/`Error`, or log-and-swallow shape (single-statement body of member-call expressions on a configured set of log identifiers, no rethrow). v0.7, log-and-swallow extension v0.12. | Warn in review; suppressed in pre-edit (no working-vs-HEAD diff yet).     | review             |
+| `broad_catch_debt`  | Static count of non-top-level broad TS/JS catch handlers in the working tree, no HEAD comparison. Reuses the `broad_exception` predicate set. v0.12.                                                                                                                                                            | Info.                                                                     | audit              |
+
+### `[health.ts.broad_exception]`
+
+Sub-block consumed by both `broad_exception` (delta-mode EVASION) and
+`broad_catch_debt` (static-mode debt). Single knob today —
+`log_identifiers` — controls the set of object identifiers
+recognised as a "logger" for the log-and-swallow shape
+(`catch (e) { logger.warn(...); }`). The default covers
+pino-style (`logger`), winston-style (`log`), and the browser
+fallback (`console`); add project-specific names to extend it.
+
+```toml
+[health.ts.broad_exception]
+log_identifiers = ["logger", "log", "console", "appLog", "tracer"]
+```
+
+Setting `log_identifiers` replaces the default list — copy the
+shipped defaults in if you want to extend rather than override.
 
 ## CLI flags vs file config
 

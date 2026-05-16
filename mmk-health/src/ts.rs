@@ -7,6 +7,7 @@
 //! `Send`, and the cost is microseconds — pooling would be
 //! premature).
 
+pub mod broad_catch_debt;
 pub mod broad_exception;
 pub mod facts;
 pub mod registration;
@@ -38,6 +39,12 @@ use std::path::Path;
 /// `None` means "no HEAD body available" — either a new file, or
 /// the caller doesn't have a HEAD snapshot (e.g. pre-edit, where
 /// the working tree *is* HEAD for this subject).
+///
+/// `log_identifiers` controls EVASION's log-and-swallow predicate —
+/// the dominant TS shape `catch (e) { logger.warn(...); }` is
+/// classified as broad when the catch-body member-call object is in
+/// this list. `BroadCatchDebt` reuses the same predicate so the same
+/// list applies in audit mode.
 #[must_use]
 pub fn analyze_ts(
     subject: &Path,
@@ -45,6 +52,7 @@ pub fn analyze_ts(
     head_body: Option<&str>,
     peer_paths: &[std::path::PathBuf],
     enabled: &[HealthPattern],
+    log_identifiers: &[String],
 ) -> Vec<HealthFinding> {
     let mut out = Vec::new();
     if enabled.contains(&HealthPattern::Registration) {
@@ -57,7 +65,15 @@ pub fn analyze_ts(
         out.extend(test_pair::detect(subject, peer_paths));
     }
     if enabled.contains(&HealthPattern::BroadException) {
-        out.extend(broad_exception::detect(subject, head_body, body));
+        out.extend(broad_exception::detect(
+            subject,
+            head_body,
+            body,
+            log_identifiers,
+        ));
+    }
+    if enabled.contains(&HealthPattern::BroadCatchDebt) {
+        out.extend(broad_catch_debt::detect(subject, body, log_identifiers));
     }
     out
 }

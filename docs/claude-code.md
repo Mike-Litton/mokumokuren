@@ -141,6 +141,13 @@ HEAD <sha7>") so the agent can distinguish "consulted, quiet" from
 "wasn't run." That replaces the silent no-op older `2>/dev/null ||
 true` recipes used to mask.
 
+`mmk audit` is the static-mode counterpart and is **not intended
+for the per-edit hook surface** — it walks every health-eligible
+file at HEAD, which is the right shape for a one-shot codebase
+snapshot but the wrong shape for an Edit-loop hook (no diff to
+score against, redundant work on every keystroke). Run it manually
+or wire it into a CI step that fires once per PR / once per merge.
+
 ### Wiring `session-summary` to `git commit`
 
 `mmk session-summary` is the post-commit / pre-PR view (window vs

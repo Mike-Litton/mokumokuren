@@ -304,6 +304,30 @@ pub fn health_broad_exception(subject: &Path, delta: u32) -> String {
     )
 }
 
+/// `<subject>: N broad catch handlers (lines L1, L2, ...)`
+///
+/// Static-mode counterpart to [`health_broad_exception`]. Reports the
+/// accumulated count of broad non-top-level catch handlers in the
+/// working tree, plus their 1-based line numbers, so an `audit` run
+/// can show evasion debt that predates mmk's enablement.
+#[must_use]
+pub fn health_broad_catch_debt(subject: &Path, count: u32, lines: &[usize]) -> String {
+    let plural = if count == 1 { "" } else { "s" };
+    if lines.is_empty() {
+        return format!("{}: {count} broad catch handler{plural}", subject.display(),);
+    }
+    let line_list = lines
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let line_label = if lines.len() == 1 { "line" } else { "lines" };
+    format!(
+        "{}: {count} broad catch handler{plural} ({line_label} {line_list})",
+        subject.display(),
+    )
+}
+
 /// Pre-edit fall-through when no other layer fires.
 ///
 /// `commits_touching = 0` is *ambiguous*: it can mean the file is

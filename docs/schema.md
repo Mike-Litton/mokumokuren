@@ -328,7 +328,7 @@ for `mmk eval --sample N`; not on the agent edit-loop hot path.
 Per-commit evidence behind a finding's claim. Pass `--finding <id>`
 (the `[id=…]` tag from a `mmk review` / `mmk pre-edit` finding);
 get back the chronological co-change commits + aggregate timeline.
-v0.11 covers `coupling:<subject>:<partner>` ids only.
+Currently scoped to `coupling:<subject>:<partner>` ids only.
 
 | Field                       | Type     | Notes                                                                          |
 | --------------------------- | -------- | ------------------------------------------------------------------------------ |

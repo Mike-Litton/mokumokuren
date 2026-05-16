@@ -168,24 +168,26 @@ pub fn run<O: Write, E: Write>(
     if cfg.sensor.structure.enabled {
         let abs = cwd.join(&path);
         let mode = if abs.exists() {
-            crate::commands::sensors::PerFileMode::PreEditExisting
+            crate::commands::per_file_sensors::PerFileMode::PreEditExisting
         } else {
-            crate::commands::sensors::PerFileMode::PreEditNew
+            crate::commands::per_file_sensors::PerFileMode::PreEditNew
         };
         let siblings = list_directory_siblings(&cwd, &path);
         let bodies = load_bodies(&cwd, &siblings);
-        let ctx = crate::commands::sensors::PerFileCtx {
+        let ctx = crate::commands::per_file_sensors::PerFileCtx {
             path: &path,
             siblings: &siblings,
             bodies: &bodies,
             subject_body: None,
         };
-        tagged.extend(crate::commands::sensors::compute_per_file_findings(
-            &ctx,
-            &cfg.sensor,
-            mode,
-            None,
-        ));
+        tagged.extend(
+            crate::commands::per_file_sensors::compute_per_file_findings(
+                &ctx,
+                &cfg.sensor,
+                mode,
+                None,
+            ),
+        );
     }
 
     let mut findings =
@@ -200,11 +202,24 @@ pub fn run<O: Write, E: Write>(
     // dormant under pre-edit semantics.
     let health_patterns: Vec<mmk_health::HealthPattern> = resolve_patterns(&cfg.health.ts.patterns)
         .into_iter()
-        .filter(|p| !matches!(p, mmk_health::HealthPattern::BroadException))
+        .filter(|p| {
+            !matches!(
+                p,
+                mmk_health::HealthPattern::BroadException
+                    | mmk_health::HealthPattern::BroadCatchDebt
+            )
+        })
         .collect();
     let health_matches: Vec<mmk_health::HealthFinding> = if cfg.health.ts.enabled {
         let peer_paths: Vec<PathBuf> = analysis.loc.keys().cloned().collect();
-        analyze_health_for_subject(&cwd, &path, None, &peer_paths, &health_patterns)
+        analyze_health_for_subject(
+            &cwd,
+            &path,
+            None,
+            &peer_paths,
+            &health_patterns,
+            &cfg.health.ts.broad_exception.log_identifiers,
+        )
     } else {
         Vec::new()
     };

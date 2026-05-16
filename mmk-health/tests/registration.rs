@@ -35,6 +35,7 @@ fn registration_surfaces_nearby_contribution_peers() {
         None,
         &peers,
         &[HealthPattern::Registration],
+        &[],
     );
     assert_eq!(findings.len(), 1);
     let f = &findings[0];
@@ -61,6 +62,7 @@ fn registration_silent_when_body_lacks_triggers() {
         None,
         &peers,
         &[HealthPattern::Registration],
+        &[],
     );
     assert!(
         findings.is_empty(),
@@ -78,6 +80,7 @@ fn registration_silent_when_no_peers_exist() {
         None,
         &peers,
         &[HealthPattern::Registration],
+        &[],
     );
     assert!(
         findings.is_empty(),
@@ -100,6 +103,7 @@ fn registration_caps_related_at_three() {
         None,
         &peers,
         &[HealthPattern::Registration],
+        &[],
     );
     assert_eq!(findings.len(), 1);
     assert!(

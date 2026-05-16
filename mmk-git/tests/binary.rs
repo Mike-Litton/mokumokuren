@@ -117,19 +117,26 @@ proptest! {
         }
     }
 
-    /// Adding a trailing newline to a non-empty body never changes
-    /// the line count: the trailing newline is what the
-    /// no-trailing-newline "phantom" line was already accounting for.
+    /// Adding a trailing newline to a non-empty no-trailing-newline
+    /// body never changes the line count: the trailing newline is
+    /// what the "phantom" line was already accounting for. Generates
+    /// the body in canonical no-trailing-newline form via prop_filter
+    /// — a `pop()`-then-`push('\n')` shape silently mishandles
+    /// multi-`\n` tails (one pop is not enough) and empties the body
+    /// for `[b'\n']` (count differs because empty is the documented
+    /// 0 case), and proptest had been finding both shrunk inputs.
     #[test]
-    fn count_lines_invariant_on_terminator(mut body in vec(0u8..255, 1..200)) {
-        if body.last() == Some(&b'\n') {
-            body.pop();
-        }
-        // `body` now is the no-trailing-newline form. Append `\n` to
-        // produce the with-trailing-newline form and compare.
+    fn count_lines_invariant_on_terminator(
+        body in vec(0u8..255, 1..200)
+            .prop_filter(
+                "body must be non-empty and not end with newline",
+                |b| !b.is_empty() && b.last() != Some(&b'\n'),
+            ),
+    ) {
         let count_without = count_lines(&body);
-        body.push(b'\n');
-        let count_with = count_lines(&body);
+        let mut with_terminator = body;
+        with_terminator.push(b'\n');
+        let count_with = count_lines(&with_terminator);
         prop_assert_eq!(
             count_without, count_with,
             "terminator should not change the line count",

@@ -50,10 +50,19 @@ pub enum HealthPattern {
     TestPair,
     /// EVASION: a non-top-level broad TS/JS catch handler was added
     /// in the working tree relative to HEAD. "Broad" means empty
-    /// catch body, no parameter, or a parameter typed as
-    /// `any | unknown | Error`. Targets the *"evasive repairs with
-    /// try-except blocks"* failure mode named in arXiv:2509.13941.
+    /// catch body, no parameter, a parameter typed as
+    /// `any | unknown | Error`, or a body that is exclusively log
+    /// calls on a configured log identifier (the dominant TS
+    /// log-and-swallow shape, v0.12). Targets the *"evasive repairs
+    /// with try-except blocks"* failure mode named in
+    /// arXiv:2509.13941.
     BroadException,
+    /// BroadCatchDebt: static count of non-top-level broad TS/JS
+    /// catch handlers in the working tree. Audit-mode counterpart to
+    /// `BroadException` — no HEAD comparison, fires on accumulated
+    /// debt. Reuses the same `is_broad` predicate so the same
+    /// shapes count in both modes. v0.12.
+    BroadCatchDebt,
 }
 
 impl HealthPattern {
@@ -67,6 +76,7 @@ impl HealthPattern {
             Self::Service => "service",
             Self::TestPair => "test_pair",
             Self::BroadException => "broad_exception",
+            Self::BroadCatchDebt => "broad_catch_debt",
         }
     }
 
@@ -80,9 +90,26 @@ impl HealthPattern {
             "service" => Some(Self::Service),
             "test_pair" => Some(Self::TestPair),
             "broad_exception" => Some(Self::BroadException),
+            "broad_catch_debt" => Some(Self::BroadCatchDebt),
             _ => None,
         }
     }
+}
+
+/// Optional numeric payload attached to a `HealthFinding`.
+///
+/// Only `BroadCatchDebt` populates this today; other patterns leave
+/// it `None` and the formatter renders from `subject` / `related`
+/// alone. Carrying the payload here (instead of on a sibling type)
+/// lets `analyze_ts` keep its single return-type signature while
+/// audit-mode renderers still get the count + line numbers without
+/// re-parsing the file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum HealthFindingDetail {
+    /// Static count of broad non-top-level catch handlers in the
+    /// working tree, plus the 1-based line numbers of each handler.
+    BroadCatchDebt { count: u32, lines: Vec<usize> },
 }
 
 /// One Health-layer finding. Self-contained: the caller renders
@@ -97,4 +124,10 @@ pub struct HealthFinding {
     /// in deterministic order (closest-first for Pattern A's
     /// directory-distance ranking; lexicographic otherwise).
     pub related: Vec<PathBuf>,
+    /// Optional numeric payload. `Some` for `BroadCatchDebt`
+    /// (carries count + line numbers); `None` for every other
+    /// pattern. Skipped from JSON when absent so the existing JSON
+    /// shape is unchanged for old patterns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<HealthFindingDetail>,
 }

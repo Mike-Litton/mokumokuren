@@ -134,6 +134,22 @@ pub struct HealthTsFile {
     pub enabled: Option<bool>,
     #[serde(default)]
     pub patterns: Option<Vec<String>>,
+    /// `[health.ts.broad_exception]` sub-block. Optional — adopters
+    /// only set it when extending the default log identifier list.
+    #[serde(default)]
+    pub broad_exception: Option<HealthTsBroadExceptionFile>,
+}
+
+/// `[health.ts.broad_exception]` block in `mokumokuren.toml`.
+///
+/// The only knob today is `log_identifiers`. When set, replaces the
+/// shipped default list (`["logger", "log", "console"]`); to extend
+/// the defaults, copy them into your config and add the new names.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HealthTsBroadExceptionFile {
+    #[serde(default)]
+    pub log_identifiers: Option<Vec<String>>,
 }
 
 /// `[sensor]` block — wrapper around the per-sensor sub-blocks. Each

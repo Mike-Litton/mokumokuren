@@ -17,34 +17,59 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Compute hotspots for the current Git repository.
+    ///
+    /// Sensor coverage: HOTSPOT, COUPLING.
     Analyze(AnalyzeArgs),
     /// End-of-feature / PR-review summary: compare the current
     /// session's churn ranking against a baseline ref and overlay
     /// DRIFT (with `--drift-sessions K`) and BUDGET findings on top
     /// of the entered-top-N / rank-climbs / commit-entropy block.
     /// `mmk session` is kept as an alias for backward compat.
+    ///
+    /// Sensor coverage: HOTSPOT, COUPLING, DRIFT.
     #[command(name = "session-summary", alias = "session")]
     SessionSummary(SessionArgs),
     /// Emit findings comparing a diff (working-tree by default) against
     /// the historical baseline. Built for the agent edit loop:
     /// `PostToolUse:Edit` → `mmk review` → findings before any commit.
+    ///
+    /// Sensor coverage: HOTSPOT, COUPLING, COHESION, BUDGET,
+    /// STRUCTURE, COMPLEXITY, HEALTH (test_pair, registration,
+    /// service, broad_exception/EVASION).
     Review(ReviewArgs),
     /// Emit findings about a single path *before* editing it. Built
     /// for the `PreToolUse:Edit` hook: feeds the agent the historical
     /// context (rank, expected partners, drift) for the file it's
     /// about to touch.
+    ///
+    /// Sensor coverage: HOTSPOT, COUPLING, STRUCTURE, HEALTH
+    /// (test_pair, registration, service).
     #[command(name = "pre-edit")]
     PreEdit(PreEditArgs),
     /// Re-run analyze at K historical session boundaries and emit
     /// DRIFT findings for files that climbed in a majority of
     /// transitions. Slow path (K × analyze cost); intended for
     /// end-of-session / PR-review use, not the per-edit hook.
+    ///
+    /// Sensor coverage: DRIFT.
     Drift(DriftArgs),
+    /// Static codebase audit: walk every eligible TS/TSX/JS/JSX file
+    /// at HEAD and emit per-file STRUCTURE / COMPLEXITY / HEALTH
+    /// findings. Skips history-dependent layers (HOTSPOT, COUPLING,
+    /// DRIFT, BUDGET) and the delta-mode EVASION (no diff to score
+    /// against). Built for one-shot codebase snapshots, not the
+    /// per-edit hook surface.
+    ///
+    /// Sensor coverage: STRUCTURE, COMPLEXITY, HEALTH (test_pair,
+    /// registration, service, broad_catch_debt).
+    Audit(AuditArgs),
     /// Write a starter `mokumokuren.toml` config file.
     Init(InitArgs),
     /// Sample recent commits, run `mmk review` against each, and emit
     /// a noise-floor report. Lets a new user calibrate
     /// `[coupling] threshold` and `ignore_partners` for their repo.
+    ///
+    /// Sensor coverage: HOTSPOT, COUPLING.
     Eval(EvalArgs),
     /// Inspect or clear the per-commit delta cache.
     Cache(CacheArgs),
@@ -54,8 +79,13 @@ pub enum Command {
     /// COUPLING finding). Output is the chronological list of commits
     /// that produced the K-of-N summary, plus aggregate timeline
     /// shape — the substrate an agent uses to verify a borderline
-    /// claim before acting on it. v0.11 covers COUPLING only.
+    /// claim before acting on it. Scoped to COUPLING.
     Explain(ExplainArgs),
+    /// Print the sensor-to-command matrix or the per-sensor
+    /// reference. `mmk sensors list` shows which subcommand emits
+    /// each finding; `mmk sensors describe <name>` returns the
+    /// purpose, mode, severity, and config knob for one sensor.
+    Sensors(SensorsArgs),
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -439,7 +469,7 @@ pub struct CacheClearArgs {
 #[derive(Debug, Parser)]
 pub struct ExplainArgs {
     /// Finding fingerprint — the `[id=…]` tag from `mmk review` /
-    /// `mmk pre-edit` output. v0.11 supports `coupling:<a>:<b>`.
+    /// `mmk pre-edit` output. Currently supports `coupling:<a>:<b>`.
     #[arg(long, value_name = "ID")]
     pub finding: String,
 
@@ -480,4 +510,68 @@ pub enum CacheScope {
     HeadTree,
     /// Cached per-blob line counts, keyed by blob OID.
     Loc,
+}
+
+#[derive(Debug, Parser)]
+pub struct AuditArgs {
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = Format::Text)]
+    pub format: Format,
+
+    /// Ignore paths matching this glob. Repeatable. Unioned with any
+    /// `ignore` entries from `mokumokuren.toml`.
+    #[arg(long = "ignore", value_name = "GLOB")]
+    pub ignores: Vec<String>,
+
+    /// Path to a config file. Defaults to `mokumokuren.toml` at the
+    /// repo root if present.
+    #[arg(long, value_name = "PATH")]
+    pub config: Option<PathBuf>,
+
+    /// Print extra progress on stderr.
+    #[arg(short, long)]
+    pub verbose: bool,
+
+    /// Exit-code policy (see `mmk review --help`). `warn` exits 2 if
+    /// any warn-severity finding fires — useful as a CI gate on
+    /// accumulated STRUCTURE / COMPLEXITY debt.
+    #[arg(long, value_enum, default_value_t = Gate::None)]
+    pub gate: Gate,
+}
+
+#[derive(Debug, Parser)]
+pub struct SensorsArgs {
+    #[command(subcommand)]
+    pub action: SensorsAction,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SensorsAction {
+    /// Print the sensor-to-command matrix.
+    List(SensorsListArgs),
+    /// Print the per-sensor reference. Accepts the full sensor name
+    /// (`HEALTH:broad_catch_debt`) or a HEALTH pattern token
+    /// (`broad_catch_debt`).
+    Describe(SensorsDescribeArgs),
+}
+
+#[derive(Debug, Parser)]
+pub struct SensorsListArgs {
+    /// Output format. Text mode renders an aligned check-mark
+    /// matrix; JSON mode returns the catalog as a structured
+    /// envelope under `schema_version` + `sensors[]`.
+    #[arg(long, value_enum, default_value_t = Format::Text)]
+    pub format: Format,
+}
+
+#[derive(Debug, Parser)]
+pub struct SensorsDescribeArgs {
+    /// Sensor to describe. Accepts the full catalog name
+    /// (`HEALTH:broad_catch_debt`) or the HEALTH pattern token
+    /// (`broad_catch_debt`).
+    pub name: String,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = Format::Text)]
+    pub format: Format,
 }

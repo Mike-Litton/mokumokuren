@@ -48,7 +48,7 @@ proptest! {
         body in body_strategy(),
         peers in peers_strategy(),
     ) {
-        let findings = analyze_ts(&subject, &body, None, &peers, &[]);
+        let findings = analyze_ts(&subject, &body, None, &peers, &[], &[]);
         prop_assert!(
             findings.is_empty(),
             "no patterns should produce no findings; got {findings:?}",
@@ -67,7 +67,7 @@ proptest! {
         peers in peers_strategy(),
         enabled in vec(pattern_strategy(), 0..4),
     ) {
-        let findings = analyze_ts(&subject, &body, None, &peers, &enabled);
+        let findings = analyze_ts(&subject, &body, None, &peers, &enabled, &[]);
         for f in &findings {
             prop_assert!(
                 f.related.len() <= 50,
@@ -87,7 +87,7 @@ proptest! {
         peers in peers_strategy(),
         enabled in vec(pattern_strategy(), 0..4),
     ) {
-        let findings = analyze_ts(&subject, &body, None, &peers, &enabled);
+        let findings = analyze_ts(&subject, &body, None, &peers, &enabled, &[]);
         for f in &findings {
             prop_assert!(
                 !f.related.contains(&subject),

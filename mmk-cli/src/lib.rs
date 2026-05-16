@@ -53,6 +53,7 @@ pub fn run() -> ExitCode {
         args::Command::Drift(a) => {
             commands::drift::run(&a, &mut out, &mut err).map(|()| Verdict::Ok)
         }
+        args::Command::Audit(a) => commands::audit::run(&a, &mut out, &mut err),
         args::Command::Init(a) => commands::init::run(&a, &mut out, &mut err).map(|()| Verdict::Ok),
         args::Command::Eval(a) => commands::eval::run(&a, &mut out, &mut err).map(|()| Verdict::Ok),
         args::Command::Cache(a) => {
@@ -60,6 +61,9 @@ pub fn run() -> ExitCode {
         }
         args::Command::Explain(a) => {
             commands::explain::run(&a, &mut out, &mut err).map(|()| Verdict::Ok)
+        }
+        args::Command::Sensors(a) => {
+            commands::sensors::run(&a, &mut out, &mut err).map(|()| Verdict::Ok)
         }
     };
 

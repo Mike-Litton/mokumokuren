@@ -28,7 +28,7 @@ use crate::commands::common::{
     health_to_finding, is_health_eligible_path, list_directory_siblings, load_bodies,
     load_config_file, resolve_patterns, CouplingEmission, CouplingProse,
 };
-use crate::commands::sensors as sensors_helper;
+use crate::commands::per_file_sensors as sensors_helper;
 use crate::hook::HookEnvelope;
 use crate::output::findings::{render_text, Finding, Layer, Severity};
 use crate::output::messages::{self, EmptyDiffSummary};
@@ -297,7 +297,13 @@ pub fn run<O: Write, E: Write>(
     // drops the finding entirely via the peer-touched filter
     // above). Same dedup discipline already applied to BUDGET /
     // COUPLING / COHESION / COMPLEXITY / STRUCTURE.
-    let health_patterns = resolve_patterns(&cfg.health.ts.patterns);
+    // BroadCatchDebt fires under `mmk audit` only — `review` skips
+    // it so the per-edit hot path stays focused on the *diff*, not
+    // accumulated debt that doesn't change between edits.
+    let health_patterns: Vec<mmk_health::HealthPattern> = resolve_patterns(&cfg.health.ts.patterns)
+        .into_iter()
+        .filter(|p| !matches!(p, mmk_health::HealthPattern::BroadCatchDebt))
+        .collect();
     let mut health_matches: Vec<mmk_health::HealthFinding> = Vec::new();
     if cfg.health.ts.enabled {
         let peer_paths: Vec<PathBuf> = analysis.loc.keys().cloned().collect();
@@ -312,6 +318,7 @@ pub fn run<O: Write, E: Write>(
                 head_body,
                 &peer_paths,
                 &patterns_for_subject,
+                &cfg.health.ts.broad_exception.log_identifiers,
             ) {
                 if h.pattern == mmk_health::HealthPattern::TestPair
                     && h.related.iter().all(|p| changed_set.contains(p))

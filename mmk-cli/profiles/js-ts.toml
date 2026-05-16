@@ -58,13 +58,24 @@ threshold = 0.10
 # can't see (e.g. an `*.contribution.ts` file as a precedent for a
 # sibling `*.contribution.ts` even when they have no commit overlap).
 # `broad_exception` adds the EVASION sensor: detects newly-added
-# non-top-level broad catch handlers (empty body, no parameter, or
-# any/unknown/Error type) — the failure mode named in
-# arXiv:2509.13941 *(An Empirical Study on Failures in Automated
-# Issue Solving)*.
+# non-top-level broad catch handlers (empty body, no parameter,
+# any/unknown/Error type, or log-and-swallow shape) — the failure
+# mode named in arXiv:2509.13941 *(An Empirical Study on Failures
+# in Automated Issue Solving)*. v0.12 adds `broad_catch_debt`: the
+# audit-mode static count counterpart, surfaced under `mmk audit`
+# only (review/pre-edit silently drop it).
 [health.ts]
 enabled = true
-patterns = ["registration", "service", "test_pair", "broad_exception"]
+patterns = ["registration", "service", "test_pair", "broad_exception", "broad_catch_debt"]
+
+# Optional sub-block — tunes the log-and-swallow predicate shared
+# by `broad_exception` (delta-mode) and `broad_catch_debt`
+# (static-mode). Default identifiers cover pino-style (`logger`),
+# winston-style (`log`), and the browser fallback (`console`).
+# Extend with project-specific names; replacing the list overrides
+# the defaults.
+# [health.ts.broad_exception]
+# log_identifiers = ["logger", "log", "console", "appLog"]
 
 # Role-file patterns: STRUCTURE demotes Warn → Info on these. The
 # block below mirrors the in-code defaults so an agent reading the

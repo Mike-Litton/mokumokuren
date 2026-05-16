@@ -7,7 +7,7 @@ pub mod file;
 
 pub use file::{
     BlastRadiusFile, BudgetRampFile, BulkFile, CohesionFile, ComplexityFile, ConfigFile,
-    CouplingFile, HealthFile, HealthTsFile, SensorFile, StructureFile,
+    CouplingFile, HealthFile, HealthTsBroadExceptionFile, HealthTsFile, SensorFile, StructureFile,
 };
 
 pub const SECONDS_PER_DAY: i64 = 86_400;
@@ -466,10 +466,16 @@ pub struct HealthCfg {
 pub struct HealthTsCfg {
     pub enabled: bool,
     /// Pattern tokens (`registration`, `service`, `test_pair`,
-    /// `broad_exception`). Keep as plain strings here; mmk-health
-    /// resolves them to `HealthPattern` enums at the boundary so this
-    /// crate doesn't pull in tree-sitter.
+    /// `broad_exception`, `broad_catch_debt`). Keep as plain strings
+    /// here; mmk-health resolves them to `HealthPattern` enums at the
+    /// boundary so this crate doesn't pull in tree-sitter.
     pub patterns: Vec<String>,
+    /// `[health.ts.broad_exception]` — sub-block knobs shared by
+    /// EVASION (`broad_exception`) and BROAD_CATCH_DEBT
+    /// (`broad_catch_debt`). Both detectors invoke the same
+    /// `is_broad` predicate so the log-and-swallow identifier list
+    /// applies uniformly. v0.12.
+    pub broad_exception: HealthTsBroadExceptionCfg,
 }
 
 impl Default for HealthTsCfg {
@@ -481,7 +487,41 @@ impl Default for HealthTsCfg {
                 "service".into(),
                 "test_pair".into(),
                 "broad_exception".into(),
+                "broad_catch_debt".into(),
             ],
+            broad_exception: HealthTsBroadExceptionCfg::default(),
+        }
+    }
+}
+
+/// `[health.ts.broad_exception]` — knobs for the broad-catch
+/// predicate shared by EVASION and BROAD_CATCH_DEBT.
+///
+/// Today the only knob is `log_identifiers`: object identifiers
+/// recognized as a "logger" for the log-and-swallow shape
+/// (`catch (e) { logger.warn(...); }`). Adopters with custom
+/// loggers (`appLog`, `tracer`, project-specific names) extend the
+/// list per-repo.
+#[derive(Debug, Clone, Serialize)]
+pub struct HealthTsBroadExceptionCfg {
+    pub log_identifiers: Vec<String>,
+}
+
+/// Defaults for log-and-swallow identifier recognition.
+///
+/// `logger`, `log`, `console` cover the dominant TypeScript shapes
+/// across the codebases the v0.12 calibration sample touched:
+/// pino-style (`logger`), winston-style (`log`), and the browser
+/// fallback (`console`).
+pub const DEFAULT_LOG_IDENTIFIERS: &[&str] = &["logger", "log", "console"];
+
+impl Default for HealthTsBroadExceptionCfg {
+    fn default() -> Self {
+        Self {
+            log_identifiers: DEFAULT_LOG_IDENTIFIERS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
         }
     }
 }

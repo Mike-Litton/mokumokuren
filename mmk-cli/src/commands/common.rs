@@ -15,7 +15,7 @@ use mmk_config::{
     HealthTsCfg, SensorFile, StructureCfg,
 };
 use mmk_core::CouplingEntry;
-use mmk_health::{HealthFinding, HealthPattern};
+use mmk_health::{HealthFinding, HealthFindingDetail, HealthPattern};
 use std::path::{Path, PathBuf};
 
 use crate::monotonic::MonotonicSignal;
@@ -325,6 +325,11 @@ pub fn apply_health_file(cfg: &mut HealthTsCfg, file_h: &HealthFile) {
         if let Some(patterns) = ts.patterns.as_ref() {
             cfg.patterns.clone_from(patterns);
         }
+        if let Some(be) = ts.broad_exception.as_ref() {
+            if let Some(ids) = be.log_identifiers.as_ref() {
+                cfg.broad_exception.log_identifiers.clone_from(ids);
+            }
+        }
     }
 }
 
@@ -362,6 +367,18 @@ pub fn health_to_finding(h: &HealthFinding, severity: Severity) -> Finding {
         // detector's internal counter, since v0.7's HealthFinding
         // shape carries no numeric payload.
         HealthPattern::BroadException => messages::health_broad_exception(&h.subject, 1),
+        // BroadCatchDebt carries `(count, lines)` in `detail` so the
+        // formatter can render the accumulated debt without
+        // re-parsing the file. v0.12.
+        HealthPattern::BroadCatchDebt => match &h.detail {
+            Some(HealthFindingDetail::BroadCatchDebt { count, lines }) => {
+                messages::health_broad_catch_debt(&h.subject, *count, lines)
+            }
+            // Defensive default — the detector always populates
+            // `detail`, but a future refactor that drops it must not
+            // panic.
+            _ => messages::health_broad_catch_debt(&h.subject, 0, &[]),
+        },
     };
     Finding::new(Layer::Health, severity, message)
 }
@@ -375,8 +392,39 @@ pub fn health_to_finding(h: &HealthFinding, severity: Severity) -> Finding {
 pub const fn health_severity_for_review(p: HealthPattern) -> Severity {
     match p {
         HealthPattern::TestPair | HealthPattern::BroadException => Severity::Warn,
-        HealthPattern::Registration | HealthPattern::Service => Severity::Info,
+        // BroadCatchDebt fires under `audit` only, where its
+        // severity comes from `audit_severity`. The review-mode
+        // mapping is `Info` defensively in case a future caller
+        // wires it into review.
+        HealthPattern::Registration | HealthPattern::Service | HealthPattern::BroadCatchDebt => {
+            Severity::Info
+        }
     }
+}
+
+/// Audit-mode severity table. `BroadCatchDebt` is `Info` (the report
+/// surfaces accumulated debt without prescribing a fix); the other
+/// audit-eligible HEALTH patterns reuse the review-mode rule.
+#[must_use]
+pub const fn audit_severity(p: HealthPattern) -> Severity {
+    match p {
+        HealthPattern::BroadCatchDebt => Severity::Info,
+        _ => health_severity_for_review(p),
+    }
+}
+
+/// Strip `BroadException` from the configured pattern set for `audit` mode.
+///
+/// Audit operates on a single working-tree snapshot with no HEAD
+/// comparison, so the delta-mode detector has nothing to score
+/// against — silently dropping it keeps the audit emit
+/// surface clean.
+#[must_use]
+pub fn enabled_audit_health_patterns(tokens: &[String]) -> Vec<HealthPattern> {
+    resolve_patterns(tokens)
+        .into_iter()
+        .filter(|p| !matches!(p, HealthPattern::BroadException))
+        .collect()
 }
 
 /// Run the TypeScript Health adapter against `subject`.
@@ -405,6 +453,7 @@ pub fn analyze_health_for_subject(
     head_body: Option<&str>,
     peer_paths: &[PathBuf],
     enabled: &[HealthPattern],
+    log_identifiers: &[String],
 ) -> Vec<HealthFinding> {
     if !is_health_eligible_path(subject) {
         return Vec::new();
@@ -412,7 +461,14 @@ pub fn analyze_health_for_subject(
     let abs_subject = repo_root.join(subject);
     let body = std::fs::read_to_string(&abs_subject).unwrap_or_default();
     let augmented = augment_peer_paths_with_working_tree(repo_root, subject, peer_paths);
-    mmk_health::ts::analyze_ts(subject, &body, head_body, &augmented, enabled)
+    mmk_health::ts::analyze_ts(
+        subject,
+        &body,
+        head_body,
+        &augmented,
+        enabled,
+        log_identifiers,
+    )
 }
 
 /// Add the subject's working-tree directory siblings (plus any
@@ -483,6 +539,73 @@ pub(crate) fn is_health_eligible_path(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| matches!(e, "ts" | "tsx" | "js" | "jsx"))
+}
+
+/// Enumerate every health-eligible TS/TSX/JS/JSX file tracked by git.
+///
+/// Applies `ignores` as a glob filter. Used by `mmk audit` —
+/// `git ls-files -z` reflects the working tree honestly (tracked
+/// files plus tracked-and-modified) without dragging untracked /
+/// gitignored noise into the report.
+///
+/// Returns repo-relative paths in `git`'s order. NUL-delimited so
+/// paths with newlines or spaces don't get mis-split.
+pub fn enumerate_eligible_files(
+    repo_root: &Path,
+    ignores: &globset::GlobSet,
+) -> Result<Vec<PathBuf>> {
+    let out = std::process::Command::new("git")
+        .args(["ls-files", "-z"])
+        .current_dir(repo_root)
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to invoke `git ls-files` in {} — is git on PATH?",
+                repo_root.display()
+            )
+        })?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "git ls-files in {} exited with {}: {}",
+            repo_root.display(),
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let mut files = Vec::new();
+    for raw in out.stdout.split(|b| *b == 0) {
+        if raw.is_empty() {
+            continue;
+        }
+        let Ok(s) = std::str::from_utf8(raw) else {
+            continue;
+        };
+        let path = PathBuf::from(s);
+        if !is_health_eligible_path(&path) {
+            continue;
+        }
+        if ignores.is_match(&path) {
+            continue;
+        }
+        files.push(path);
+    }
+    Ok(files)
+}
+
+/// Build a `GlobSet` from the merged `ignore` list (file + CLI).
+///
+/// A failed glob compile returns an error rather than silently
+/// dropping the pattern — a typo that no-ops is the failure mode the
+/// CLI flag was added to prevent.
+pub fn build_ignore_set(ignores: &[String]) -> Result<globset::GlobSet> {
+    let mut builder = globset::GlobSetBuilder::new();
+    for g in ignores {
+        let glob = globset::Glob::new(g).with_context(|| format!("invalid ignore glob `{g}`"))?;
+        builder.add(glob);
+    }
+    builder
+        .build()
+        .with_context(|| "failed to compile ignore globs".to_string())
 }
 
 // ---- STRUCTURE / COMPLEXITY plumbing ---------------------------
@@ -845,6 +968,7 @@ mod tests {
             ts: Some(HealthTsFile {
                 enabled: Some(true),
                 patterns: Some(vec!["test_pair".into()]),
+                broad_exception: None,
             }),
         };
         apply_health_file(&mut cfg, &file);
@@ -860,6 +984,7 @@ mod tests {
             ts: Some(HealthTsFile {
                 enabled: Some(true),
                 patterns: None,
+                broad_exception: None,
             }),
         };
         apply_health_file(&mut cfg, &file);
@@ -910,6 +1035,7 @@ mod tests {
             pattern: HealthPattern::TestPair,
             subject: PathBuf::from("src/foo.ts"),
             related: vec![PathBuf::from("src/foo.test.ts")],
+            detail: None,
         };
         let f = health_to_finding(&h, Severity::Warn);
         assert_eq!(f.layer, Layer::Health);
