@@ -1,4 +1,11 @@
 [toolchain]
-channel = "stable"
+# Pinned to a specific stable. CI and any local rustup install both
+# resolve to the same toolchain — and so the same clippy lint set.
+# Floating on `"stable"` had bitten us three times (commits 6f5053e,
+# 8cef496, and the v0.12 push) when a new stable promoted lints that
+# local toolchains hadn't picked up. Bump deliberately when you want
+# to absorb a new lint cycle: change this line, run clippy locally,
+# fix or `#[allow]` the new warnings, commit.
+channel = "1.95"
 components = ["rustfmt", "clippy"]
 profile = "minimal"

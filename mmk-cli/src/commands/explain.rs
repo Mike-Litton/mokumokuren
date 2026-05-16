@@ -170,7 +170,7 @@ fn collect_evidence(commits: &[Commit], subject: &PathBuf, partner: &PathBuf) ->
         .collect();
     // Newest-first so the agent reads the recent burst before the
     // historical context.
-    rows.sort_by(|a, b| b.ts.cmp(&a.ts));
+    rows.sort_by_key(|r| std::cmp::Reverse(r.ts));
     rows
 }
 

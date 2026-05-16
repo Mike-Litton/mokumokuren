@@ -314,7 +314,7 @@ pub fn health_broad_exception(subject: &Path, delta: u32) -> String {
 pub fn health_broad_catch_debt(subject: &Path, count: u32, lines: &[usize]) -> String {
     let plural = if count == 1 { "" } else { "s" };
     if lines.is_empty() {
-        return format!("{}: {count} broad catch handler{plural}", subject.display(),);
+        return format!("{}: {count} broad catch handler{plural}", subject.display());
     }
     let line_list = lines
         .iter()
