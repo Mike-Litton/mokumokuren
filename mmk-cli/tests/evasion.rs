@@ -78,7 +78,7 @@ fn write_health_config(repo: &std::path::Path) {
         "mokumokuren.toml",
         r#"[health.ts]
 enabled = true
-patterns = ["registration", "service", "test_pair", "broad_exception"]
+patterns = ["test_pair", "broad_exception", "test_weakening"]
 "#,
     );
 }

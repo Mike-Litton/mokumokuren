@@ -80,26 +80,27 @@ ignore = [
 # threshold = 0.10
 
 # `[health.ts]` enables the TypeScript Health adapter:
-# structural-pattern detection (action-registration files, service
-# decls, test pairs) that surfaces architectural neighbors empirical
-# co-change history cannot see. Off by default outside the js-ts
-# profile so non-TS users aren't surprised.
+# - `test_pair` flags an impl edit whose test partner isn't in the
+#   diff (research-anchored: prevents the easy "edit code, skip
+#   tests" path that LLM coding evals consistently catch).
+# - `broad_exception` flags newly-added broad catch handlers (the
+#   EVASION sensor, arXiv:2509.13941).
+# - `test_weakening` (v0.13) flags net erosion of an existing test:
+#   skip decorators added, assertions lost, mocks added, etc.
+#   Targets arXiv:2503.15223 *"Are 'Solved Issues' in SWE-bench
+#   Really Solved Correctly?"*.
+# Off by default outside the js-ts profile so non-TS users aren't
+# surprised.
 
 # [health.ts]
 # enabled = true
-# patterns = ["registration", "service", "test_pair"]
+# patterns = ["test_pair", "broad_exception", "test_weakening"]
 
-# `[bulk]` carries two diff-time guardrails calibrated independently:
-# `max_files` / `max_lines` are the per-diff cap (agentic-context
-# safety) — diffs over either one silence HOTSPOT/COUPLING.
-# `review_quality_lines` is the review-effectiveness floor (defect-
-# detection during review degrades sharply past ~200 LOC; replicated
-# in Jureczko 2020 IET Software, 10.1049/iet-sen.2020.0134). The
-# block below mirrors the in-code defaults so an agent reading the
-# config sees both thresholds; bump `max_lines` / `max_files` for
-# repos with naturally wider commit grain. Set `review_quality_lines
-# = 0` to disable the floor; the cap stays.
+# `[bulk]` carries the per-diff guardrails: `max_files` / `max_lines`
+# silence HOTSPOT/COUPLING when a diff exceeds the cap. The numbers
+# are internal calibration — bump for repos with naturally wider
+# commit grain. Agent-context guardrail; not tied to any published
+# review-effectiveness number.
 [bulk]
 max_files            = 15
 max_lines            = 1000
-review_quality_lines = 200  # review-effectiveness floor

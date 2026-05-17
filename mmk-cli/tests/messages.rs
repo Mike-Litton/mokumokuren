@@ -240,17 +240,6 @@ fn budget_lines_with_gross_split_carries_both_counts() {
 }
 
 #[test]
-fn budget_review_quality_anchors_to_behavior_and_names_the_action() {
-    // The floor message anchors to the behavior the agent can
-    // act on (review effectiveness degrades past N lines) and
-    // names the action ("commit this slice") inline. No paper
-    // citations in the agent-facing surface — the empirical
-    // lineage lives in internal docstrings on `BulkCfg`.
-    let s = msg::budget_review_quality(214, 200);
-    insta::assert_snapshot!(s);
-}
-
-#[test]
 fn budget_ramp_approaching_emits_meter_only() {
     let s = msg::budget_ramp(8, 15, 600, 1000, false);
     insta::assert_snapshot!(s);
@@ -286,26 +275,6 @@ fn health_test_pair_multiple_related_joins_with_comma() {
         PathBuf::from("src/foo.spec.ts"),
     ];
     let s = msg::health_test_pair(Path::new("src/foo.ts"), &related);
-    insta::assert_snapshot!(s);
-}
-
-#[test]
-fn health_registration_pins_wording() {
-    let related = vec![
-        PathBuf::from("src/actions/one.ts"),
-        PathBuf::from("src/actions/two.ts"),
-    ];
-    let s = msg::health_registration(Path::new("src/actions/new.ts"), &related);
-    insta::assert_snapshot!(s);
-}
-
-#[test]
-fn health_service_pins_wording() {
-    let related = vec![
-        PathBuf::from("src/consumers/one.ts"),
-        PathBuf::from("src/consumers/two.ts"),
-    ];
-    let s = msg::health_service(Path::new("src/services/foo.ts"), &related);
     insta::assert_snapshot!(s);
 }
 

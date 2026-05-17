@@ -39,8 +39,8 @@ fn list_envelope_carries_schema_and_sensors_array() {
     assert!(v["schema_version"].is_string(), "schema_version present");
     let sensors = v["sensors"].as_array().expect("sensors[] present");
     assert!(
-        sensors.len() >= 11,
-        "expected ≥11 catalog rows, got {}",
+        sensors.len() >= 8,
+        "expected ≥8 catalog rows, got {}",
         sensors.len()
     );
     // Required keys on every row — agent harnesses rely on uniform
@@ -64,17 +64,17 @@ fn list_envelope_carries_schema_and_sensors_array() {
 }
 
 #[test]
-fn list_marks_broad_catch_debt_as_audit_only() {
+fn list_marks_test_weakening_as_review_only_delta_mode() {
     let v = list_json();
-    let bcd = v["sensors"]
+    let entry = v["sensors"]
         .as_array()
         .expect("sensors")
         .iter()
-        .find(|r| r["name"] == "HEALTH:broad_catch_debt")
-        .expect("broad_catch_debt entry");
-    assert_eq!(bcd["commands"], serde_json::json!(["audit"]));
-    assert_eq!(bcd["mode"], "static");
-    assert_eq!(bcd["default_severity"], "Info");
+        .find(|r| r["name"] == "HEALTH:test_weakening")
+        .expect("test_weakening entry");
+    assert_eq!(entry["commands"], serde_json::json!(["review"]));
+    assert_eq!(entry["mode"], "delta");
+    assert_eq!(entry["default_severity"], "Warn");
 }
 
 #[test]
@@ -90,11 +90,18 @@ fn describe_broad_exception_long_description_mentions_log_identifiers() {
 }
 
 #[test]
-fn describe_broad_catch_debt_envelope_shape() {
-    let v = describe_json("broad_catch_debt");
-    assert_eq!(v["mode"], "static");
-    assert_eq!(v["commands"], serde_json::json!(["audit"]));
+fn describe_test_weakening_envelope_shape() {
+    let v = describe_json("test_weakening");
+    assert_eq!(v["mode"], "delta");
+    assert_eq!(v["commands"], serde_json::json!(["review"]));
     assert!(v["long_description"].is_string());
+    let long = v["long_description"]
+        .as_str()
+        .expect("long_description present");
+    assert!(
+        long.contains("arXiv:2503.15223"),
+        "expected research citation; got: {long}"
+    );
 }
 
 #[test]

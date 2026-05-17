@@ -6,6 +6,71 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-05-17
+
+Drops the research-thin and empirically-dead sensors; adds
+`test_weakening`, the strongest research-backed addition for the
+LLM-self-verification reframe. Citation audit + an n=31 empirical
+agent-run sample agreed on the cut list. Breaking schema change
+(see Schema).
+
+### Added
+
+- **`HEALTH:test_weakening`** — fires when a working-tree edit
+  weakens an existing test (skips added, `expect()` assertions
+  lost, `jest.mock` / `vi.mock` added, `@ts-expect-error` /
+  `@ts-ignore` added, `it` / `test` / `describe` cases removed).
+  Targets the agent-self-validation failure mode in
+  [arXiv:2503.15223](https://arxiv.org/abs/2503.15223) *"Are
+  'Solved Issues' in SWE-bench Really Solved Correctly?"*.
+  Severity Warn in review; silenced in pre-edit / audit (no HEAD
+  baseline).
+
+### Changed
+
+- **`--blast-radius-threshold` deprecated** on `review` /
+  `pre-edit`. Emits a one-line stderr warning pointing to
+  `--coupling-threshold`. The alias still works in v0.13; v0.14
+  drops it.
+- **Doc-comment lineage corrections** (no behavior change).
+  HOTSPOT now cites Nagappan & Ball ICSE 2005 + Tornhill *Your
+  Code as a Crime Scene*. COMPLEXITY's `6` / `80` absolute caps
+  relabeled as v0.8 internal calibration (not "Code Red 2022
+  biomarker bundle"). COHESION labeled as *inspired by* Herzig &
+  Zeller (mmk operates at diff granularity, not AST). `bulk.max_lines`
+  labeled as an agent-context guardrail (no Cohen / SmartBear
+  lineage).
+
+### Removed
+
+- **`HEALTH:registration` and `HEALTH:service`** — VSCode-monorepo
+  conventions with no research lineage; 0 fires in 11 Strapi
+  agent runs.
+- **`HEALTH:broad_catch_debt`** — audit-mode counterpart to
+  EVASION. Delta-mode `broad_exception` is the research-anchored
+  sensor; the static count carried inherited Jureczko / FSE 2025
+  framing that didn't survive the citation audit.
+- **`bulk.review_quality_lines`** and the
+  `BudgetTier::ReviewQuality` Info tier. The Jureczko / SmartBear
+  / Cohen lineage is about human reviewer throughput, not the
+  agent-self-verification workflow v0.13 reframes around. The
+  50 % / 75 % ramp on `max_lines` is what now surfaces the meter
+  climbing.
+- **`mmk analyze --couples` and `--couples-of`** flags. JSON
+  `top_couples[]` carries the same data; the text-indented
+  `couples:` block broke grep.
+
+### Schema
+
+`schema_version` bumps to `0.10.0` — first breaking change since
+v0.4. Removed: `config.bulk.review_quality_lines`, the `couples_of`
+top-level block, three `health.matches[].pattern` values
+(`registration`, `service`, `broad_catch_debt`), the
+`detail.kind = "broad_catch_debt"` variant. Added: pattern value
+`test_weakening` and its `detail.kind` variant with per-axis
+erosion counts. Full delta in `docs/schema.md` and
+`mmk-cli/src/output/schema.rs`.
+
 ## [0.12.0] - 2026-05-15
 
 Two gaps closed for codebases that already accumulated debt before

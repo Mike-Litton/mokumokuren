@@ -3,7 +3,7 @@
 use anyhow::Result;
 use mmk_config::Config;
 use mmk_core::session::SessionDelta;
-use mmk_core::{CouplingEntry, HotspotEntry, NeighborhoodNode};
+use mmk_core::{HotspotEntry, NeighborhoodNode};
 use mmk_git::{AnalyzeOutput, SessionAnalyzeOutput};
 use std::io::Write;
 use std::path::Path;
@@ -11,15 +11,13 @@ use std::path::Path;
 /// Write a human-readable ranked top-N table to `w`.
 ///
 /// Column widths auto-size to the longest path so output stays
-/// aligned. When `with_couples` is true, an indented `couples:`
-/// block is rendered under each row.
+/// aligned.
 pub fn write<W: Write>(
     w: &mut W,
     ranked: &[HotspotEntry],
     analysis: &AnalyzeOutput,
     duration_ms: u64,
     _config: &Config,
-    with_couples: bool,
     blast: Option<(&Path, f64, &[NeighborhoodNode])>,
 ) -> Result<()> {
     if ranked.is_empty() {
@@ -72,19 +70,6 @@ pub fn write<W: Write>(
             e.hotspot_score,
             pw = path_width,
         )?;
-        if with_couples && !e.top_couples.is_empty() {
-            writeln!(w, "      couples:")?;
-            for c in &e.top_couples {
-                writeln!(
-                    w,
-                    "        {:<pw$}  jaccard {:.2}  co-change {}",
-                    c.partner.to_string_lossy(),
-                    c.jaccard,
-                    c.co_change_count,
-                    pw = path_width,
-                )?;
-            }
-        }
     }
 
     if let Some((root, threshold, nodes)) = blast {
@@ -252,62 +237,3 @@ fn write_simple_table<W: Write>(w: &mut W, entries: &[HotspotEntry]) -> Result<(
     Ok(())
 }
 
-/// Render a `--couples-of <PATH>` listing.
-pub fn write_couples_of<W: Write>(
-    w: &mut W,
-    path: &Path,
-    entries: &[CouplingEntry],
-    analysis: &AnalyzeOutput,
-    duration_ms: u64,
-    blast: Option<(&Path, f64, &[NeighborhoodNode])>,
-) -> Result<()> {
-    writeln!(w, "couples for {}:", path.display())?;
-    if entries.is_empty() {
-        writeln!(w, "  (no co-changes in window)")?;
-    } else {
-        let pw = entries
-            .iter()
-            .map(|c| c.partner.to_string_lossy().len())
-            .max()
-            .unwrap_or(4);
-        for c in entries {
-            writeln!(
-                w,
-                "  {:<pw$}  jaccard {:.2}  co-change {}",
-                c.partner.to_string_lossy(),
-                c.jaccard,
-                c.co_change_count,
-                pw = pw,
-            )?;
-        }
-    }
-
-    if let Some((root, threshold, nodes)) = blast {
-        writeln!(
-            w,
-            "\nblast_radius for {} (1-hop, threshold {:.2}):",
-            root.display(),
-            threshold
-        )?;
-        if nodes.is_empty() {
-            writeln!(w, "  (no partners above threshold)")?;
-        } else {
-            for n in nodes {
-                writeln!(
-                    w,
-                    "  {}  jaccard {:.2}  co-change {}",
-                    n.path.display(),
-                    n.jaccard,
-                    n.co_change_count
-                )?;
-            }
-        }
-    }
-
-    writeln!(
-        w,
-        "\n{} commits analyzed ({} filtered) in {} ms",
-        analysis.counts.commits_analyzed, analysis.counts.commits_filtered_bulk, duration_ms,
-    )?;
-    Ok(())
-}

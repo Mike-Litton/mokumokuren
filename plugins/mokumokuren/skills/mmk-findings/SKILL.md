@@ -88,17 +88,24 @@ cohort.
   your edit is small but the function was already over. Refactor
   when Warn fires unless you have a concrete reason this slice
   doesn't include the refactor.
-- **BUDGET**: two registers. Info at +200 LOC (review-effectiveness
-  floor — slice is done; commit). Warn / Over near and past the
-  per-diff cap (1000 LOC default — split). See workflow steps 5–6.
+- **BUDGET**: Info ramp at ≥50 % of the per-diff cap (1000 LOC
+  default), Warn at ≥75 %, Over above 100 %. The cap is an
+  agent-context guardrail — split when Warn fires. See workflow
+  steps 5–6.
 - **STRUCTURE**: divergence is real signal except on role files.
   Role-file findings (Info) name the role status; act on them
   only when the divergence is from peer role files. Confirm the
   role peers (factories / contributions / registrations) share
   the *role* convention rather than the directory shape.
-- **HEALTH** (`test_pair`, `service`, `broad_exception`): act on
-  each. A `test_pair` finding means you wrote impl without its
-  test; add the test or explain.
+- **HEALTH** (`test_pair`, `broad_exception`, `test_weakening`):
+  act on each. `test_pair` means you wrote impl without its test —
+  add the test or explain. `broad_exception` flags a newly-added
+  broad catch handler (the EVASION sensor, arXiv:2509.13941) —
+  narrow the catch or rethrow. `test_weakening` flags net erosion
+  of an existing test (skips added, assertions lost, mocks added,
+  `@ts-expect-error` sprinkled, test cases removed) — the failure
+  mode documented in arXiv:2503.15223. If the test was wrong, say
+  so explicitly; otherwise undo the weakening.
 - **COHESION**: a tangle → propose a commit split.
 - **DRIFT**: same file climbing across sessions → you are
   rewriting, not progressing. Step back and check whether the

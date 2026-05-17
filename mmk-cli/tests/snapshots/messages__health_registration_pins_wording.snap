@@ -1,5 +1,0 @@
----
-source: mmk-cli/tests/messages.rs
-expression: s
----
-src/actions/new.ts: action-registration; precedents: src/actions/one.ts, src/actions/two.ts

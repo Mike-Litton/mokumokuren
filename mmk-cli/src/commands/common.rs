@@ -15,7 +15,7 @@ use mmk_config::{
     HealthTsCfg, SensorFile, StructureCfg,
 };
 use mmk_core::CouplingEntry;
-use mmk_health::{HealthFinding, HealthFindingDetail, HealthPattern};
+use mmk_health::{HealthFinding, HealthPattern};
 use std::path::{Path, PathBuf};
 
 use crate::monotonic::MonotonicSignal;
@@ -347,83 +347,58 @@ pub fn resolve_patterns(tokens: &[String]) -> Vec<HealthPattern> {
 }
 
 /// Wrap a [`HealthFinding`] from `mmk-health` into the CLI's unified
-/// `Finding` shape with the right severity by mode.
+/// `Finding` shape with the caller-supplied severity.
 ///
-/// - Pre-edit: every Health finding is informational (the agent
-///   hasn't acted yet, the message is "consider this neighbor").
-/// - Review: Pattern C and BroadException are **Warn** (the
-///   implementation moved without its test partner; or a broad
-///   handler was added). Patterns A and B remain Info — they
-///   surface architectural neighbors without demanding edits.
+/// Pre-edit passes `Info` (the agent hasn't acted yet); review and
+/// audit pass the result of [`health_severity_for_review`].
 #[must_use]
 pub fn health_to_finding(h: &HealthFinding, severity: Severity) -> Finding {
     let message = match h.pattern {
-        HealthPattern::Registration => messages::health_registration(&h.subject, &h.related),
-        HealthPattern::Service => messages::health_service(&h.subject, &h.related),
         HealthPattern::TestPair => messages::health_test_pair(&h.subject, &h.related),
-        // BroadException's `related` field is empty by convention —
-        // the finding is about the subject only. The detector tracks
-        // the *delta*; we surface "1+" rather than re-reading the
-        // detector's internal counter, since v0.7's HealthFinding
-        // shape carries no numeric payload.
         HealthPattern::BroadException => messages::health_broad_exception(&h.subject, 1),
-        // BroadCatchDebt carries `(count, lines)` in `detail` so the
-        // formatter can render the accumulated debt without
-        // re-parsing the file. v0.12.
-        HealthPattern::BroadCatchDebt => match &h.detail {
-            Some(HealthFindingDetail::BroadCatchDebt { count, lines }) => {
-                messages::health_broad_catch_debt(&h.subject, *count, lines)
-            }
-            // Defensive default — the detector always populates
-            // `detail`, but a future refactor that drops it must not
-            // panic.
-            _ => messages::health_broad_catch_debt(&h.subject, 0, &[]),
+        HealthPattern::TestWeakening => match &h.detail {
+            Some(mmk_health::HealthFindingDetail::TestWeakening {
+                skips_added,
+                assertions_lost,
+                mocks_added,
+                ts_suppressions_added,
+                tests_removed,
+            }) => messages::health_test_weakening(
+                &h.subject,
+                *skips_added,
+                *assertions_lost,
+                *mocks_added,
+                *ts_suppressions_added,
+                *tests_removed,
+            ),
+            _ => unreachable!(
+                "test_weakening detector always populates HealthFindingDetail::TestWeakening"
+            ),
         },
     };
     Finding::new(Layer::Health, severity, message)
 }
 
-/// Pick the severity for a Health finding given the call site.
-///
-/// Captured here so the rule lives in one place — drift would
-/// otherwise mean Pattern C / BroadException silently downgrade
-/// across review/pre-edit.
+/// Severity for a Health finding under review / audit (pre-edit
+/// always uses `Info`). Captured so drift can't silently downgrade
+/// a pattern across call sites.
 #[must_use]
 pub const fn health_severity_for_review(p: HealthPattern) -> Severity {
     match p {
-        HealthPattern::TestPair | HealthPattern::BroadException => Severity::Warn,
-        // BroadCatchDebt fires under `audit` only, where its
-        // severity comes from `audit_severity`. The review-mode
-        // mapping is `Info` defensively in case a future caller
-        // wires it into review.
-        HealthPattern::Registration | HealthPattern::Service | HealthPattern::BroadCatchDebt => {
-            Severity::Info
-        }
+        HealthPattern::TestPair
+        | HealthPattern::BroadException
+        | HealthPattern::TestWeakening => Severity::Warn,
     }
 }
 
-/// Audit-mode severity table. `BroadCatchDebt` is `Info` (the report
-/// surfaces accumulated debt without prescribing a fix); the other
-/// audit-eligible HEALTH patterns reuse the review-mode rule.
-#[must_use]
-pub const fn audit_severity(p: HealthPattern) -> Severity {
-    match p {
-        HealthPattern::BroadCatchDebt => Severity::Info,
-        _ => health_severity_for_review(p),
-    }
-}
-
-/// Strip `BroadException` from the configured pattern set for `audit` mode.
-///
-/// Audit operates on a single working-tree snapshot with no HEAD
-/// comparison, so the delta-mode detector has nothing to score
-/// against — silently dropping it keeps the audit emit
-/// surface clean.
+/// Strip delta-mode patterns from the configured set for `audit` mode.
+/// Audit has no HEAD baseline; delta detectors would always yield
+/// zero findings.
 #[must_use]
 pub fn enabled_audit_health_patterns(tokens: &[String]) -> Vec<HealthPattern> {
     resolve_patterns(tokens)
         .into_iter()
-        .filter(|p| !matches!(p, HealthPattern::BroadException))
+        .filter(|p| !p.is_delta_mode())
         .collect()
 }
 
@@ -1000,17 +975,24 @@ mod tests {
         let toks = vec![
             "test_pair".to_string(),
             "totally_made_up".to_string(),
+            "broad_exception".to_string(),
+            "test_weakening".to_string(),
             "registration".to_string(),
         ];
         let resolved = resolve_patterns(&toks);
         assert_eq!(
             resolved,
-            vec![HealthPattern::TestPair, HealthPattern::Registration]
+            vec![
+                HealthPattern::TestPair,
+                HealthPattern::BroadException,
+                HealthPattern::TestWeakening,
+            ],
+            "dropped legacy tokens (registration) and unknown tokens fall away",
         );
     }
 
     #[test]
-    fn health_severity_for_review_warns_on_test_pair_and_broad_exception() {
+    fn health_severity_for_review_warns_on_every_pattern() {
         assert_eq!(
             health_severity_for_review(HealthPattern::TestPair),
             Severity::Warn
@@ -1020,12 +1002,8 @@ mod tests {
             Severity::Warn
         );
         assert_eq!(
-            health_severity_for_review(HealthPattern::Registration),
-            Severity::Info
-        );
-        assert_eq!(
-            health_severity_for_review(HealthPattern::Service),
-            Severity::Info
+            health_severity_for_review(HealthPattern::TestWeakening),
+            Severity::Warn
         );
     }
 

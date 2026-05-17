@@ -68,24 +68,6 @@ pub(crate) fn count_broad_non_top_level(
     count
 }
 
-/// Locate every broad non-top-level catch handler and return its
-/// `(line, column)` start position (1-based line, 1-based column).
-/// Used by the `BroadCatchDebt` static-mode detector.
-#[must_use]
-pub(crate) fn collect_broad_non_top_level_with_locations(
-    subject: &Path,
-    body: &str,
-    log_identifiers: &[String],
-) -> Vec<(usize, usize)> {
-    let Some(tree) = parse_for(subject, body) else {
-        return Vec::new();
-    };
-    let src = body.as_bytes();
-    let mut out = Vec::new();
-    walk_collect(tree.root_node(), src, log_identifiers, &mut out);
-    out
-}
-
 fn walk(node: Node<'_>, src: &[u8], log_identifiers: &[String], count: &mut u32) {
     if node.kind() == "catch_clause" && is_broad(node, src, log_identifiers) && !is_top_level(node)
     {
@@ -94,23 +76,6 @@ fn walk(node: Node<'_>, src: &[u8], log_identifiers: &[String], count: &mut u32)
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         walk(child, src, log_identifiers, count);
-    }
-}
-
-fn walk_collect(
-    node: Node<'_>,
-    src: &[u8],
-    log_identifiers: &[String],
-    out: &mut Vec<(usize, usize)>,
-) {
-    if node.kind() == "catch_clause" && is_broad(node, src, log_identifiers) && !is_top_level(node)
-    {
-        let pos = node.start_position();
-        out.push((pos.row + 1, pos.column + 1));
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        walk_collect(child, src, log_identifiers, out);
     }
 }
 

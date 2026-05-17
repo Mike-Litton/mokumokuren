@@ -73,39 +73,52 @@ shape and connectivity:
 - **COHESION** (v0.6, **promoted to Warn in v0.7**) — tangled-diff
   fingerprint. Detects working-tree diffs that decompose into
   multiple disjoint connected components on the historical co-change
-  graph, the structural pattern Herzig & Zeller (2013) identified as
-  elevating revert / review cost. Edge metric is the max-symmetrized
-  Wilson 95 % lower bound on the directional conditional co-change
-  probability — same statistical primitive as COUPLING, generalized
-  to a graph connectivity question. Empirical promotion grounding:
-  MSR 2026 *"LGTM! Characteristics of Auto-Merged LLM-based Agentic
-  PRs"* (Canelas et al.) shows across the AIDev corpus that
-  auto-merged PRs are smaller and more focused than non-auto-merged
-  ones — peer-reviewed evidence that focus correlates with merge
-  success, the direction COHESION already detects.
+  graph. **Lineage:** *inspired by* the tangled-change literature
+  (Herzig & Zeller 2013) — those papers untangled at AST
+  granularity, mmk operates at diff granularity, so the implementation
+  is a structural-fingerprint proxy rather than a direct
+  reproduction. Edge metric is the max-symmetrized Wilson 95 %
+  lower bound on the directional conditional co-change probability
+  — same statistical primitive as COUPLING, generalized to a graph
+  connectivity question. Severity calibrated by MSR 2026 *"LGTM!
+  Characteristics of Auto-Merged LLM-based Agentic PRs"* (Canelas
+  et al.) — auto-merged PRs are smaller and more focused than
+  non-auto-merged ones across the AIDev corpus.
 - **EVASION** (v0.7, surfaced under HEALTH as `pattern =
   "broad_exception"`) — newly-added non-top-level broad TS/JS catch
   handlers. The detector counts catch_clauses where the body is
-  empty, the parameter is absent, or the parameter type is `any` /
-  `unknown` / `Error`, filters to non-top-level (some enclosing
-  function/method/arrow ancestor before reaching `program`), and
-  fires on a working-vs-HEAD net delta increase. Module-level
-  handlers are legitimate; the pathological case is a swallowed
-  error inside business logic. Targets the *"evasive repairs with
-  try-except blocks"* failure mode named in arXiv:2509.13941
-  *(An Empirical Study on Failures in Automated Issue Solving)* and
-  corroborated by FSE 2025 *Suppressed Static Analysis Warnings*
-  (broad-except = 18.4 % of Python suppressions across 46 projects).
-  Severity Warn in review; skipped in pre-edit (no diff to score
-  against). Cheap pre-gate (`body.contains("catch")`) avoids the
-  per-file tree-sitter parse on diffs that don't touch error-handling
-  code.
+  empty, the parameter is absent, the parameter type is `any` /
+  `unknown` / `Error`, or the body is a pure log-and-swallow shape
+  (v0.12); filters to non-top-level; and fires on a working-vs-HEAD
+  net delta increase. Module-level handlers are legitimate; the
+  pathological case is a swallowed error inside business logic.
+  Targets the *"evasive repairs with try-except blocks"* failure
+  mode named in arXiv:2509.13941 *(An Empirical Study on Failures
+  in Automated Issue Solving)*. Severity Warn in review; skipped in
+  pre-edit (no diff to score against). Cheap pre-gate
+  (`body.contains("catch")`) avoids the per-file tree-sitter parse
+  on diffs that don't touch error-handling code.
+- **TEST_WEAKENING** (v0.13, surfaced under HEALTH as `pattern =
+  "test_weakening"`) — net erosion of an existing test file's
+  strength in the working tree vs HEAD. Detects skip decorators
+  added (`.skip` / `.only` / `xit` / `xtest` / `xdescribe`),
+  `expect(...)` assertion counts decreased, `jest.mock` / `vi.mock`
+  calls added, `@ts-expect-error` / `@ts-ignore` markers added, or
+  `it` / `test` / `describe` cases removed. Only test files
+  (`.test.*`, `.spec.*`) are eligible subjects; impl edits never
+  fire here. Targets the agent-self-validation failure mode
+  documented in arXiv:2503.15223 *"Are 'Solved Issues' in SWE-bench
+  Really Solved Correctly?"* — agents passing CI by weakening the
+  tests rather than fixing the impl. Severity Warn in review;
+  silenced in pre-edit (the working tree is HEAD for the subject
+  before the agent edits).
 
 All these sensors refuse to emit low-quality signal where their
-inputs aren't reliable (STRUCTURE / COMPLEXITY / EVASION on
-languages without an AST adapter; COHESION on diffs with no
-historical co-change data; EVASION on a new file with zero broad
-handlers added). The right way to use mmk is alongside type checks,
+inputs aren't reliable (STRUCTURE / COMPLEXITY / EVASION /
+TEST_WEAKENING on languages without an AST adapter; COHESION on
+diffs with no historical co-change data; EVASION / TEST_WEAKENING
+on a new file with no HEAD baseline). The right way to use mmk is
+alongside type checks,
 linters, and tests — not in place of any of them. Each pillar
 catches a different class of failure; mmk's class is "patterns
 visible only in historical data, plus shape and connectivity

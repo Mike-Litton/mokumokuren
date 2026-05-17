@@ -191,24 +191,6 @@ pub fn budget_lines(actual: u64, max: u64, gross: Option<u64>, suppressed: bool)
     )
 }
 
-/// `diff at N lines; review effectiveness degrades past ~M lines. Commit this slice before continuing.`
-///
-/// Absolute review-effectiveness floor (default 200 LOC). Fires Info
-/// once the working-tree-vs-HEAD diff crosses the threshold while
-/// still under 50% of the per-diff cap — the band the under-cap
-/// ramp's 50% Approaching tier doesn't reach. The message anchors
-/// to the behavior (review effectiveness degrades) rather than to a
-/// paper citation an agent can't verify. The threshold's empirical
-/// grounding lives in the docstring on `BulkCfg::review_quality_lines`
-/// (Jureczko 2020 IET Software replication of the SmartBear/Cisco
-/// review-rate findings).
-#[must_use]
-pub fn budget_review_quality(actual: u64, threshold: u64) -> String {
-    format!(
-        "diff at {actual} lines; review effectiveness degrades past ~{threshold} lines. Commit this slice before continuing."
-    )
-}
-
 /// `diff at A_f of M_f files, A_l of M_l lines (P% of cap); approaching review cap`
 ///
 /// Continuous-feedback ramp surface, fired at 50–74% (Info) and
@@ -257,26 +239,6 @@ pub fn drift(
     )
 }
 
-/// `<subject>: action-registration; precedents: <Y>, <Z>`
-#[must_use]
-pub fn health_registration(subject: &Path, related: &[PathBuf]) -> String {
-    format!(
-        "{}: action-registration; precedents: {}",
-        subject.display(),
-        join_paths(related),
-    )
-}
-
-/// `<subject>: service-decl; consumers: <Y>, <Z>`
-#[must_use]
-pub fn health_service(subject: &Path, related: &[PathBuf]) -> String {
-    format!(
-        "{}: service-decl; consumers: {}",
-        subject.display(),
-        join_paths(related),
-    )
-}
-
 /// `<subject>: test partner <Y> not in diff`
 #[must_use]
 pub fn health_test_pair(subject: &Path, related: &[PathBuf]) -> String {
@@ -297,35 +259,61 @@ pub fn health_test_pair(subject: &Path, related: &[PathBuf]) -> String {
 /// the addition is a genuine narrowing of scope or a swallow.
 #[must_use]
 pub fn health_broad_exception(subject: &Path, delta: u32) -> String {
-    let plural = if delta == 1 { "" } else { "s" };
     format!(
-        "{}: adds {delta} broad exception handler{plural} not in HEAD (catch with empty body, no parameter, or any/unknown/Error type at non-top-level)",
+        "{}: adds {delta} broad exception handler{} not in HEAD (catch with empty body, no parameter, or any/unknown/Error type at non-top-level)",
         subject.display(),
+        plural_s(delta),
     )
 }
 
-/// `<subject>: N broad catch handlers (lines L1, L2, ...)`
+/// `<subject>: test weakened — <axis-list>`
 ///
-/// Static-mode counterpart to [`health_broad_exception`]. Reports the
-/// accumulated count of broad non-top-level catch handlers in the
-/// working tree, plus their 1-based line numbers, so an `audit` run
-/// can show evasion debt that predates mmk's enablement.
+/// Each non-zero axis is rendered as a signed delta-clause so a
+/// reader can see which axes moved without re-running the detector.
+/// Targets the agent-self-validation failure mode in arXiv:2503.15223.
 #[must_use]
-pub fn health_broad_catch_debt(subject: &Path, count: u32, lines: &[usize]) -> String {
-    let plural = if count == 1 { "" } else { "s" };
-    if lines.is_empty() {
-        return format!("{}: {count} broad catch handler{plural}", subject.display());
+pub fn health_test_weakening(
+    subject: &Path,
+    skips_added: u32,
+    assertions_lost: u32,
+    mocks_added: u32,
+    ts_suppressions_added: u32,
+    tests_removed: u32,
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if skips_added > 0 {
+        parts.push(format!("+{skips_added} skip{}", plural_s(skips_added)));
     }
-    let line_list = lines
-        .iter()
-        .map(usize::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
-    let line_label = if lines.len() == 1 { "line" } else { "lines" };
-    format!(
-        "{}: {count} broad catch handler{plural} ({line_label} {line_list})",
-        subject.display(),
-    )
+    if tests_removed > 0 {
+        parts.push(format!(
+            "−{tests_removed} test case{}",
+            plural_s(tests_removed)
+        ));
+    }
+    if assertions_lost > 0 {
+        parts.push(format!(
+            "−{assertions_lost} assertion{}",
+            plural_s(assertions_lost)
+        ));
+    }
+    if mocks_added > 0 {
+        parts.push(format!("+{mocks_added} mock{}", plural_s(mocks_added)));
+    }
+    if ts_suppressions_added > 0 {
+        parts.push(format!(
+            "+{ts_suppressions_added} @ts-* suppression{}",
+            plural_s(ts_suppressions_added)
+        ));
+    }
+    format!("{}: test weakened — {}", subject.display(), parts.join(", "))
+}
+
+const fn plural_s(n: u32) -> &'static str {
+    if n == 1 {
+        ""
+    } else {
+        "s"
+    }
 }
 
 /// Pre-edit fall-through when no other layer fires.

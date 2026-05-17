@@ -1,5 +1,0 @@
----
-source: mmk-cli/tests/messages.rs
-expression: s
----
-src/services/foo.ts: service-decl; consumers: src/consumers/one.ts, src/consumers/two.ts

@@ -91,41 +91,26 @@ session-summary (also routed to `confidence_threshold`).
 
 ## `[bulk]`
 
-Controls the per-commit / per-diff size guardrails. BUDGET ships
-two complementary thresholds calibrated independently:
+Controls the per-commit / per-diff size guardrails — *agent-context
+safety*. Diffs over the cap silence HOTSPOT/COUPLING because their
+signal collapses at scale (the analyzer drops over-cap commits from
+the historical baseline, so the working-tree diff isn't being scored
+against a baseline that would have included it anyway), and the
+under-cap ramp warns the agent at 50 % / 75 % before the binary
+"you blew it" at 100 %.
 
-- **Per-diff cap** (`max_lines` / `max_files`, default 1000 / 15):
-  *agentic-context safety*. Diffs over the cap silence
-  HOTSPOT/COUPLING because their signal collapses at scale, and
-  the analyzer drops over-cap commits from the historical
-  baseline. Warn at 75 %, Over at 100 %.
-- **Review-effectiveness floor** (`review_quality_lines`, default
-  200): an absolute LOC threshold past which defect-detection
-  during code review degrades sharply. Empirical lineage: Jureczko
-  2020 (*Code review effectiveness: an empirical study on selected
-  factors influence*, IET Software,
-  [doi:10.1049/iet-sen.2020.0134](https://digital-library.theiet.org/doi/full/10.1049/iet-sen.2020.0134))
-  replicates the SmartBear/Cisco case-study finding under controls
-  for developer ability and team dynamics; Demeyer et al. 2024
-  (*Developer perceptions of modern code review processes in
-  practice*, JSS) reaffirms patch size as the dominant lever on
-  review duration / comment density. v0.10 surfaces the threshold
-  as an Info-severity floor below the cap so the agent sees the
-  slice-boundary cue at the empirical threshold, not at 50 % of
-  an engineering-heuristic ceiling.
-
-The two thresholds encode different evidence and stay independent:
-raising the cap doesn't drag the floor up proportionally — that
-would silently weaken the floor. The file cap is an engineering
-heuristic; the published change-review literature is almost
-entirely LOC-based and there is no peer-reviewed file-count
-threshold to derive a default from.
+The `max_lines = 1000` and `max_files = 15` defaults are **internal
+calibration**, not derived from published research. (v0.13 dropped
+the `review_quality_lines` knob and the Jureczko / SmartBear /
+Cohen framing it carried — those numbers are about *human reviewer
+attention*, which isn't what mmk targets after the v0.13 reframe to
+agent self-verification.) Bump the caps for repos with naturally
+wider feature-commit grain.
 
 ```toml
 [bulk]
 max_files            = 15
 max_lines            = 1000
-review_quality_lines = 200
 greenfield_threshold = 0.5
 ignore_for_budget = [
     "**/routeTree.gen.ts",
@@ -136,8 +121,7 @@ ignore_for_budget = [
 | Field                  | Default | Notes                                                                       |
 | ---------------------- | ------- | --------------------------------------------------------------------------- |
 | `max_files`            | `15`    | Per-commit / per-diff file cap. Affects both the historical-baseline filter (commits with > this many files don't contribute to coupling priors) and the working-tree bulk-self-filter (diffs over the cap silence HOTSPOT/COUPLING). v0.6 made this overridable from `mokumokuren.toml`. **Repos with naturally wider feature-commit grain** (workspace projects, infra repos, scaffold-heavy histories) need to bump this — at the default 15, every wide-grain commit gets dropped from the analyzer's commit set, leaving cross-cutting files reading as "no analyzable history" even with rich edit history. |
-| `max_lines`            | `1000`  | Per-commit / per-diff line cap (agentic-context safety half of BUDGET). Same dual purpose as `max_files`. v0.6 made this overridable. Independent of the review-effectiveness floor below — the cap and the floor encode different evidence. |
-| `review_quality_lines` | `200`   | (v0.10) Review-effectiveness floor in absolute LOC. A working-tree-vs-HEAD diff that crosses this line emits a BUDGET Info finding even when far under `max_lines`. Independent of `max_lines`: tying them together would mean a user who raises the cap silently weakens the floor. Empirical lineage in the docstring on `mmk_config::DEFAULT_REVIEW_QUALITY_LINES` (Jureczko 2020 IET Software replication; Demeyer et al. 2024 JSS reaffirmation). Set to `0` to disable; the per-diff cap stays. |
+| `max_lines`            | `1000`  | Per-commit / per-diff line cap. Same dual purpose as `max_files`. v0.6 made this overridable. Agent-context guardrail; the number is internal calibration, not a published threshold. |
 | `greenfield_threshold` | `0.5`   | When the working-tree diff's new-file fraction exceeds this, `mmk review` emits one explicit greenfield-acknowledgement Info finding so the agent reads HOTSPOT/COUPLING/DRIFT silence as expected, not as "mmk decided to be quiet." |
 | `ignore_for_budget`    | `[]`    | (v0.6) Globs whose paths are excluded from diff-time BUDGET accounting (bulk-self-filter, over-cap trigger, under-cap ramp). Generated-file regenerations no longer trip BUDGET on every edit and silence HOTSPOT/COUPLING. The full diff still appears in `review.diff.files[]`; the optional `review.diff.budget` JSON sub-block surfaces gross / net counts plus the active glob list so silent dropping never recurs. |
 
@@ -150,14 +134,17 @@ needs tuning for the same reason.
 ## `[sensor.cohesion]`
 
 Controls the COHESION sensor (v0.6) — tangled-diff detection on the
-historical co-change graph. Fires Info when a working-tree diff
-decomposes into ≥2 disjoint connected components, the structural
-fingerprint Herzig & Zeller (2013) identified as elevating
-revert / review cost. The edge metric is the max-symmetrized
-Wilson 95 % lower bound on the directional conditional co-change
-probability — same statistical primitive as COUPLING, generalized
-to a graph-connectivity question. See `connected_components_by_wilson`
-in `mmk-core/src/coupling.rs` for the derivation.
+historical co-change graph. Fires Warn when a working-tree diff
+decomposes into ≥2 disjoint connected components. **Lineage:**
+*inspired by* the tangled-change literature (Herzig & Zeller 2013) —
+those papers untangle at AST granularity, mmk operates at diff
+granularity, so the sensor is a structural-fingerprint proxy rather
+than a direct reproduction. Severity calibrated by MSR 2026 LGTM
+auto-merge data (focused PRs auto-merge more readily). Edge metric
+is the max-symmetrized Wilson 95 % lower bound on the directional
+conditional co-change probability — same statistical primitive as
+COUPLING. See `connected_components_by_wilson` in
+`mmk-core/src/coupling.rs` for the derivation.
 
 ```toml
 [sensor.cohesion]
@@ -212,6 +199,14 @@ suffix on the obviously-role-bearing files. The full
 functions stay `Warn`. The full `ComplexityCfg` field set lives
 on `mmk_config::ComplexityCfg`.
 
+The absolute caps below the delta knobs — `nesting_absolute_max
+= 6`, `loc_absolute_max = 80` — are **internal calibration from
+the v0.8 N=20 cohort**, not values cited in any paper. The delta
+knobs are what actually trim the noise on pre-existing oversized
+functions; the absolute caps are the floor those knobs act over.
+`mmk eval --learn` retunes them per-repo when calibration data
+exists.
+
 ## `[blast_radius]`
 
 Controls the 1-hop co-change neighborhood emitted by
@@ -229,39 +224,39 @@ CLI override: `--blast-radius-threshold <FLOAT>`.
 ## `[health.ts]`
 
 Enables the structural-pattern adapter (`mmk-health`) for
-TypeScript / JavaScript files. Surfaces architectural neighbors
-empirical co-change history cannot see — e.g. a
-contribution-registration file's peer contribution files in the same
-`contrib/` subtree, the `*.test.ts` partner of an implementation
-file, or a newly-added broad TS/JS catch handler that wasn't in HEAD.
+TypeScript / JavaScript files. Three patterns ship today, each
+targeting a documented LLM-coding failure mode.
 
 ```toml
 [health.ts]
 enabled  = true
-patterns = ["registration", "service", "test_pair", "broad_exception", "broad_catch_debt"]
+patterns = ["test_pair", "broad_exception", "test_weakening"]
 ```
 
-| Field      | Default     | Notes                                                                                                                  |
-| ---------- | ----------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `enabled`  | `false`     | Off by default outside the `js-ts` profile so non-TS users aren't surprised.                                           |
-| `patterns` | all five    | Subset of `"registration"`, `"service"`, `"test_pair"`, `"broad_exception"`, `"broad_catch_debt"`. Unknown tokens are dropped silently. `broad_catch_debt` fires under `mmk audit` only; it's silently dropped in `review` / `pre-edit`. |
+| Field      | Default      | Notes                                                                                                                  |
+| ---------- | ------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `enabled`  | `false`      | Off by default outside the `js-ts` profile so non-TS users aren't surprised.                                           |
+| `patterns` | all three    | Subset of `"test_pair"`, `"broad_exception"`, `"test_weakening"`. Unknown tokens are dropped silently. Delta-mode patterns (`broad_exception`, `test_weakening`) are silently dropped in `audit` (no HEAD baseline to compare against). |
 
 Pattern semantics:
 
-| Pattern             | Trigger                                                                                                                                                                                                                                                                                                          | Severity                                                                  | Emitted by         |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------ |
-| `registration`      | `*.contribution.ts` or imports/extends from `vs/platform/actions/...`.                                                                                                                                                                                                                                           | Info (architectural precedent).                                           | review, audit      |
-| `service`           | Declares `interface IFoo` + `registerSingleton(IFoo, ...)` / `createDecorator`.                                                                                                                                                                                                                                  | Info (consumer list).                                                     | review, audit      |
-| `test_pair`         | Implementation file with a sibling `*.test.{ts,tsx,js,jsx}` / `*.spec.{ts,tsx,js,jsx}`. Pairs across the TS family (`.ts` ↔ `.tsx`) and the JS family (`.js` ↔ `.jsx`); cross-family rejected.                                                                                                                  | Warn in review when the test partner isn't in the diff; Info in pre-edit. | review, audit      |
-| `broad_exception`   | Working tree adds a non-top-level broad TS/JS catch handler not present at HEAD: empty body, no parameter, typed `any`/`unknown`/`Error`, or log-and-swallow shape (single-statement body of member-call expressions on a configured set of log identifiers, no rethrow). v0.7, log-and-swallow extension v0.12. | Warn in review; suppressed in pre-edit (no working-vs-HEAD diff yet).     | review             |
-| `broad_catch_debt`  | Static count of non-top-level broad TS/JS catch handlers in the working tree, no HEAD comparison. Reuses the `broad_exception` predicate set. v0.12.                                                                                                                                                            | Info.                                                                     | audit              |
+| Pattern           | Trigger                                                                                                                                                                                                                                                                                                          | Severity                                                                  | Emitted by         |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------ |
+| `test_pair`       | Implementation file with a sibling `*.test.{ts,tsx,js,jsx}` / `*.spec.{ts,tsx,js,jsx}`. Pairs across the TS family (`.ts` ↔ `.tsx`) and the JS family (`.js` ↔ `.jsx`); cross-family rejected.                                                                                                                  | Warn in review when the test partner isn't in the diff; Info in pre-edit. | review, audit      |
+| `broad_exception` | Working tree adds a non-top-level broad TS/JS catch handler not present at HEAD: empty body, no parameter, typed `any`/`unknown`/`Error`, or log-and-swallow shape (single-statement body of member-call expressions on a configured set of log identifiers, no rethrow). v0.7, log-and-swallow extension v0.12. Targets arXiv:2509.13941. | Warn in review; suppressed in pre-edit (no working-vs-HEAD diff yet).     | review             |
+| `test_weakening`  | Working tree erodes an existing test file vs HEAD: `+1+ .skip` / `.only` / `xit` / `xtest` / `xdescribe`, `−1+ expect(...)`, `+1+ jest.mock` / `vi.mock`, `+1+ @ts-expect-error` / `@ts-ignore`, or `−1+ it` / `test` / `describe` case. Only test files are eligible subjects. v0.13. Targets arXiv:2503.15223 *"Are 'Solved Issues' in SWE-bench Really Solved Correctly?"* | Warn in review; suppressed in pre-edit (no diff yet).                     | review             |
+
+(v0.13 dropped `registration` and `service` — VSCode-specific
+hardcoded patterns that fired 0 times on non-VSCode codebases in
+the empirical experiments — and `broad_catch_debt` — the audit-mode
+counterpart subsumed by `broad_exception` in the delta-mode review
+loop.)
 
 ### `[health.ts.broad_exception]`
 
-Sub-block consumed by both `broad_exception` (delta-mode EVASION) and
-`broad_catch_debt` (static-mode debt). Single knob today —
-`log_identifiers` — controls the set of object identifiers
-recognised as a "logger" for the log-and-swallow shape
+Sub-block consumed by `broad_exception` (delta-mode EVASION).
+Single knob today — `log_identifiers` — controls the set of object
+identifiers recognised as a "logger" for the log-and-swallow shape
 (`catch (e) { logger.warn(...); }`). The default covers
 pino-style (`logger`), winston-style (`log`), and the browser
 fallback (`console`); add project-specific names to extend it.

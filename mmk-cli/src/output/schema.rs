@@ -1,9 +1,36 @@
 //! Stable JSON schema version.
 //!
-//! Tracks the `mmk` minor release: every `0.9.x` build emits
-//! `0.9.0`. Additive changes (new optional fields, new top-level
+//! Tracks the `mmk` minor release: every `0.10.x` build emits
+//! `0.10.0`. Additive changes (new optional fields, new top-level
 //! blocks) do not bump the schema version; renames, removals, type
 //! changes, and semantic changes do.
+//!
+//! ## v0.10.0 — contract delta
+//!
+//! Breaking removals. v0.13 prunes the sensors and knobs that two
+//! independent audits agreed were either research-thin or
+//! empirically dead. Consumers parsing `0.9.x` output will see
+//! these fields disappear:
+//!
+//! - `config.bulk.review_quality_lines` — removed. The
+//!   `BudgetTier::ReviewQuality` Info finding it produced is gone
+//!   too. The under-cap ramp (Approaching at 50 %, Near at 75 %)
+//!   stays.
+//! - `couples_of` top-level block on `mmk analyze` output —
+//!   removed alongside the `--couples-of` / `--couples` CLI flags.
+//!   `top_couples[]` per-file remains.
+//! - `health.matches[].pattern`: the `registration`, `service`,
+//!   and `broad_catch_debt` values are gone. New value
+//!   `test_weakening` (v0.13 sensor) added.
+//! - `health.matches[].detail.kind = "broad_catch_debt"` removed.
+//!   New variant `kind = "test_weakening"` (carries `skips_added`,
+//!   `assertions_lost`, `mocks_added`, `ts_suppressions_added`,
+//!   `tests_removed`).
+//!
+//! New additive surface that did NOT trigger the bump (and would
+//! have been a `0.9.x` change in isolation): the `test_weakening`
+//! pattern token, its `detail` variant, and the deprecation
+//! warning on `--blast-radius-threshold`.
 //!
 //! ## v0.9.0 — contract delta
 //!
@@ -200,4 +227,4 @@
 //! than the crate version, which they should treat as diagnostic
 //! only.
 
-pub const SCHEMA_VERSION: &str = "0.9.0";
+pub const SCHEMA_VERSION: &str = "0.10.0";

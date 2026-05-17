@@ -1,4 +1,21 @@
 //! Hotspot scoring: `log(1 + weighted_churn) * log(1 + loc)`.
+//!
+//! ## Research lineage
+//!
+//! The "files that are both big and frequently changed predict
+//! defects" finding goes back to Nagappan & Ball *Use of Relative
+//! Code Churn Measures to Predict System Defect Density* (ICSE
+//! 2005), which established churn-times-size as the dominant
+//! per-file defect predictor in industrial codebases. The
+//! recency-weighted variant mmk ships matches the "code-as-a-crime-
+//! scene" formulation Tornhill popularized in *Your Code as a Crime
+//! Scene* (2nd ed., 2024) — exponential time decay applied to the
+//! churn axis so old churn fades while still contributing.
+//!
+//! This is mmk's most directly research-grounded sensor: every
+//! component (the two-axis product, the log-damping, the
+//! `exp(-age / tau)` weighting) traces to a published finding the
+//! detector reproduces.
 
 use ahash::AHashMap;
 use serde::Serialize;

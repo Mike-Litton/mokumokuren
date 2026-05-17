@@ -55,8 +55,8 @@ pub struct BlastRadiusFile {
 /// Exposes both the per-diff guardrails and the per-commit
 /// historical filter so codebases with naturally wider commit
 /// grain (workspace projects, infrastructure repos, scaffold-heavy
-/// histories) can tune them. The defaults are calibrated for
-/// "typical" agent edits; on a repo where real feature work
+/// histories) can tune them. The defaults are internal calibration
+/// for "typical" agent edits; on a repo where real feature work
 /// routinely runs ≥30 files, leaving the cap at the default
 /// renders most history invisible to the analyzer (the bulk filter
 /// drops every wide-grain commit) and reads as "no analyzable
@@ -84,19 +84,10 @@ pub struct BulkFile {
     #[serde(default)]
     pub max_files: Option<u32>,
     /// Override the per-commit / per-diff line cap. Default 1000.
-    /// Agentic-context safety half of BUDGET; the review-
-    /// effectiveness floor below fires a separate Info at a lower
-    /// absolute threshold (default 200 LOC). The file cap above is
-    /// an engineering heuristic.
+    /// Agentic-context guardrail — bump only if your codebase's
+    /// real feature commits routinely run past this.
     #[serde(default)]
     pub max_lines: Option<u32>,
-    /// Override the review-effectiveness floor (absolute LOC).
-    /// Default 200. Set to 0 to disable. Independent of `max_lines`
-    /// — the per-diff cap and the review-effectiveness floor are
-    /// calibrated against different evidence (see the docstring on
-    /// [`crate::DEFAULT_REVIEW_QUALITY_LINES`] for the lineage).
-    #[serde(default)]
-    pub review_quality_lines: Option<u32>,
 }
 
 /// `[coupling]` block in `mokumokuren.toml`.

@@ -6,7 +6,7 @@ JSON object whose shape is documented here. The
 against; `crate_version` is the Cargo version of the producing build
 and is diagnostic only.
 
-Subcommands at v0.9.0:
+Subcommands at v0.10.0:
 
 - `mmk analyze` — ranked hotspots over a window.
 - `mmk session-summary` (alias: `mmk session`) — window + session
@@ -40,8 +40,27 @@ envelope on stdin, it switches to a hook-shape output envelope
 
 ## Stability contract
 
-`schema_version` tracks the `mmk` minor release: every `0.9.x` build
-emits `0.9.0`.
+`schema_version` tracks the `mmk` minor release: every `0.10.x`
+build emits `0.10.0`.
+
+### v0.10.0 — breaking removals
+
+v0.13 prunes the research-thin and empirically-dead sensors. The
+JSON shape loses these fields:
+
+- `config.bulk.review_quality_lines` and the
+  `BudgetTier::ReviewQuality` Info finding it produced.
+- `couples_of` top-level block on `mmk analyze` (the `--couples-of`
+  / `--couples` CLI flags are gone too). `top_couples[]` per file
+  remains.
+- `health.matches[].pattern` values `registration`, `service`,
+  `broad_catch_debt`. New value: `test_weakening`.
+- `health.matches[].detail.kind = "broad_catch_debt"`. New variant:
+  `kind = "test_weakening"` with `skips_added`, `assertions_lost`,
+  `mocks_added`, `ts_suppressions_added`, `tests_removed` fields.
+
+A consumer pinning to `0.9.0` keeps reading older builds; reading
+`0.10.0` requires dropping the field references above.
 
 ### v0.9.0 — content-shape changes inside string fields
 
@@ -105,7 +124,7 @@ and ignore them rather than fail.
 
 | Field            | Type    | Notes                                                                                |
 | ---------------- | ------- | ------------------------------------------------------------------------------------ |
-| `schema_version` | string  | Pinned to the `mmk` minor (`"0.9.0"`).                                               |
+| `schema_version` | string  | Pinned to the `mmk` minor (`"0.10.0"`).                                               |
 | `crate_version`  | string  | `CARGO_PKG_VERSION` of the producing build. Diagnostic only — do not pin against.    |
 | `repo`           | object  | HEAD metadata + repo-level warnings.                                                 |
 | `config`         | object  | Effective `Config` after merging file + CLI sources.                                 |
@@ -201,8 +220,7 @@ it to understand exactly what produced the result.
 | `window.tau_days`              | uint     | Recency-decay 1/e point.                                     |
 | `hotspot.top_n`                | uint     | Effective `--top`.                                           |
 | `bulk.max_files`               | uint     | Bulk-filter file threshold (default `15`; v0.6 made this overridable from `mokumokuren.toml`). |
-| `bulk.max_lines`               | uint     | Per-diff line cap (default `1000`; v0.6 made this overridable). Agentic-context safety half of BUDGET. Independent of `bulk.review_quality_lines` — the cap and the review-effectiveness floor encode different evidence. |
-| `bulk.review_quality_lines`    | uint     | (v0.10) Review-effectiveness floor in absolute LOC (default `200`). A working-tree-vs-HEAD diff that crosses this line emits a BUDGET Info finding even when far under `max_lines`. Set to `0` to disable. |
+| `bulk.max_lines`               | uint     | Per-diff line cap (default `1000`; v0.6 made this overridable). Agent-context guardrail; the number is internal calibration, not a published threshold. (v0.13 dropped the `bulk.review_quality_lines` knob — see `CHANGELOG.md`.) |
 | `bulk.greenfield_threshold`    | float    | Fraction of changed paths the analyzer must not have seen before `mmk review` emits the greenfield-acknowledgement Info finding (default `0.5`). |
 | `bulk.ignore_for_budget`       | string[] | (v0.6) Glob patterns excluded from diff-time BUDGET accounting. The full diff still appears in `review.diff.files[]`. |
 | `blast_radius.threshold`       | float    | Min Jaccard for `--blast-radius` neighborhood.               |
@@ -211,7 +229,7 @@ it to understand exactly what produced the result.
 | `coupling.min_sample_size`     | uint     | Min `commits_touching(subject)` before COUPLING fires (default `3` since v0.6; was `5` in v0.4 and `1` in v0.5). |
 | `coupling.ignore_partners`     | string[] | Globs that never fire as the missed partner in COUPLING.     |
 | `health.ts.enabled`            | bool     | (v0.4) Whether the TypeScript Health adapter runs.           |
-| `health.ts.patterns`           | string[] | Pattern tokens. v0.4 shipped `registration` / `service` / `test_pair`; v0.7 adds `broad_exception` (EVASION). |
+| `health.ts.patterns`           | string[] | Pattern tokens. Current set: `test_pair` (v0.4), `broad_exception` (v0.7 EVASION), `test_weakening` (v0.13). v0.13 dropped `registration` / `service` / `broad_catch_debt` — see `CHANGELOG.md`. |
 | `sensor.structure.enabled`     | bool     | (v0.5) Whether the STRUCTURE convention sensor runs.         |
 | `sensor.structure.import_majority` | float | (v0.5) Sibling fraction needed for an import to count as the directory's convention (default 0.85). |
 | `sensor.structure.role_patterns` | string[] | (v0.8) Stem-suffix patterns (`*<suffix>`) marking architectural-role files. Matching files have their `ReviewDivergent` finding demoted from `Warn` to `Info` and the prose reframed. Defaults to `["*.contribution", "*Factory", "*.action", "*.actions", "*Registry", "*.module", "*Module", "*.routes", "*.config"]`. |
@@ -244,7 +262,7 @@ before any commit lands.
 
 | Field            | Type    | Notes                                                                                  |
 | ---------------- | ------- | -------------------------------------------------------------------------------------- |
-| `schema_version` | string  | `"0.9.0"`.                                                                             |
+| `schema_version` | string  | `"0.10.0"`.                                                                             |
 | `crate_version`  | string  |                                                                                        |
 | `repo`           | object  | Same as analyze. Present only when there are changes (clean tree skips analyze).       |
 | `config`         | object  | Same as analyze. Present only when there are changes.                                  |
@@ -278,7 +296,7 @@ and *why* (since v0.6) so silence on HOTSPOT/COUPLING reads as
 
 | Field            | Type    | Notes                                                            |
 | ---------------- | ------- | ---------------------------------------------------------------- |
-| `schema_version` | string  | `"0.9.0"`.                                                       |
+| `schema_version` | string  | `"0.10.0"`.                                                       |
 | `crate_version`  | string  |                                                                  |
 | `review`         | object  | `mode` + per-file diff numstat.                                  |
 | `findings`       | array   | One BUDGET finding plus any STRUCTURE / COMPLEXITY findings on the changed paths; HOTSPOT/COUPLING skipped. |
@@ -295,7 +313,7 @@ queried path.
 
 | Field            | Type    | Notes                                                                                  |
 | ---------------- | ------- | -------------------------------------------------------------------------------------- |
-| `schema_version` | string  | `"0.9.0"`.                                                                             |
+| `schema_version` | string  | `"0.10.0"`.                                                                             |
 | `crate_version`  | string  |                                                                                        |
 | `repo`           | object  |                                                                                        |
 | `config`         | object  |                                                                                        |
@@ -346,7 +364,7 @@ K snapshot labels + the climb-majority findings.
 
 | Field                       | Type     | Notes                                                                          |
 | --------------------------- | -------- | ------------------------------------------------------------------------------ |
-| `schema_version`            | string   | `"0.9.0"`.                                                                     |
+| `schema_version`            | string   | `"0.10.0"`.                                                                     |
 | `crate_version`             | string   |                                                                                |
 | `drift.base`                | string?  | Echo of `--base`.                                                              |
 | `drift.sessions`            | uint     | Echo of `--sessions K`.                                                        |
@@ -373,8 +391,8 @@ parsing the message text.
 
 | Field                  | Type     | Notes                                                              |
 | ---------------------- | -------- | ------------------------------------------------------------------ |
-| `patterns_evaluated`   | string[] | Pattern tokens the adapter ran (`registration`, `service`, `test_pair`). Echo of `config.health.ts.patterns`. |
-| `matches[].pattern`    | string   | Which pattern fired (`registration`, `service`, `test_pair`).      |
+| `patterns_evaluated`   | string[] | Pattern tokens the adapter ran (`test_pair`, `broad_exception`, `test_weakening`). Echo of `config.health.ts.patterns`. |
+| `matches[].pattern`    | string   | Which pattern fired (`test_pair`, `broad_exception`, `test_weakening`). |
 | `matches[].subject`    | string   | The file the analysis was about — typically the changed/queried path. |
 | `matches[].related`    | string[] | Architectural neighbors / partners surfaced for this match.        |
 

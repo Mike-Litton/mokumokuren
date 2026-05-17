@@ -77,7 +77,7 @@ The full menu of sensors `mmk review` and `mmk pre-edit` emit:
 | `COHESION`   | "Does this diff decompose into multiple disjoint clusters?"                                       | Warn             |
 | `STRUCTURE`  | "Does this file diverge from its directory's import / export shape?"                              | Warn / Info / Ok |
 | `COMPLEXITY` | "Is this function structurally over the cap (nesting / LOC)?"                                    | Warn             |
-| `HEALTH`     | "Is the test pair / registration peer / service consumer absent? Did a broad catch get added?"   | Warn / Info      |
+| `HEALTH`     | "Is the test pair absent? Did a broad catch handler get added? Did existing tests get weakened (skips, lost assertions, mocks)?" | Warn             |
 | `EVASION`    | "Did this diff add a broad TS/JS catch handler not in HEAD?" (surfaced under `HEALTH.broad_exception`) | Warn             |
 | `BUDGET`     | "Is the diff over the size cap, or ramping toward it?"                                            | Warn / Info      |
 | `DRIFT`      | "Is this file climbing the rank across recent sessions?"                                          | Warn             |

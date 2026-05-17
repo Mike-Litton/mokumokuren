@@ -148,14 +148,19 @@ pub fn run<O: Write, E: Write>(
         if let Some(v) = file_b.max_lines {
             cfg.bulk.max_lines = v;
         }
-        if let Some(v) = file_b.review_quality_lines {
-            cfg.bulk.review_quality_lines = v;
-        }
     }
     // Explicit --coupling-threshold wins; fall back to the
     // (deprecated) --blast-radius-threshold so existing CLI
     // invocations keep working until users migrate. Both are routed
     // to confidence_threshold — the active gate.
+    if args.blast_radius_threshold.is_some() && args.coupling_threshold.is_none() {
+        // v0.13: emit a one-line stderr deprecation warning so users
+        // see the migration target before v0.14 drops the alias.
+        writeln!(
+            stderr,
+            "warning: --blast-radius-threshold is deprecated on `review`; use --coupling-threshold instead."
+        )?;
+    }
     if let Some(t) = args.coupling_threshold.or(args.blast_radius_threshold) {
         cfg.coupling.threshold = t;
         cfg.coupling.confidence_threshold = t;
@@ -297,13 +302,10 @@ pub fn run<O: Write, E: Write>(
     // drops the finding entirely via the peer-touched filter
     // above). Same dedup discipline already applied to BUDGET /
     // COUPLING / COHESION / COMPLEXITY / STRUCTURE.
-    // BroadCatchDebt fires under `mmk audit` only — `review` skips
-    // it so the per-edit hot path stays focused on the *diff*, not
-    // accumulated debt that doesn't change between edits.
-    let health_patterns: Vec<mmk_health::HealthPattern> = resolve_patterns(&cfg.health.ts.patterns)
-        .into_iter()
-        .filter(|p| !matches!(p, mmk_health::HealthPattern::BroadCatchDebt))
-        .collect();
+    // Every configured HEALTH pattern runs in review mode — none of
+    // the v0.13 set is audit-only.
+    let health_patterns: Vec<mmk_health::HealthPattern> =
+        resolve_patterns(&cfg.health.ts.patterns);
     let mut health_matches: Vec<mmk_health::HealthFinding> = Vec::new();
     if cfg.health.ts.enabled {
         let peer_paths: Vec<PathBuf> = analysis.loc.keys().cloned().collect();
@@ -1092,22 +1094,6 @@ pub(crate) fn compute_findings_with_signals(
                 u32::try_from(counts.lines_net).unwrap_or(u32::MAX),
             ];
             match mmk_core::budget::budget_tier(&progress) {
-                mmk_core::budget::BudgetTier::ReviewQuality => {
-                    findings.push((
-                        Finding::new(
-                            Layer::Budget,
-                            Severity::Info,
-                            messages::budget_review_quality(
-                                progress.lines.0,
-                                u64::from(progress.review_quality_lines),
-                            ),
-                        ),
-                        Some(crate::monotonic::MonotonicSignal {
-                            key: "budget::review_quality".into(),
-                            axes: ramp_axes,
-                        }),
-                    ));
-                }
                 mmk_core::budget::BudgetTier::Approaching => {
                     findings.push((
                         Finding::new(

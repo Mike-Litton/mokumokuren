@@ -23,14 +23,14 @@ use crate::args::{Format, SensorsAction, SensorsArgs};
 /// `commands` lists every subcommand that can emit this finding.
 /// `mode` distinguishes delta-vs-history detectors (HOTSPOT, COUPLING,
 /// EVASION, …) from static / per-file detectors (STRUCTURE,
-/// COMPLEXITY, BroadCatchDebt, …) — agents that filter by mode
+/// COMPLEXITY, …) — agents that filter by mode
 /// (`jq '.sensors[] | select(.mode == "delta")'`) get a clean cut.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct SensorEntry {
     pub name: &'static str,
     pub layer: &'static str,
     /// Optional pattern token under HEALTH (`broad_exception`,
-    /// `broad_catch_debt`, etc.). `None` for non-HEALTH sensors.
+    /// `test_weakening`, etc.). `None` for non-HEALTH sensors.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pattern: Option<&'static str>,
     pub mode: &'static str,
@@ -111,9 +111,9 @@ pub const SENSOR_CATALOG: &[SensorEntry] = &[
         pattern: None,
         mode: "static",
         default_severity: "Warn",
-        description: "Working-tree diff exceeds the per-diff cap (file count or LOC), or crosses the 200-LOC review-effectiveness floor.",
+        description: "Working-tree diff exceeds the per-diff cap (file count or LOC), or climbs the under-cap ramp.",
         config_key: "[bulk]",
-        config_subkeys: &["max_files", "max_lines", "review_quality_lines", "ignore_for_budget"],
+        config_subkeys: &["max_files", "max_lines", "ignore_for_budget"],
         commands: &["review"],
         since: "0.1.0",
     },
@@ -166,30 +166,6 @@ pub const SENSOR_CATALOG: &[SensorEntry] = &[
         since: "0.4.0",
     },
     SensorEntry {
-        name: "HEALTH:registration",
-        layer: "Health",
-        pattern: Some("registration"),
-        mode: "static",
-        default_severity: "Info",
-        description: "File matches the action / contribution registration shape; surfaces sibling registration files as architectural precedent.",
-        config_key: "[health.ts] patterns",
-        config_subkeys: &[],
-        commands: &["review", "audit"],
-        since: "0.4.0",
-    },
-    SensorEntry {
-        name: "HEALTH:service",
-        layer: "Health",
-        pattern: Some("service"),
-        mode: "static",
-        default_severity: "Info",
-        description: "File declares an `interface IFoo` plus `registerSingleton(IFoo, FooImpl)`; surfaces top consumers importing the interface.",
-        config_key: "[health.ts] patterns",
-        config_subkeys: &[],
-        commands: &["review", "audit"],
-        since: "0.4.0",
-    },
-    SensorEntry {
         name: "HEALTH:broad_exception",
         layer: "Health",
         pattern: Some("broad_exception"),
@@ -202,16 +178,16 @@ pub const SENSOR_CATALOG: &[SensorEntry] = &[
         since: "0.7.0",
     },
     SensorEntry {
-        name: "HEALTH:broad_catch_debt",
+        name: "HEALTH:test_weakening",
         layer: "Health",
-        pattern: Some("broad_catch_debt"),
-        mode: "static",
-        default_severity: "Info",
-        description: "Static count of non-top-level broad TS/JS catch handlers in the working tree, no HEAD comparison.",
+        pattern: Some("test_weakening"),
+        mode: "delta",
+        default_severity: "Warn",
+        description: "Test file's strength eroded vs HEAD: skip decorators added, assertions lost, mocks added, @ts-* suppressions added, or test cases removed.",
         config_key: "[health.ts] patterns",
-        config_subkeys: &["[health.ts.broad_exception] log_identifiers"],
-        commands: &["audit"],
-        since: "0.12.0",
+        config_subkeys: &[],
+        commands: &["review"],
+        since: "0.13.0",
     },
 ];
 
@@ -388,11 +364,13 @@ fn long_description(entry: &SensorEntry) -> Option<&'static str> {
              (v0.12) the log-and-swallow shape — body composed exclusively of member-call expressions on a configured log \
              identifier (default `logger`, `log`, `console`; extend via `[health.ts.broad_exception] log_identifiers`).",
         ),
-        "HEALTH:broad_catch_debt" => Some(
-            "Static-mode counterpart to EVASION. Reports the count of broad non-top-level catch handlers in the working \
-             tree at HEAD without comparing to a previous body. Use this on first contact with a codebase that accumulated \
-             evasion debt before mmk was enabled. Reuses the same `is_broad` predicate as EVASION, so the log-and-swallow \
-             shape and the `log_identifiers` config knob apply uniformly.",
+        "HEALTH:test_weakening" => Some(
+            "TEST_WEAKENING targets the agent-self-validation failure mode documented in arXiv:2503.15223 \
+             *\"Are 'Solved Issues' in SWE-bench Really Solved Correctly?\"* — agents passing CI by weakening the tests \
+             rather than fixing the implementation. Only test files (`.test.*`, `.spec.*`) are eligible subjects; \
+             the detector compares working-vs-HEAD on five axes (skips added, assertions lost, mocks added, \
+             `@ts-expect-error` / `@ts-ignore` added, test cases removed) and fires Warn when any axis strictly \
+             worsens.",
         ),
         _ => None,
     }
@@ -418,21 +396,25 @@ mod tests {
     fn coverage_for_review_mentions_health() {
         let cov = coverage_for_command("review");
         assert!(cov.contains("HEALTH:broad_exception"), "got: {cov}");
-        assert!(!cov.contains("HEALTH:broad_catch_debt"), "got: {cov}");
+        assert!(cov.contains("HEALTH:test_weakening"), "got: {cov}");
     }
 
     #[test]
-    fn coverage_for_audit_includes_broad_catch_debt() {
+    fn coverage_for_audit_includes_test_pair_not_history_layers() {
         let cov = coverage_for_command("audit");
-        assert!(cov.contains("HEALTH:broad_catch_debt"), "got: {cov}");
+        assert!(cov.contains("HEALTH:test_pair"), "got: {cov}");
         assert!(cov.contains("STRUCTURE"), "got: {cov}");
         assert!(!cov.contains("HOTSPOT"), "got: {cov}");
+        // delta-mode HEALTH patterns must not appear in the audit
+        // coverage list — audit has no HEAD baseline to compare against.
+        assert!(!cov.contains("HEALTH:broad_exception"), "got: {cov}");
+        assert!(!cov.contains("HEALTH:test_weakening"), "got: {cov}");
     }
 
     #[test]
     fn lookup_supports_full_name_and_pattern_token() {
-        assert!(lookup("HEALTH:broad_catch_debt").is_some());
-        assert!(lookup("broad_catch_debt").is_some());
+        assert!(lookup("HEALTH:test_weakening").is_some());
+        assert!(lookup("test_weakening").is_some());
         assert!(lookup("nonexistent_sensor").is_none());
     }
 }

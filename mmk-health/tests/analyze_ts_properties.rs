@@ -10,9 +10,9 @@ use std::path::PathBuf;
 
 fn pattern_strategy() -> impl Strategy<Value = HealthPattern> {
     prop_oneof![
-        Just(HealthPattern::Registration),
-        Just(HealthPattern::Service),
         Just(HealthPattern::TestPair),
+        Just(HealthPattern::BroadException),
+        Just(HealthPattern::TestWeakening),
     ]
 }
 

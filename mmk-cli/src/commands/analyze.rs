@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::args::{AnalyzeArgs, Format};
+use crate::output::{json, text};
 
 /// Couples emitted per hotspot entry. Hardcoded — adding a config knob
 /// for it adds surface without buying signal at the resolution
@@ -139,47 +140,10 @@ pub fn run<O: Write, E: Write>(args: &AnalyzeArgs, stdout: &mut O, stderr: &mut 
 
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
-    // `--couples-of <PATH>` short-circuits the ranked output: the
-    // caller already knows what they want to inspect.
-    if let Some(target) = &args.couples_of {
-        let mut t_set: AHashSet<PathBuf> = AHashSet::new();
-        t_set.insert(target.clone());
-        let mut map = coupling::top_couples_for(&analysis.commits, &t_set, 0);
-        let entries = map.remove(target).unwrap_or_default();
-        match args.format {
-            Format::Text => crate::output::text::write_couples_of(
-                stdout,
-                target,
-                &entries,
-                &analysis,
-                duration_ms,
-                blast_ref,
-            )?,
-            Format::Json => crate::output::json::write_couples_of(
-                stdout,
-                target,
-                &entries,
-                &analysis,
-                duration_ms,
-                &cfg,
-                blast_ref,
-            )?,
-        }
-        return Ok(());
-    }
-
     match args.format {
-        Format::Text => crate::output::text::write(
-            stdout,
-            &ranked,
-            &analysis,
-            duration_ms,
-            &cfg,
-            args.couples,
-            blast_ref,
-        )?,
+        Format::Text => text::write(stdout, &ranked, &analysis, duration_ms, &cfg, blast_ref)?,
         Format::Json => {
-            crate::output::json::write(stdout, &ranked, &analysis, duration_ms, &cfg, blast_ref)?;
+            json::write(stdout, &ranked, &analysis, duration_ms, &cfg, blast_ref)?;
         }
     }
     Ok(())

@@ -1,5 +1,0 @@
----
-source: mmk-cli/tests/messages.rs
-expression: s
----
-diff at 214 lines; review effectiveness degrades past ~200 lines. Commit this slice before continuing.

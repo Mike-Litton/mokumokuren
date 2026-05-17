@@ -7,12 +7,10 @@
 //! `Send`, and the cost is microseconds — pooling would be
 //! premature).
 
-pub mod broad_catch_debt;
 pub mod broad_exception;
 pub mod facts;
-pub mod registration;
-pub mod service;
 pub mod test_pair;
+pub mod test_weakening;
 
 pub use facts::TsAdapter;
 
@@ -24,10 +22,6 @@ use std::path::Path;
 /// patterns.
 ///
 /// `peer_paths` is the set the cross-file detectors consult:
-/// - Pattern A scans paths in the same `contrib/` subtree to find
-///   sibling registration files.
-/// - Pattern B scans paths workbench-wide to find consumers
-///   importing the declared interface.
 /// - Pattern C uses the filesystem (`peer_paths` lookup) to confirm
 ///   the test sibling exists.
 ///
@@ -35,16 +29,15 @@ use std::path::Path;
 /// concatenate results without per-detector branching.
 ///
 /// `head_body` is the file's content at HEAD (when available);
-/// EVASION uses it to compute working-vs-HEAD broad-handler delta.
-/// `None` means "no HEAD body available" — either a new file, or
-/// the caller doesn't have a HEAD snapshot (e.g. pre-edit, where
-/// the working tree *is* HEAD for this subject).
+/// EVASION and TEST_WEAKENING use it to compute working-vs-HEAD
+/// deltas. `None` means "no HEAD body available" — either a new
+/// file, or the caller doesn't have a HEAD snapshot (e.g. pre-edit,
+/// where the working tree *is* HEAD for this subject).
 ///
 /// `log_identifiers` controls EVASION's log-and-swallow predicate —
 /// the dominant TS shape `catch (e) { logger.warn(...); }` is
 /// classified as broad when the catch-body member-call object is in
-/// this list. `BroadCatchDebt` reuses the same predicate so the same
-/// list applies in audit mode.
+/// this list.
 #[must_use]
 pub fn analyze_ts(
     subject: &Path,
@@ -55,12 +48,6 @@ pub fn analyze_ts(
     log_identifiers: &[String],
 ) -> Vec<HealthFinding> {
     let mut out = Vec::new();
-    if enabled.contains(&HealthPattern::Registration) {
-        out.extend(registration::detect(subject, body, peer_paths));
-    }
-    if enabled.contains(&HealthPattern::Service) {
-        out.extend(service::detect(subject, body, peer_paths));
-    }
     if enabled.contains(&HealthPattern::TestPair) {
         out.extend(test_pair::detect(subject, peer_paths));
     }
@@ -72,8 +59,8 @@ pub fn analyze_ts(
             log_identifiers,
         ));
     }
-    if enabled.contains(&HealthPattern::BroadCatchDebt) {
-        out.extend(broad_catch_debt::detect(subject, body, log_identifiers));
+    if enabled.contains(&HealthPattern::TestWeakening) {
+        out.extend(test_weakening::detect(subject, head_body, body));
     }
     out
 }

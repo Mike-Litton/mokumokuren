@@ -13,16 +13,13 @@ use proptest::sample::Index;
 use std::path::PathBuf;
 
 const fn tier_ordinal(t: BudgetTier) -> u8 {
-    // ReviewQuality sits below Approaching in severity terms — it
-    // marks "crossed Cohen-floor LOC under 50% of cap" while
-    // Approaching marks "crossed 50% of cap." The ordinal is the
-    // ordering used by the monotonicity property below.
+    // Quiet < Approaching < Near < Over by severity ordinal — used
+    // by the monotonicity property below.
     match t {
         BudgetTier::Quiet => 0,
-        BudgetTier::ReviewQuality => 1,
-        BudgetTier::Approaching => 2,
-        BudgetTier::Near => 3,
-        BudgetTier::Over => 4,
+        BudgetTier::Approaching => 1,
+        BudgetTier::Near => 2,
+        BudgetTier::Over => 3,
     }
 }
 
@@ -34,7 +31,6 @@ const fn cfg(max_files: u32, max_lines: u32) -> BulkCfg {
     BulkCfg {
         max_files,
         max_lines,
-        review_quality_lines: 0,
         greenfield_threshold: mmk_config::DEFAULT_GREENFIELD_THRESHOLD,
         ignore_for_budget: Vec::new(),
     }
@@ -98,14 +94,11 @@ proptest! {
     #[test]
     fn budget_tier_monotone_in_ratio(r1 in 0.0f64..2.0, r2 in 0.0f64..2.0) {
         let (lo, hi) = if r1 <= r2 { (r1, r2) } else { (r2, r1) };
-        // ReviewQuality is gated on absolute lines, not ratio — fix
-        // it off (review_quality_lines = 0) so this property
-        // exercises only the proportional ramp transitions.
         let p_lo = BudgetProgress {
-            files: (0, 0), lines: (0, 0), peak_ratio: lo, review_quality_lines: 0,
+            files: (0, 0), lines: (0, 0), peak_ratio: lo,
         };
         let p_hi = BudgetProgress {
-            files: (0, 0), lines: (0, 0), peak_ratio: hi, review_quality_lines: 0,
+            files: (0, 0), lines: (0, 0), peak_ratio: hi,
         };
         prop_assert!(
             tier_ordinal(budget_tier(&p_lo)) <= tier_ordinal(budget_tier(&p_hi)),

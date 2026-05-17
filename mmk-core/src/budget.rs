@@ -37,12 +37,6 @@ pub enum BudgetTrigger {
 /// only-essential context helps agents — a meter that climbs is one
 /// essential signal; flat silence followed by a binary "you blew it"
 /// is not.
-///
-/// `review_quality_lines` carries the absolute review-effectiveness
-/// floor (default 200 LOC) so `budget_tier` stays pure-on-progress:
-/// a diff at ≥ floor but < 50% of the per-diff cap reads as the new
-/// `ReviewQuality` tier. 0 disables the floor. Empirical lineage
-/// lives on `mmk_config::DEFAULT_REVIEW_QUALITY_LINES`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BudgetProgress {
     /// `(actual_files, max_files)`.
@@ -53,30 +47,14 @@ pub struct BudgetProgress {
     /// ramp logic. A ratio > 1.0 means the over-cap branch should
     /// fire instead.
     pub peak_ratio: f64,
-    /// Absolute review-effectiveness floor in LOC. 0 disables the
-    /// `ReviewQuality` tier; a non-zero value lights it up when
-    /// `lines.0 >= review_quality_lines` and `peak_ratio < 0.50`
-    /// (Approaching wins above 0.50). Empirical lineage on
-    /// `mmk_config::DEFAULT_REVIEW_QUALITY_LINES`.
-    pub review_quality_lines: u32,
 }
 
 /// Severity tier of the budget ramp. Maps to `Severity::Info` /
 /// `Severity::Warn` at the CLI boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BudgetTier {
-    /// Below 50% AND below the Cohen review-quality floor — emit
-    /// nothing (noise floor).
+    /// Below 50% — emit nothing (noise floor).
     Quiet,
-    /// At or above the review-effectiveness floor (default 200
-    /// LOC) but still below 50% of the per-diff cap. Info: the
-    /// diff has crossed the absolute "no longer one slice"
-    /// threshold while remaining well under the cap that drives
-    /// `Approaching`. Different evidence base from the cap
-    /// (review-effectiveness vs agentic-context safety) → its own
-    /// tier rather than a lowered `Approaching` boundary. See
-    /// [`mmk_config::DEFAULT_REVIEW_QUALITY_LINES`] for lineage.
-    ReviewQuality,
     /// 50–74% — Info: meter climbing, agent should know.
     Approaching,
     /// 75–100% — Warn: cap is close, decision point.
@@ -105,19 +83,12 @@ pub fn budget_progress(check: &BudgetCheck, cfg: &BulkCfg) -> BudgetProgress {
         files: (check.files_changed, max_files),
         lines: (check.lines_changed, max_lines),
         peak_ratio,
-        review_quality_lines: cfg.review_quality_lines,
     }
 }
 
 /// Map a [`BudgetProgress`] to its tier.
 ///
-/// `Approaching` / `Near` / `Over` gate purely on `peak_ratio`. The
-/// `ReviewQuality` tier sits *below* `Approaching` and triggers on
-/// the absolute review-effectiveness floor (default 200 LOC) only
-/// when `peak_ratio < 0.50` — above that, Approaching wins so the
-/// agent sees one ramp message per tier instead of two.
-///
-/// `review_quality_lines == 0` disables the floor (Quiet under 50%).
+/// `Approaching` / `Near` / `Over` gate purely on `peak_ratio`.
 ///
 /// # Examples
 ///
@@ -131,7 +102,6 @@ pub fn budget_progress(check: &BudgetCheck, cfg: &BulkCfg) -> BudgetProgress {
 ///         files: (0, 0),
 ///         lines: (0, 0),
 ///         peak_ratio: r,
-///         review_quality_lines: 0,
 ///     })
 /// }
 /// assert_eq!(tier_at(0.40), BudgetTier::Quiet);
@@ -148,10 +118,6 @@ pub fn budget_tier(progress: &BudgetProgress) -> BudgetTier {
         BudgetTier::Near
     } else if r >= 0.50 {
         BudgetTier::Approaching
-    } else if progress.review_quality_lines > 0
-        && progress.lines.0 >= u64::from(progress.review_quality_lines)
-    {
-        BudgetTier::ReviewQuality
     } else {
         BudgetTier::Quiet
     }

@@ -86,12 +86,6 @@ struct FileEntry<'a> {
 }
 
 #[derive(Serialize)]
-struct CouplesOfBlock<'a> {
-    path: String,
-    entries: &'a [CouplingEntry],
-}
-
-#[derive(Serialize)]
 struct BlastRadiusBlock<'a> {
     root: String,
     hops: u32,
@@ -132,18 +126,6 @@ struct SessionReport<'a> {
     /// DRIFT + BUDGET findings overlaid on the session view. Always
     /// present (possibly empty) so harnesses see a stable shape.
     findings: &'a [crate::output::findings::Finding],
-    #[serde(skip_serializing_if = "Option::is_none")]
-    blast_radius: Option<BlastRadiusBlock<'a>>,
-}
-
-#[derive(Serialize)]
-struct CouplesOfReport<'a> {
-    schema_version: &'static str,
-    crate_version: &'static str,
-    repo: RepoBlock<'a>,
-    config: &'a Config,
-    analysis: AnalysisBlock,
-    couples_of: CouplesOfBlock<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
     blast_radius: Option<BlastRadiusBlock<'a>>,
 }
@@ -849,57 +831,3 @@ pub(crate) fn write_review_empty<W: Write>(
     Ok(())
 }
 
-/// Write a `--couples-of <PATH>` report: the coupling list for one
-/// path, no ranked `files` block. Same envelope (`schema_version`,
-/// `repo`, `config`, `analysis`) so harnesses can use the same
-/// dispatcher.
-pub fn write_couples_of<W: Write>(
-    w: &mut W,
-    path: &std::path::Path,
-    entries: &[CouplingEntry],
-    analysis: &AnalyzeOutput,
-    duration_ms: u64,
-    config: &Config,
-    blast: Option<(&std::path::Path, f64, &[NeighborhoodNode])>,
-) -> Result<()> {
-    let blast_block = blast.map(|(root, threshold, nodes)| BlastRadiusBlock {
-        root: root.to_string_lossy().into_owned(),
-        hops: 1,
-        threshold,
-        nodes,
-    });
-
-    let report = CouplesOfReport {
-        schema_version: crate::output::schema::SCHEMA_VERSION,
-        crate_version: env!("CARGO_PKG_VERSION"),
-        repo: RepoBlock {
-            head_sha: analysis.head_sha.as_deref(),
-            head_timestamp: analysis.head_timestamp.and_then(rfc3339),
-            is_shallow: analysis.is_shallow,
-            warnings: &analysis.warnings,
-        },
-        config,
-        analysis: AnalysisBlock {
-            commits_seen: analysis.counts.commits_seen,
-            commits_analyzed: analysis.counts.commits_analyzed,
-            commits_filtered: CommitsFilteredBlock {
-                bulk: analysis.counts.commits_filtered_bulk,
-            },
-            files_ignored: FilesIgnoredBlock {
-                deleted_from_head: analysis.counts.non_head_events,
-                head_paths_ignored: analysis.counts.head_paths_ignored,
-            },
-            duration_ms,
-            window_truncation: None,
-        },
-        couples_of: CouplesOfBlock {
-            path: path.to_string_lossy().into_owned(),
-            entries,
-        },
-        blast_radius: blast_block,
-    };
-
-    serde_json::to_writer_pretty(&mut *w, &report)?;
-    writeln!(w)?;
-    Ok(())
-}

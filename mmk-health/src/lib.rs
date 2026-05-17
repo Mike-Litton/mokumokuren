@@ -1,18 +1,15 @@
 //! Structural-pattern adapter (Health layer) for Mokumokuren.
 //!
-//! Currently ships a TypeScript adapter — three pattern detectors
-//! that surface architectural neighbors the empirical co-change cone
-//! cannot see (because the patterns live in non-overlapping commit
-//! cones across the workbench). Future implementations will add
+//! Ships a TypeScript adapter today — test-pair, EVASION
+//! (broad-exception delta), and test-weakening (the v0.13 anti-
+//! evasion-on-tests sensor). Future implementations will add
 //! Rust / Python / Go adapters under `src/<lang>/`.
 //!
 //! ## Cost
 //!
 //! Tree-sitter parses each touched file at most once per `mmk
-//! review` / `mmk pre-edit` invocation. Pattern A's peer search and
-//! Pattern B's import sweep iterate the candidate path list and
-//! parse files lazily — both bounded (Pattern B by an explicit
-//! peer-scan cap; Pattern A by the directory tree size).
+//! review` / `mmk pre-edit` invocation; detectors that take a
+//! HEAD body parse it once too.
 
 pub mod adapter;
 pub mod facts;
@@ -36,14 +33,6 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HealthPattern {
-    /// Pattern A: file matches the action / contribution registration
-    /// shape (e.g. monorepo-style `*.contribution.ts`). Surfaces
-    /// nearby peer files as architectural precedent.
-    Registration,
-    /// Pattern B: file declares an `interface IFoo` plus
-    /// `registerSingleton(IFoo, FooImpl)`. Surfaces top consumers
-    /// importing the interface.
-    Service,
     /// Pattern C: file paired with `<name>.test.ts` / `<name>.spec.ts`
     /// by naming convention. Surfaces the test partner so an edit to
     /// the implementation can re-touch its tests.
@@ -57,12 +46,17 @@ pub enum HealthPattern {
     /// with try-except blocks"* failure mode named in
     /// arXiv:2509.13941.
     BroadException,
-    /// BroadCatchDebt: static count of non-top-level broad TS/JS
-    /// catch handlers in the working tree. Audit-mode counterpart to
-    /// `BroadException` — no HEAD comparison, fires on accumulated
-    /// debt. Reuses the same `is_broad` predicate so the same
-    /// shapes count in both modes. v0.12.
-    BroadCatchDebt,
+    /// TEST_WEAKENING: net erosion of an existing test file's
+    /// strength in the working tree relative to HEAD. Detects skip
+    /// decorators added (`.skip` / `.only` / `xit` / `xtest` /
+    /// `xdescribe`), assertion / test-case counts decreased, mocks
+    /// added (`jest.mock` / `vi.mock`), or `@ts-expect-error` /
+    /// `@ts-ignore` markers added. Targets the agent-self-validation
+    /// failure mode documented in arXiv:2503.15223 *"Are 'Solved
+    /// Issues' in SWE-bench Really Solved Correctly?"* — agents
+    /// passing CI by weakening tests rather than fixing the
+    /// implementation.
+    TestWeakening,
 }
 
 impl HealthPattern {
@@ -72,11 +66,9 @@ impl HealthPattern {
     #[must_use]
     pub const fn token(self) -> &'static str {
         match self {
-            Self::Registration => "registration",
-            Self::Service => "service",
             Self::TestPair => "test_pair",
             Self::BroadException => "broad_exception",
-            Self::BroadCatchDebt => "broad_catch_debt",
+            Self::TestWeakening => "test_weakening",
         }
     }
 
@@ -86,30 +78,48 @@ impl HealthPattern {
     #[must_use]
     pub fn from_token(s: &str) -> Option<Self> {
         match s {
-            "registration" => Some(Self::Registration),
-            "service" => Some(Self::Service),
             "test_pair" => Some(Self::TestPair),
             "broad_exception" => Some(Self::BroadException),
-            "broad_catch_debt" => Some(Self::BroadCatchDebt),
+            "test_weakening" => Some(Self::TestWeakening),
             _ => None,
         }
+    }
+
+    /// True for patterns that compare working-tree vs HEAD.
+    ///
+    /// Audit (no HEAD baseline) and pre-edit (working tree *is*
+    /// HEAD for the subject) must filter these out — otherwise the
+    /// detector parses but always yields zero findings, wasting
+    /// the parse.
+    #[must_use]
+    pub const fn is_delta_mode(self) -> bool {
+        matches!(self, Self::BroadException | Self::TestWeakening)
     }
 }
 
 /// Optional numeric payload attached to a `HealthFinding`.
 ///
-/// Only `BroadCatchDebt` populates this today; other patterns leave
+/// Only `TestWeakening` populates this today; other patterns leave
 /// it `None` and the formatter renders from `subject` / `related`
 /// alone. Carrying the payload here (instead of on a sibling type)
 /// lets `analyze_ts` keep its single return-type signature while
-/// audit-mode renderers still get the count + line numbers without
+/// renderers still get the per-axis erosion counts without
 /// re-parsing the file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum HealthFindingDetail {
-    /// Static count of broad non-top-level catch handlers in the
-    /// working tree, plus the 1-based line numbers of each handler.
-    BroadCatchDebt { count: u32, lines: Vec<usize> },
+    /// Per-axis erosion counts comparing working tree to HEAD for a
+    /// test file. Each field is the net working-vs-HEAD addition;
+    /// `assertions_lost` is `head_count - working_count` when
+    /// strictly positive. Zero fields are still present so consumers
+    /// can `jq '.detail.skips_added'` without branching.
+    TestWeakening {
+        skips_added: u32,
+        assertions_lost: u32,
+        mocks_added: u32,
+        ts_suppressions_added: u32,
+        tests_removed: u32,
+    },
 }
 
 /// One Health-layer finding. Self-contained: the caller renders
@@ -124,10 +134,10 @@ pub struct HealthFinding {
     /// in deterministic order (closest-first for Pattern A's
     /// directory-distance ranking; lexicographic otherwise).
     pub related: Vec<PathBuf>,
-    /// Optional numeric payload. `Some` for `BroadCatchDebt`
-    /// (carries count + line numbers); `None` for every other
-    /// pattern. Skipped from JSON when absent so the existing JSON
-    /// shape is unchanged for old patterns.
+    /// Optional numeric payload. `Some` for `TestWeakening` (carries
+    /// per-axis erosion counts); `None` for every other pattern.
+    /// Skipped from JSON when absent so the existing JSON shape is
+    /// unchanged for old patterns.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<HealthFindingDetail>,
 }

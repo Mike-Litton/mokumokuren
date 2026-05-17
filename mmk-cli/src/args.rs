@@ -34,8 +34,8 @@ pub enum Command {
     /// `PostToolUse:Edit` → `mmk review` → findings before any commit.
     ///
     /// Sensor coverage: HOTSPOT, COUPLING, COHESION, BUDGET,
-    /// STRUCTURE, COMPLEXITY, HEALTH (test_pair, registration,
-    /// service, broad_exception/EVASION).
+    /// STRUCTURE, COMPLEXITY, HEALTH (test_pair, broad_exception,
+    /// test_weakening).
     Review(ReviewArgs),
     /// Emit findings about a single path *before* editing it. Built
     /// for the `PreToolUse:Edit` hook: feeds the agent the historical
@@ -43,7 +43,7 @@ pub enum Command {
     /// about to touch.
     ///
     /// Sensor coverage: HOTSPOT, COUPLING, STRUCTURE, HEALTH
-    /// (test_pair, registration, service).
+    /// (test_pair).
     #[command(name = "pre-edit")]
     PreEdit(PreEditArgs),
     /// Re-run analyze at K historical session boundaries and emit
@@ -56,12 +56,11 @@ pub enum Command {
     /// Static codebase audit: walk every eligible TS/TSX/JS/JSX file
     /// at HEAD and emit per-file STRUCTURE / COMPLEXITY / HEALTH
     /// findings. Skips history-dependent layers (HOTSPOT, COUPLING,
-    /// DRIFT, BUDGET) and the delta-mode EVASION (no diff to score
-    /// against). Built for one-shot codebase snapshots, not the
-    /// per-edit hook surface.
+    /// DRIFT, BUDGET) and the delta-mode HEALTH patterns (no diff
+    /// to score against). Built for one-shot codebase snapshots,
+    /// not the per-edit hook surface.
     ///
-    /// Sensor coverage: STRUCTURE, COMPLEXITY, HEALTH (test_pair,
-    /// registration, service, broad_catch_debt).
+    /// Sensor coverage: STRUCTURE, COMPLEXITY, HEALTH (test_pair).
     Audit(AuditArgs),
     /// Write a starter `mokumokuren.toml` config file.
     Init(InitArgs),
@@ -121,17 +120,6 @@ pub struct AnalyzeArgs {
     /// Print extra progress/warnings on stderr.
     #[arg(short, long)]
     pub verbose: bool,
-
-    /// Return only the coupling list for the given path. When set,
-    /// suppresses the ranked `files` block; output is just the
-    /// co-change partners of `<PATH>`.
-    #[arg(long = "couples-of", value_name = "PATH")]
-    pub couples_of: Option<PathBuf>,
-
-    /// Render an indented `couples:` block under each ranked file in
-    /// text output. Off by default — keeps the table grep-friendly.
-    #[arg(long)]
-    pub couples: bool,
 
     /// Emit a 1-hop blast-radius neighborhood for the given path
     /// alongside the ranked output. Each node is a co-changing partner
@@ -550,8 +538,8 @@ pub enum SensorsAction {
     /// Print the sensor-to-command matrix.
     List(SensorsListArgs),
     /// Print the per-sensor reference. Accepts the full sensor name
-    /// (`HEALTH:broad_catch_debt`) or a HEALTH pattern token
-    /// (`broad_catch_debt`).
+    /// (`HEALTH:test_weakening`) or a HEALTH pattern token
+    /// (`test_weakening`).
     Describe(SensorsDescribeArgs),
 }
 
@@ -567,8 +555,8 @@ pub struct SensorsListArgs {
 #[derive(Debug, Parser)]
 pub struct SensorsDescribeArgs {
     /// Sensor to describe. Accepts the full catalog name
-    /// (`HEALTH:broad_catch_debt`) or the HEALTH pattern token
-    /// (`broad_catch_debt`).
+    /// (`HEALTH:test_weakening`) or the HEALTH pattern token
+    /// (`test_weakening`).
     pub name: String,
 
     /// Output format.

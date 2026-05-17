@@ -1,5 +1,8 @@
 //! Coupling surfaced through the `analyze` CLI: per-file `top_couples`
-//! arrays in JSON, and the targeted `--couples-of <PATH>` mode.
+//! arrays in JSON. (v0.13 dropped the `--couples-of` / `--couples`
+//! flags — JSON `top_couples[]` carries the same data and the text
+//! `couples:` block was pure human-convenience sugar that broke
+//! grep.)
 
 mod common;
 
@@ -25,8 +28,6 @@ fn json_args() -> AnalyzeArgs {
         ignores: Vec::new(),
         config: None,
         verbose: false,
-        couples_of: None,
-        couples: false,
         blast_radius: None,
         blast_radius_threshold: None,
     }
@@ -74,77 +75,21 @@ fn json_files_carry_top_couples_array() {
 
 #[serial(cwd)]
 #[test]
-fn couples_of_flag_returns_partners_for_a_single_path() {
-    let dir = TempDir::new().unwrap();
-    let now = 1_700_000_000_i64;
-    build_coupling_fixture(dir.path(), now);
-
-    let mut args = json_args();
-    args.couples_of = Some("core/a.rs".into());
-    // Suppress the (also-valid) full ranking — when --couples-of is set,
-    // output is just the coupling list for that path.
-    let stdout = run_in(dir.path(), args);
-    let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
-
-    assert!(
-        v.get("files").is_none(),
-        "--couples-of mode should suppress the ranked `files` list"
-    );
-
-    let couples_of = v["couples_of"]
-        .as_object()
-        .expect("couples_of block should be present");
-    assert_eq!(couples_of["path"], "core/a.rs");
-    let entries = couples_of["entries"]
-        .as_array()
-        .expect("couples_of.entries should be an array");
-    let partners: Vec<&str> = entries
-        .iter()
-        .map(|c| c["partner"].as_str().unwrap())
-        .collect();
-    assert!(
-        partners.contains(&"core/b.rs"),
-        "couples_of(core/a.rs) should include core/b.rs; got {partners:?}"
-    );
-}
-
-#[serial(cwd)]
-#[test]
-fn default_text_table_does_not_include_couples_block() {
+fn default_text_table_stays_grep_friendly() {
+    // v0.13 dropped the `--couples` indented render; the text table
+    // must never carry a `couples:` block now. Locks the choice so a
+    // future regression doesn't bring it back.
     let dir = TempDir::new().unwrap();
     let now = 1_700_000_000_i64;
     build_coupling_fixture(dir.path(), now);
 
     let mut args = json_args();
     args.format = Format::Text;
-    args.couples = false;
     let stdout = run_in(dir.path(), args);
     let text = String::from_utf8(stdout).unwrap();
     assert!(
         !text.contains("couples:"),
-        "default text output should not include a `couples:` block (preserves grep-friendliness): {text}"
-    );
-}
-
-#[serial(cwd)]
-#[test]
-fn text_with_couples_flag_renders_indented_partners() {
-    let dir = TempDir::new().unwrap();
-    let now = 1_700_000_000_i64;
-    build_coupling_fixture(dir.path(), now);
-
-    let mut args = json_args();
-    args.format = Format::Text;
-    args.couples = true;
-    let stdout = run_in(dir.path(), args);
-    let text = String::from_utf8(stdout).unwrap();
-    assert!(
-        text.contains("couples:"),
-        "--couples should render an indented `couples:` block, got: {text}"
-    );
-    assert!(
-        text.contains("core/b.rs"),
-        "couples block should mention core/b.rs (canonical partner of core/a.rs); got: {text}"
+        "text output must stay grep-friendly (no `couples:` block): {text}"
     );
 }
 

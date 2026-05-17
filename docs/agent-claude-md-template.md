@@ -88,16 +88,18 @@ One paragraph per sensor; tuned from the v0.8 experiment data.
   A partner you've already touched in this diff is not a finding.
 - **COMPLEXITY**: delta-weighted (v0.8). Warn = you made it worse;
   Info = your edit is small but the function was already over.
-- **BUDGET**: two registers. Info at +200 LOC (review-
-  effectiveness floor — the slice is done; commit). Warn / Over
-  near and past the per-diff cap (1000 LOC default — split). See
-  section 2.
+- **BUDGET**: Info ramp at ≥50 % of the per-diff cap (1000 LOC
+  default), Warn at ≥75 %, Over above 100 %. Split when Warn
+  fires. See section 2.
 - **STRUCTURE**: divergence is real signal except on role files.
   Role-file findings (Info) name the role status; act on them only
   when the divergence is from peer role files.
-- **HEALTH** (`test_pair`, `service`, `broad_exception`): act on
-  each. A `test_pair` finding means you wrote impl without its test;
-  add the test or explain.
+- **HEALTH** (`test_pair`, `broad_exception`, `test_weakening`):
+  act on each. `test_pair` means you wrote impl without its test;
+  add the test or explain. `broad_exception` flags a new broad
+  catch handler — narrow or rethrow. `test_weakening` flags
+  weakened existing tests (skips, lost assertions, mocks,
+  `@ts-expect-error`, removed cases) — undo or justify.
 - **COHESION**: a tangle → propose a commit split.
 - **DRIFT**: same file climbing across sessions → you are rewriting,
   not progressing. Step back and check whether the abstraction is

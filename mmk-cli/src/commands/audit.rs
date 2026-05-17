@@ -2,14 +2,13 @@
 //!
 //! Walks every health-eligible TS/TSX/JS/JSX file at HEAD and runs
 //! the per-file sensors (STRUCTURE, COMPLEXITY) plus the non-delta
-//! HEALTH patterns (`test_pair`, `registration`, `service`,
-//! `broad_catch_debt`). Skips the history-dependent layers
-//! (HOTSPOT, COUPLING, DRIFT, BUDGET) and the delta-mode EVASION
-//! (no diff to score against).
+//! HEALTH patterns (`test_pair`). Skips the history-dependent layers
+//! (HOTSPOT, COUPLING, DRIFT, BUDGET) and the delta-mode patterns
+//! (EVASION, TEST_WEAKENING) — no diff to score against.
 //!
 //! Built for one-shot codebase audits — operators who want to see
-//! evasion debt or structural divergence without first running an
-//! agent edit loop. Distinct from `review`'s per-edit hot path.
+//! structural divergence without first running an agent edit loop.
+//! Distinct from `review`'s per-edit hot path.
 
 use anyhow::{Context, Result};
 use mmk_config::Config;
@@ -17,9 +16,9 @@ use std::io::Write;
 
 use crate::args::{AuditArgs, Format};
 use crate::commands::common::{
-    analyze_health_for_subject, apply_health_file, apply_sensor_file, audit_severity,
-    build_ignore_set, enabled_audit_health_patterns, enumerate_eligible_files, health_to_finding,
-    list_directory_siblings, load_bodies, load_config_file,
+    analyze_health_for_subject, apply_health_file, apply_sensor_file, build_ignore_set,
+    enabled_audit_health_patterns, enumerate_eligible_files, health_severity_for_review,
+    health_to_finding, list_directory_siblings, load_bodies, load_config_file,
 };
 use crate::commands::per_file_sensors;
 use crate::commands::review::verdict_for;
@@ -75,10 +74,10 @@ pub fn run<O: Write, E: Write>(
     let mut findings: Vec<Finding> = Vec::new();
     // Keep the structured `HealthFinding`s alongside the rendered
     // `Finding`s so the JSON envelope can expose `health.matches[]`
-    // with the per-pattern `detail` payload (e.g. BroadCatchDebt's
-    // count + line numbers) intact. Text mode still renders from
-    // `findings[]` only — the structured form is for harnesses that
-    // want to filter on count without regex-parsing the message.
+    // with the per-pattern `detail` payload intact. Text mode still
+    // renders from `findings[]` only — the structured form is for
+    // harnesses that want to filter without regex-parsing the
+    // message.
     let mut health_matches: Vec<HealthFinding> = Vec::new();
     for path in &files {
         let siblings = list_directory_siblings(&repo_root, path);
@@ -121,7 +120,7 @@ pub fn run<O: Write, E: Write>(
                 &audit_health_patterns,
                 log_identifiers,
             ) {
-                let severity = audit_severity(h.pattern);
+                let severity = health_severity_for_review(h.pattern);
                 findings.push(health_to_finding(&h, severity));
                 health_matches.push(h);
             }
@@ -164,13 +163,10 @@ struct AuditEnvelope<'a> {
     files_audited: u32,
     findings: &'a [Finding],
     /// Structured `HealthFinding`s alongside the flattened
-    /// `findings[]`. Each entry carries the full `mmk_health::HealthFinding`
-    /// shape, including the per-pattern `detail` payload — so a
-    /// harness querying "BroadCatchDebt findings with count ≥ 10"
-    /// can `jq '.health.matches[] | select(.pattern == "broad_catch_debt"
-    /// and .detail.count >= 10)'` instead of regex-parsing the
-    /// flattened message string. Absent when no health pattern
-    /// fired (mirrors `mmk review`'s `health` block shape).
+    /// `findings[]`. Each entry carries the full
+    /// `mmk_health::HealthFinding` shape, including the per-pattern
+    /// `detail` payload. Absent when no health pattern fired
+    /// (mirrors `mmk review`'s `health` block shape).
     #[serde(skip_serializing_if = "Option::is_none")]
     health: Option<AuditHealthBlock<'a>>,
 }

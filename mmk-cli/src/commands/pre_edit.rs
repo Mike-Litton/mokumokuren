@@ -119,6 +119,14 @@ pub fn run<O: Write, E: Write>(
             cfg.bulk.max_lines = v;
         }
     }
+    if args.blast_radius_threshold.is_some() && args.coupling_threshold.is_none() {
+        // v0.13: surface the deprecation before v0.14 drops the
+        // alias entirely. Same message as `mmk review`.
+        writeln!(
+            stderr,
+            "warning: --blast-radius-threshold is deprecated on `pre-edit`; use --coupling-threshold instead."
+        )?;
+    }
     if let Some(t) = args.coupling_threshold.or(args.blast_radius_threshold) {
         cfg.coupling.threshold = t;
         cfg.coupling.confidence_threshold = t;
@@ -193,22 +201,13 @@ pub fn run<O: Write, E: Write>(
     let mut findings =
         apply_monotonic_gate(&cwd, analysis.head_sha.as_deref(), tagged, args.no_dedup);
 
-    // HEALTH: structural-pattern adapter. Pre-edit treats every
-    // Health finding as informational (the agent hasn't acted yet
-    // — surfaces neighbors but doesn't demand edits). EVASION
-    // requires a working-vs-HEAD diff; pre-edit fires *before* the
-    // agent's edit, so the working tree and HEAD are identical for
-    // this subject — passing `head_body: None` keeps the detector
-    // dormant under pre-edit semantics.
+    // HEALTH: pre-edit treats findings as informational. Delta-mode
+    // patterns are stripped — pre-edit fires *before* the agent's
+    // edit, so the working tree is HEAD for the subject and the
+    // delta detectors would parse-then-yield-nothing.
     let health_patterns: Vec<mmk_health::HealthPattern> = resolve_patterns(&cfg.health.ts.patterns)
         .into_iter()
-        .filter(|p| {
-            !matches!(
-                p,
-                mmk_health::HealthPattern::BroadException
-                    | mmk_health::HealthPattern::BroadCatchDebt
-            )
-        })
+        .filter(|p| !p.is_delta_mode())
         .collect();
     let health_matches: Vec<mmk_health::HealthFinding> = if cfg.health.ts.enabled {
         let peer_paths: Vec<PathBuf> = analysis.loc.keys().cloned().collect();
@@ -247,16 +246,6 @@ pub fn run<O: Write, E: Write>(
             };
             let progress = mmk_core::budget::budget_progress(&check, &cfg.bulk);
             match mmk_core::budget::budget_tier(&progress) {
-                mmk_core::budget::BudgetTier::ReviewQuality => {
-                    findings.push(Finding::new(
-                        Layer::Budget,
-                        Severity::Info,
-                        messages::budget_review_quality(
-                            progress.lines.0,
-                            u64::from(progress.review_quality_lines),
-                        ),
-                    ));
-                }
                 mmk_core::budget::BudgetTier::Approaching => {
                     findings.push(Finding::new(
                         Layer::Budget,

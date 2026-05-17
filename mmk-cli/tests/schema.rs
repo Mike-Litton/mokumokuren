@@ -31,8 +31,6 @@ fn json_args() -> AnalyzeArgs {
         ignores: Vec::new(),
         config: None,
         verbose: false,
-        couples_of: None,
-        couples: false,
         blast_radius: None,
         blast_radius_threshold: None,
     }
@@ -48,7 +46,7 @@ fn schema_version_present_and_pinned() {
     let stdout = run_in(dir.path(), json_args());
     let v: Value = serde_json::from_slice(&stdout).expect("valid JSON");
     assert_eq!(
-        v["schema_version"], "0.9.0",
+        v["schema_version"], "0.10.0",
         "schema_version should be pinned to the mmk minor release"
     );
 }

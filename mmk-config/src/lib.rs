@@ -103,25 +103,6 @@ pub const DEFAULT_STRUCTURE_ROLE_PATTERNS: &[&str] = &[
     "*Barrel",
 ];
 
-/// `[bulk] review_quality_lines` default.
-///
-/// Empirical lineage: Jureczko 2020 (*Code review effectiveness: an
-/// empirical study on selected factors influence*, IET Software,
-/// doi:10.1049/iet-sen.2020.0134) replicates the SmartBear/Cisco
-/// case-study finding (Cohen 2006) under controls for developer
-/// ability and team dynamics — review rate ≤ ~200 LOC/h is a
-/// significant predictor of defect-removal effectiveness.
-/// Demeyer et al. 2024 (*Developer perceptions of modern code
-/// review processes in practice*, JSS) reaffirms patch size as
-/// the dominant lever on review duration / comment density.
-/// mmk's BUDGET layer carries this as a *floor* below the per-diff
-/// cap: an Info fires once a working-tree-vs-HEAD diff crosses 200
-/// LOC even when far under `max_lines` (1000 default). Absolute,
-/// not proportional — tying it to `max_lines` would mean a user
-/// who raises the cap silently weakens the threshold. Set to 0 in
-/// `mokumokuren.toml` to disable.
-pub const DEFAULT_REVIEW_QUALITY_LINES: u32 = 200;
-
 /// `[bulk] ignore_for_budget` default — empty.
 ///
 /// Globs in this list are excluded from the *diff-time* BUDGET
@@ -137,13 +118,15 @@ pub const DEFAULT_BULK_IGNORE_FOR_BUDGET: &[&str] = &[];
 
 /// `[sensor.complexity]` defaults.
 ///
-/// The relative thresholds catch outliers within a permissive
-/// directory; the absolute thresholds catch files in directories
-/// that are uniformly bad. Code Red's biomarker bundle lists nesting
-/// and function size as the two strongest per-function defect
-/// signals; the absolute caps are a conservative reading meant to be
-/// lowered by `mmk eval --learn` once per-repo distribution data
-/// exists.
+/// The ratio thresholds catch outliers within a permissive directory
+/// (function whose nesting or LOC is N× the directory median); the
+/// absolute caps catch files in directories that are uniformly
+/// large. The 6 / 80 absolute caps are **internal calibration** from
+/// the v0.8 N=20 cohort — they don't appear in any cited paper, and
+/// `mmk eval --learn` is intended to retune them per-repo. The
+/// delta-weighted severity knobs below are what actually trim the
+/// noise on pre-existing oversized functions; the absolute caps are
+/// the floor those knobs act over.
 pub const DEFAULT_COMPLEXITY_NESTING_RATIO: f64 = 3.0;
 pub const DEFAULT_COMPLEXITY_NESTING_ABS_MAX: u32 = 6;
 pub const DEFAULT_COMPLEXITY_LOC_RATIO: f64 = 3.0;
@@ -170,8 +153,10 @@ pub const DEFAULT_COMPLEXITY_DELTA_WARN_ABS: u32 = 20;
 /// Cohesion gates a graph-connectivity question: are these N
 /// changed files in the diff plausibly part of one historical
 /// cluster, or do they decompose into multiple disjoint clusters?
-/// The bar is looser than COUPLING's because connectivity is a
-/// softer claim than "you missed an edit." Calibration knobs only;
+/// Inspired by the tangled-change literature (Herzig & Zeller 2013
+/// untangled at AST granularity; mmk operates at diff granularity
+/// instead). Severity calibrated by MSR 2026 LGTM auto-merge data
+/// (focused PRs auto-merge more readily). Calibration knobs only;
 /// the math behind them lives in
 /// `mmk_core::coupling::connected_components_by_wilson`.
 ///
@@ -227,14 +212,16 @@ pub struct HotspotCfg {
 #[derive(Debug, Clone, Serialize)]
 pub struct BulkCfg {
     pub max_files: u32,
+    /// Per-diff LOC ceiling: a working-tree diff over this many
+    /// added+deleted lines silences the history-graph layers (HOTSPOT
+    /// / COUPLING / DRIFT / greenfield) under the bulk-self filter.
+    /// Agent-context guardrail — the failure mode it targets is
+    /// COUPLING's "missed partner" question being trivially answered
+    /// "no" once every historical partner is already in the diff by
+    /// construction, plus the agent-output noise of dozens of
+    /// per-file HOTSPOT fires. The 1000 default is an internal
+    /// calibration number, not a published threshold.
     pub max_lines: u32,
-    /// Review-effectiveness floor in absolute LOC. A working-tree-
-    /// vs-HEAD diff that crosses this threshold emits a BUDGET Info
-    /// finding even when far under `max_lines`. Independent of the
-    /// per-diff cap on purpose — see
-    /// [`DEFAULT_REVIEW_QUALITY_LINES`] for the empirical lineage.
-    /// Set to 0 to disable.
-    pub review_quality_lines: u32,
     /// Fraction in `[0.0, 1.0]`. When the working-tree diff's
     /// new-file fraction exceeds this, `mmk review` emits a single
     /// explicit greenfield acknowledgement so the agent doesn't have
@@ -465,16 +452,13 @@ pub struct HealthCfg {
 #[derive(Debug, Clone, Serialize)]
 pub struct HealthTsCfg {
     pub enabled: bool,
-    /// Pattern tokens (`registration`, `service`, `test_pair`,
-    /// `broad_exception`, `broad_catch_debt`). Keep as plain strings
-    /// here; mmk-health resolves them to `HealthPattern` enums at the
-    /// boundary so this crate doesn't pull in tree-sitter.
+    /// Pattern tokens (`test_pair`, `broad_exception`,
+    /// `test_weakening`). Keep as plain strings here; mmk-health
+    /// resolves them to `HealthPattern` enums at the boundary so
+    /// this crate doesn't pull in tree-sitter.
     pub patterns: Vec<String>,
-    /// `[health.ts.broad_exception]` — sub-block knobs shared by
-    /// EVASION (`broad_exception`) and BROAD_CATCH_DEBT
-    /// (`broad_catch_debt`). Both detectors invoke the same
-    /// `is_broad` predicate so the log-and-swallow identifier list
-    /// applies uniformly. v0.12.
+    /// `[health.ts.broad_exception]` — knobs for EVASION's
+    /// log-and-swallow predicate.
     pub broad_exception: HealthTsBroadExceptionCfg,
 }
 
@@ -483,11 +467,9 @@ impl Default for HealthTsCfg {
         Self {
             enabled: false,
             patterns: vec![
-                "registration".into(),
-                "service".into(),
                 "test_pair".into(),
                 "broad_exception".into(),
-                "broad_catch_debt".into(),
+                "test_weakening".into(),
             ],
             broad_exception: HealthTsBroadExceptionCfg::default(),
         }
@@ -495,7 +477,7 @@ impl Default for HealthTsCfg {
 }
 
 /// `[health.ts.broad_exception]` — knobs for the broad-catch
-/// predicate shared by EVASION and BROAD_CATCH_DEBT.
+/// predicate used by EVASION.
 ///
 /// Today the only knob is `log_identifiers`: object identifiers
 /// recognized as a "logger" for the log-and-swallow shape
@@ -546,7 +528,6 @@ impl Default for BulkCfg {
         Self {
             max_files: 15,
             max_lines: 1000,
-            review_quality_lines: DEFAULT_REVIEW_QUALITY_LINES,
             greenfield_threshold: DEFAULT_GREENFIELD_THRESHOLD,
             ignore_for_budget: DEFAULT_BULK_IGNORE_FOR_BUDGET
                 .iter()

@@ -52,7 +52,10 @@ fn is_implementation_file(path: &Path) -> bool {
     !is_test_file_name(name)
 }
 
-fn is_test_file_name(name: &str) -> bool {
+/// Whether `name` matches the test-file convention
+/// (`*.test.<ext>` / `*.spec.<ext>` over the supported extensions).
+/// Shared with `test_weakening`, which needs the inverse selection.
+pub(crate) fn is_test_file_name(name: &str) -> bool {
     SUPPORTED_EXTS.iter().any(|ext| {
         name.ends_with(&format!(".test.{ext}")) || name.ends_with(&format!(".spec.{ext}"))
     })
