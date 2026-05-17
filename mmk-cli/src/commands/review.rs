@@ -304,8 +304,7 @@ pub fn run<O: Write, E: Write>(
     // COUPLING / COHESION / COMPLEXITY / STRUCTURE.
     // Every configured HEALTH pattern runs in review mode — none of
     // the v0.13 set is audit-only.
-    let health_patterns: Vec<mmk_health::HealthPattern> =
-        resolve_patterns(&cfg.health.ts.patterns);
+    let health_patterns: Vec<mmk_health::HealthPattern> = resolve_patterns(&cfg.health.ts.patterns);
     let mut health_matches: Vec<mmk_health::HealthFinding> = Vec::new();
     if cfg.health.ts.enabled {
         let peer_paths: Vec<PathBuf> = analysis.loc.keys().cloned().collect();

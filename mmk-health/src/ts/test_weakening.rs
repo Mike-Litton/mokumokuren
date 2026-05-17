@@ -29,11 +29,7 @@ use tree_sitter::Node;
 /// without a baseline, and a brand-new weak test is a different
 /// failure mode (test_pair / coverage tooling).
 #[must_use]
-pub fn detect(
-    subject: &Path,
-    head_body: Option<&str>,
-    working_body: &str,
-) -> Vec<HealthFinding> {
+pub fn detect(subject: &Path, head_body: Option<&str>, working_body: &str) -> Vec<HealthFinding> {
     if !is_test_file(subject) {
         return Vec::new();
     }
@@ -46,9 +42,7 @@ pub fn detect(
     let skips_added = working.skips.saturating_sub(head.skips);
     let assertions_lost = head.assertions.saturating_sub(working.assertions);
     let mocks_added = working.mocks.saturating_sub(head.mocks);
-    let ts_suppressions_added = working
-        .ts_suppressions
-        .saturating_sub(head.ts_suppressions);
+    let ts_suppressions_added = working.ts_suppressions.saturating_sub(head.ts_suppressions);
     let tests_removed = head.test_cases.saturating_sub(working.test_cases);
 
     if skips_added == 0
@@ -170,7 +164,7 @@ fn count_ts_suppressions(body: &str) -> u32 {
     let mut count: u32 = 0;
     for line in body.lines() {
         let trimmed = line.trim_start();
-        if !trimmed.starts_with("//") && !trimmed.starts_with("/*") && !trimmed.starts_with("*") {
+        if !trimmed.starts_with("//") && !trimmed.starts_with("/*") && !trimmed.starts_with('*') {
             continue;
         }
         if trimmed.contains("@ts-expect-error") || trimmed.contains("@ts-ignore") {
@@ -216,8 +210,7 @@ mod tests {
     #[test]
     fn mock_added_fires() {
         let head = "test('f', () => { expect(g()).toBe(1); });";
-        let working =
-            "jest.mock('../dep');\ntest('f', () => { expect(g()).toBe(1); });";
+        let working = "jest.mock('../dep');\ntest('f', () => { expect(g()).toBe(1); });";
         let f = detect(&ts_test_subject(), Some(head), working);
         assert_eq!(f.len(), 1, "jest.mock added should fire; got {f:?}");
     }
@@ -225,8 +218,7 @@ mod tests {
     #[test]
     fn ts_expect_error_added_fires() {
         let head = "test('f', () => { expect(g()).toBe(1); });";
-        let working =
-            "test('f', () => {\n  // @ts-expect-error wonky\n  expect(g()).toBe(1);\n});";
+        let working = "test('f', () => {\n  // @ts-expect-error wonky\n  expect(g()).toBe(1);\n});";
         let f = detect(&ts_test_subject(), Some(head), working);
         assert_eq!(f.len(), 1, "@ts-expect-error added should fire; got {f:?}");
     }
@@ -273,17 +265,13 @@ mod tests {
         let working = "test('a', () => { expect(1).toBe(1); expect(2).toBe(2); });\n\
                        test('b', () => { expect(3).toBe(3); });";
         let f = detect(&ts_test_subject(), Some(head), working);
-        assert!(
-            f.is_empty(),
-            "additions-only diff must not fire; got {f:?}"
-        );
+        assert!(f.is_empty(), "additions-only diff must not fire; got {f:?}");
     }
 
     #[test]
     fn vi_mock_added_fires() {
         let head = "test('f', () => { expect(g()).toBe(1); });";
-        let working =
-            "vi.mock('../dep');\ntest('f', () => { expect(g()).toBe(1); });";
+        let working = "vi.mock('../dep');\ntest('f', () => { expect(g()).toBe(1); });";
         let f = detect(&ts_test_subject(), Some(head), working);
         assert_eq!(f.len(), 1, "vi.mock added should fire; got {f:?}");
     }

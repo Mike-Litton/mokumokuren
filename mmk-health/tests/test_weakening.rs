@@ -30,7 +30,10 @@ fn analyze_ts_routes_to_test_weakening_with_detail_payload() {
         ..
     }) = findings[0].detail
     else {
-        panic!("expected TestWeakening detail; got {:?}", findings[0].detail);
+        panic!(
+            "expected TestWeakening detail; got {:?}",
+            findings[0].detail
+        );
     };
     assert!(skips_added >= 1, "skip axis flows through");
     assert_eq!(assertions_lost, 1, "assertion axis flows through");

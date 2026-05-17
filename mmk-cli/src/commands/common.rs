@@ -385,9 +385,9 @@ pub fn health_to_finding(h: &HealthFinding, severity: Severity) -> Finding {
 #[must_use]
 pub const fn health_severity_for_review(p: HealthPattern) -> Severity {
     match p {
-        HealthPattern::TestPair
-        | HealthPattern::BroadException
-        | HealthPattern::TestWeakening => Severity::Warn,
+        HealthPattern::TestPair | HealthPattern::BroadException | HealthPattern::TestWeakening => {
+            Severity::Warn
+        }
     }
 }
 

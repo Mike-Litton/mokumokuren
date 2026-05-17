@@ -830,4 +830,3 @@ pub(crate) fn write_review_empty<W: Write>(
     writeln!(w)?;
     Ok(())
 }
-

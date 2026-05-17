@@ -3,6 +3,12 @@ default: test
 bootstrap:
     cargo install cargo-nextest cargo-dist cargo-binstall --locked
 
+# Point git at the committed pre-commit hook. Run once after cloning;
+# re-run after a re-clone or `git init` reset.
+install-hooks:
+    git config core.hooksPath .githooks
+    @echo "pre-commit hook active — runs fmt-check + clippy on every commit."
+
 fmt:
     cargo fmt --all
 

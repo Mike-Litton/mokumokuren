@@ -236,4 +236,3 @@ fn write_simple_table<W: Write>(w: &mut W, entries: &[HotspotEntry]) -> Result<(
     }
     Ok(())
 }
-

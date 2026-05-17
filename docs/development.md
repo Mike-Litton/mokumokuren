@@ -5,6 +5,7 @@ Prerequisites: Rust stable (pinned via `rust-toolchain.toml`) and
 
 ```shell
 just bootstrap          # install cargo-nextest, cargo-dist, cargo-binstall
+just install-hooks      # point git at .githooks/pre-commit (one-time per clone)
 just fmt                # format
 just lint               # clippy -D warnings
 just test               # nextest workspace
@@ -13,6 +14,11 @@ just install            # cargo install --path mmk-cli --locked
 just release-plan       # show what the release pipeline would produce
 just release-build-host # smoke-build the host-platform tarball locally
 ```
+
+The pre-commit hook runs `fmt-check` and `clippy -D warnings` —
+the two CI jobs easiest to skip locally and most painful to
+discover after push. Tests stay out of the hook so commits remain
+fast; run `just test` before pushing.
 
 ## Workspace layout
 

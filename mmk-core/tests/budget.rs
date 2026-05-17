@@ -151,4 +151,3 @@ fn new_files_at_head_cold_file_at_head_is_not_new() {
         "cold file at HEAD must not be new; got {frac}"
     );
 }
-

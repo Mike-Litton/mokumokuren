@@ -305,7 +305,11 @@ pub fn health_test_weakening(
             plural_s(ts_suppressions_added)
         ));
     }
-    format!("{}: test weakened — {}", subject.display(), parts.join(", "))
+    format!(
+        "{}: test weakened — {}",
+        subject.display(),
+        parts.join(", ")
+    )
 }
 
 const fn plural_s(n: u32) -> &'static str {

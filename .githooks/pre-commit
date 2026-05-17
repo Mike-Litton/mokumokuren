@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Pre-commit gate — mirrors the fmt and clippy jobs in
+# .github/workflows/ci.yml. The v0.13 release commit shipped to main
+# with broken fmt + a single_char_pattern clippy warning because
+# "tests pass" was treated as sufficient grounds to commit. This
+# hook makes "fmt-check + clippy clean" non-skippable on every
+# commit so CI can never trip on those two jobs again.
+#
+# Install once per checkout: `just install-hooks`
+#
+# Bypass in an emergency only: `git commit --no-verify`. Do not push
+# --no-verify commits to main.
+
+set -euo pipefail
+
+echo "==> cargo fmt --all -- --check"
+cargo fmt --all -- --check
+
+echo "==> cargo clippy --workspace --all-targets -- -D warnings"
+cargo clippy --workspace --all-targets -- -D warnings
